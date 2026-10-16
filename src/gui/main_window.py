@@ -21,11 +21,17 @@ from core.sd_card import SDCard, Folder, Track, PurgePreview, MAX_TRACKS_PER_FOL
 from core.drive_check import get_total_size, is_removable_drive, MAX_SD_CARD_BYTES
 from core.audio_converter import AudioConverter
 from core.metadata import MetadataManager
+from core.ai_settings import SETTINGS_ORIENTATION, SETTINGS_STYLE
+from core.card_layout import ORIENTATION_PORTRAIT
+from core.card_store import card_paths
+from core.cover_generator import DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, SOURCE_AI
 from gui.common import resource_path, heading_font, confirm_action, icon_from_glyph, icon_with_hover
 from gui.track_list import HoverListWidget, reorder_with_selection
 from gui.workers import (
-    SDCardScanner, TrackAddWorker, FolderNameWorker, TrackMetaWorker, PurgeWorker,
+    SDCardScanner, TrackAddWorker, FolderNameWorker, TrackMetaWorker, PurgeWorker, CoverBatchWorker,
 )
+from gui.card_cover_dialog import AiSettingsDialog, CardCoverDialog, gemini_client, image_model, text_model
+from gui.print_sheet_dialog import PrintSheetDialog
 from gui.audio_player import AudioPlayerBar, ElidedLabel, TrackInfo
 from gui.cover_edit import CoverEditWidget
 from gui.rfid_panel import RfidPanel
@@ -72,6 +78,7 @@ class MainWindow(QMainWindow):
         self.scanner: SDCardScanner = None
         self._add_tracks_worker: TrackAddWorker = None
         self._purge_worker: PurgeWorker = None
+        self._cover_batch_worker: CoverBatchWorker = None
         self.current_folder: Folder = None
         self._folder_name_cache = {}  # folder_index -> aus Album-Tag ermittelter Name
         self._folder_name_labels = {}  # folder_index -> Namens-Label in der Ordnerliste
@@ -222,6 +229,17 @@ class MainWindow(QMainWindow):
             lambda: self.rfid_panel.set_reader_mode(RfidPanel.READER_MODE_TONUINO)
         )
         reader_group.addAction(action_reader_tonuino)
+
+        cover_menu = menu_bar.addMenu("Kartencover")
+        self.action_card_cover = cover_menu.addAction("Kartencover für diesen Ordner …")
+        self.action_card_cover.triggered.connect(self._open_card_cover_dialog)
+        self.action_card_cover_batch = cover_menu.addAction("Kartencover für alle Ordner ohne Cover …")
+        self.action_card_cover_batch.triggered.connect(self._generate_missing_card_covers)
+        self.action_print_sheet = cover_menu.addAction("Druckbogen (PDF) erstellen …")
+        self.action_print_sheet.triggered.connect(self._open_print_sheet_dialog)
+        cover_menu.addSeparator()
+        action_ai_settings = cover_menu.addAction("KI-Einstellungen (Gemini) …")
+        action_ai_settings.triggered.connect(lambda: AiSettingsDialog(self).exec())
 
     def _create_sidebar(self) -> QFrame:
         """Erstellt die Sidebar"""
@@ -404,6 +422,15 @@ class MainWindow(QMainWindow):
         btn_delete_folder.clicked.connect(self._delete_folder)
         self.btn_delete_folder = btn_delete_folder
         actions.addWidget(btn_delete_folder)
+
+        btn_card_cover = QPushButton(" Kartencover")
+        btn_card_cover.setObjectName("ghostButton")
+        btn_card_cover.setIcon(icon_from_glyph("\ue8a1", color=theme.TEXT))  # Credit card
+        btn_card_cover.setFixedHeight(38)
+        btn_card_cover.setToolTip("Cover im Scheckkartenformat für die RFID-Karte erzeugen")
+        btn_card_cover.clicked.connect(self._open_card_cover_dialog)
+        self.btn_card_cover = btn_card_cover
+        actions.addWidget(btn_card_cover)
 
         actions.addStretch(1)
         info_col.addLayout(actions)
@@ -775,6 +802,7 @@ class MainWindow(QMainWindow):
         self.btn_add_tracks.setEnabled(editable)
         self.btn_delete_folder.setEnabled(editable)
         self.cover_label.setEnabled(editable)
+        self.btn_card_cover.setEnabled(editable and bool(self.current_folder.tracks))
 
     def _populate_track_list(self, folder: Folder):
         """Baut die Track-Liste eines Ordners neu auf (liest Metadaten je Track).
@@ -1217,6 +1245,98 @@ class MainWindow(QMainWindow):
         finally:
             os.remove(tmp_path)
 
+    # --- Kartencover ----------------------------------------------------------------
+
+    def _require_sd_card(self) -> bool:
+        if self.sd_card is None:
+            QMessageBox.information(self, "Keine SD-Karte", "Bitte zuerst eine SD-Karte öffnen.")
+            return False
+        return True
+
+    def _open_card_cover_dialog(self):
+        folder = self.current_folder
+        if folder is None or self._is_special_folder(folder) or not folder.tracks:
+            QMessageBox.information(self, "Kein Ordner gewählt",
+                                    "Bitte zuerst einen Ordner mit Tracks auswählen.")
+            return
+        self._release_files()
+        dialog = CardCoverDialog(folder, self._resolve_folder_name(folder), self.metadata_manager, self)
+        dialog.exec()
+        if dialog.saved:
+            self.status_bar.showMessage(
+                f"Kartencover für Ordner {folder.index:02d} gespeichert" if folder.card_path
+                else f"Kartencover für Ordner {folder.index:02d} gelöscht")
+
+    def _open_print_sheet_dialog(self):
+        if not self._require_sd_card():
+            return
+        folders = [self.sd_card.folders[i] for i in sorted(self.sd_card.folders)]
+        if not any(f.card_path for f in folders):
+            QMessageBox.information(self, "Keine Kartencover",
+                                    "Es gibt noch keine gespeicherten Kartencover auf dieser SD-Karte.")
+            return
+        PrintSheetDialog(folders, self._folder_name_cache, self).exec()
+
+    def _generate_missing_card_covers(self):
+        if not self._require_sd_card():
+            return
+        if self._cover_batch_worker is not None and self._cover_batch_worker.isRunning():
+            return
+        folders = [f for _, f in sorted(self.sd_card.folders.items()) if f.tracks and not f.card_path]
+        if not folders:
+            QMessageBox.information(self, "Nichts zu tun", "Alle Ordner mit Tracks haben bereits ein Kartencover.")
+            return
+        client = gemini_client()
+        if client is None:
+            QMessageBox.information(self, "Kein API-Key",
+                                    "Für die automatische Erzeugung bitte zuerst unter "
+                                    "Kartencover → KI-Einstellungen einen Gemini-API-Key hinterlegen.")
+            return
+        settings = QSettings()
+        style = settings.value(SETTINGS_STYLE, DEFAULT_STYLE, type=str)
+        orientation = settings.value(SETTINGS_ORIENTATION, ORIENTATION_PORTRAIT, type=str)
+        orientation_label = "Hochformat" if orientation == ORIENTATION_PORTRAIT else "Querformat"
+        if not confirm_action(
+                self, "Kartencover erzeugen",
+                f"Für {len(folders)} Ordner wird je ein Kartencover erzeugt "
+                f"(Stil „{style}“, {orientation_label}).\n\n"
+                f"Geschätzte Kosten: ca. {len(folders) * ESTIMATED_COST_PER_IMAGE:.2f} USD. Fortfahren?",
+                default_no=False):
+            return
+
+        self._release_files()
+        self._cover_batch_errors = []
+        self._cover_batch_dialog = QProgressDialog("Kartencover werden erzeugt …", "Abbrechen", 0, len(folders), self)
+        self._cover_batch_dialog.setWindowTitle("Kartencover")
+        self._cover_batch_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self._cover_batch_dialog.setMinimumDuration(0)
+        self._cover_batch_dialog.setValue(0)
+
+        worker = CoverBatchWorker(folders, self.metadata_manager, client, text_model(), image_model(),
+                                  SOURCE_AI, style, orientation)
+        worker.progress.connect(self._on_card_cover_batch_progress)
+        worker.folder_done.connect(self._on_card_cover_batch_folder_done)
+        worker.error.connect(lambda name, msg: self._cover_batch_errors.append(f"{name}: {msg}"))
+        worker.completed.connect(self._on_card_cover_batch_finished)
+        self._cover_batch_dialog.canceled.connect(worker.cancel)
+        self._cover_batch_worker = worker
+        worker.start()
+
+    def _on_card_cover_batch_progress(self, current: int, total: int, name: str):
+        self._cover_batch_dialog.setValue(current - 1)
+        self._cover_batch_dialog.setLabelText(f"({current}/{total}) {name}")
+
+    def _on_card_cover_batch_folder_done(self, folder_index: int):
+        folder = self.sd_card.folders.get(folder_index) if self.sd_card else None
+        if folder is not None:
+            folder.card_path = str(card_paths(folder.path)[0])
+
+    def _on_card_cover_batch_finished(self, done: int):
+        self._cover_batch_dialog.close()
+        self.status_bar.showMessage(f"{done} Kartencover erzeugt")
+        if self._cover_batch_errors:
+            QMessageBox.warning(self, "Einige Kartencover fehlgeschlagen", "\n".join(self._cover_batch_errors))
+
     def _on_track_double_clicked(self, item: QListWidgetItem):
         """Wird aufgerufen wenn ein Track doppelt geklickt wird"""
         if self._is_special_folder(self.current_folder):
@@ -1555,6 +1675,10 @@ class MainWindow(QMainWindow):
         self._stop_track_meta_worker()
 
         # Scan und Bereinigung sind nicht abbrechbar - kurz auslaufen lassen
+        if self._cover_batch_worker is not None and self._cover_batch_worker.isRunning():
+            self._cover_batch_worker.cancel()
+            self._cover_batch_worker.wait(3000)
+
         for worker in (self.scanner, self._purge_worker):
             if worker is not None and worker.isRunning():
                 worker.wait(3000)

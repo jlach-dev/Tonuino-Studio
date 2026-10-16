@@ -263,3 +263,113 @@ class TonuinoCardWorker(QThread):
             self.completed.emit(False, str(e))
         except Exception as e:
             self.completed.emit(False, f"Unerwarteter Fehler: {e}")
+
+
+class CoverResearchWorker(QThread):
+    """Recherche fuer ein Kartencover (Tags lesen, MusicBrainz, Gemini-Suche)"""
+    completed = pyqtSignal(object, object)  # FolderInfo, CoverBrief
+    failed = pyqtSignal(str)
+
+    def __init__(self, folder: Folder, metadata_manager: MetadataManager,
+                 client, text_model: str, extra: str = ""):
+        super().__init__()
+        self.folder = folder
+        self.metadata_manager = metadata_manager
+        self.client = client
+        self.text_model = text_model
+        self.extra = extra
+
+    def run(self):
+        from core.cover_research import gather_folder_info, research
+        try:
+            info = gather_folder_info(self.folder, self.metadata_manager)
+            brief = research(info, self.client, self.text_model, self.extra)
+            self.completed.emit(info, brief)
+        except Exception as e:
+            log.exception("Cover-Recherche fehlgeschlagen")
+            self.failed.emit(str(e))
+
+
+class CoverGenerateWorker(QThread):
+    """Erzeugt nacheinander count Motiv-Varianten (Gemini bzw. Ambient Blur)"""
+    variant_ready = pyqtSignal(object)  # PIL.Image
+    failed = pyqtSignal(str)
+    completed = pyqtSignal()
+
+    def __init__(self, source: str, request, client, image_model: str, count: int = 1):
+        super().__init__()
+        self.source = source
+        self.request = request
+        self.client = client
+        self.image_model = image_model
+        self.count = count
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        from core.cover_generator import generate_art
+        for _ in range(self.count):
+            if self._cancelled:
+                break
+            try:
+                self.variant_ready.emit(generate_art(self.source, self.request, self.client, self.image_model))
+            except Exception as e:
+                log.exception("Cover-Generierung fehlgeschlagen")
+                self.failed.emit(str(e))
+                break
+        self.completed.emit()
+
+
+class CoverBatchWorker(QThread):
+    """Erzeugt fuer mehrere Ordner je ein Kartencover und speichert es direkt
+    (Recherche -> eine Variante -> card.png/card.json im Ordner)."""
+    progress = pyqtSignal(int, int, str)  # aktueller Index, Gesamtzahl, Ordnername
+    folder_done = pyqtSignal(int)  # Ordnernummer
+    error = pyqtSignal(str, str)  # Ordner, Fehlermeldung
+    completed = pyqtSignal(int)  # Anzahl erfolgreich
+
+    def __init__(self, folders: list, metadata_manager: MetadataManager, client,
+                 text_model: str, image_model: str, source: str, style: str, orientation: str):
+        super().__init__()
+        self.folders = folders
+        self.metadata_manager = metadata_manager
+        self.client = client
+        self.text_model = text_model
+        self.image_model = image_model
+        self.source = source
+        self.style = style
+        self.orientation = orientation
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        from core import card_store
+        from core.cover_generator import GenerationRequest, generate_art
+        from core.cover_research import gather_folder_info, research
+
+        done = 0
+        for i, folder in enumerate(self.folders, start=1):
+            if self._cancelled:
+                break
+            label = f"Ordner {folder.index:02d}"
+            self.progress.emit(i, len(self.folders), label)
+            try:
+                info = gather_folder_info(folder, self.metadata_manager)
+                brief = research(info, self.client, self.text_model)
+                request = GenerationRequest(info=info, brief=brief, style=self.style, orientation=self.orientation)
+                art = generate_art(self.source, request, self.client, self.image_model)
+                meta = card_store.CardMeta(
+                    title=info.album or label, orientation=self.orientation, source=self.source,
+                    style=self.style, model=self.image_model if self.source == "ai" else "",
+                    research_sources=brief.sources)
+                card_store.save_card(folder.path, art, meta, folder.index)
+                done += 1
+                self.folder_done.emit(folder.index)
+            except Exception as e:
+                log.exception("Batch-Cover fuer %s fehlgeschlagen", label)
+                self.error.emit(label, str(e))
+        self.completed.emit(done)

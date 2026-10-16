@@ -15,6 +15,8 @@ Ein hübsches Tool zum Verwalten von Tonuino SD-Karten und RFID-Karten für Wind
 - **Ordnername & Cover**: aus Album-Tag und eingebettetem Cover des ersten Tracks; das Ordner-Cover lässt sich direkt in der Ordneransicht ändern
 - **SD-Karte bereinigen**: entfernt alles, was nicht zur Tonuino-Struktur gehört, und nummeriert die Tracks je Ordner lückenlos neu; Ordnernummern bleiben unverändert, damit RFID-Karten gültig bleiben (mit Sicherheitsabfrage)
 - **RFID-Programmierung**: Ordner- und Admin-Karten per ACR122U oder direkt über den TonUINO, mit Live-Status von Reader, Karte und Ordner in der Sidebar (siehe [RFID-Karten](#rfid-karten))
+- **Kartencover**: Cover im Scheckkartenformat (85,6 × 54 mm, hoch oder quer) je Ordner – KI-Illustration per Google Gemini („Nano Banana“) auf Basis einer kurzen Internetrecherche, der Tags und des Album-Covers, oder ohne KI als „Ambient Blur“ aus dem Album-Cover. Der Titel wird per Code gesetzt (siehe [Kartencover](#kartencover))
+- **Druckbogen**: A4-PDF für Etikettenbögen (z. B. HERMA 5028) oder zum Selbstausschneiden mit Schnittmarken, inkl. Testseite und Druck-Versatz
 - **Updates**: Prüfung beim Start (im Menü „Einstellungen“ abschaltbar oder manuell auslösbar); der Download wird gegen die von GitHub gemeldete SHA-256-Prüfsumme geprüft
 
 ## Installation
@@ -43,13 +45,14 @@ xattr -cr /Applications/Tonuino-Manager.app
 ```
 SD-Karte/
 ├── 01/ … 99/   → Tonuino-Ordner mit 001.mp3, 002.mp3, …
+│               (optional card.png, card_art_raw.png, card.json = Kartencover)
 ├── mp3/        → Systemordner (Ansagen), wird nicht umsortiert
 └── advert/     → Systemordner (Advert), wird nicht umsortiert
 ```
 
 Anzeigename und Cover eines Ordners kommen aus den ID3-Tags (Album-Tag `TALB` bzw. eingebettetes Cover `APIC` des ersten passenden Tracks), sonst „Ordner NN“ bzw. eine `cover.jpg`/`cover.png`/`folder.jpg`/`folder.png`/`front.jpg` im Ordner. Beides lässt sich im Metadaten-Editor setzen; das Cover auch per Klick auf das Cover in der Ordneransicht (gilt dann für alle Tracks des Ordners).
 
-**SD-Karte bereinigen** löscht unwiderruflich alles außer Ordnern `01`–`99`, `mp3`, `advert` sowie allen Dateien in diesen Ordnern, die keine MP3 sind (inkl. macOS-Metadaten wie `.DS_Store`). Leere Ordner werden entfernt, die Tracks in jedem Ordner lückenlos neu nummeriert; die Ordnernummern bleiben unverändert. Vorher gibt es eine Vorschau und eine Warnung, wenn das Laufwerk nicht wie eine typische SD-Karte aussieht (kein Wechseldatenträger oder über 32 GB).
+**SD-Karte bereinigen** löscht unwiderruflich alles außer Ordnern `01`–`99`, `mp3`, `advert` sowie allen Dateien in diesen Ordnern, die keine MP3 sind (inkl. macOS-Metadaten wie `.DS_Store`). Ausnahme: die Kartencover-Dateien `card.png`, `card_art_raw.png` und `card.json` in den Ordnern `01`–`99` bleiben erhalten. Leere Ordner werden entfernt, die Tracks in jedem Ordner lückenlos neu nummeriert; die Ordnernummern bleiben unverändert. Vorher gibt es eine Vorschau und eine Warnung, wenn das Laufwerk nicht wie eine typische SD-Karte aussieht (kein Wechseldatenträger oder über 32 GB).
 
 ## RFID-Karten
 
@@ -62,6 +65,17 @@ Den Programmierweg wählst du im Menü **Einstellungen** unter **RFID-Leser**:
 
 - **ACR122U** (Standard): USB-Reader, alle Funktionen inkl. Löschen einzelner Karten
 - **TonUINO (seriell)**: Karte wird über den per USB verbundenen TonUINO und dessen eigenen Leser geschrieben, kein extra Reader nötig. Voraussetzung ist [TonUINO-TNG](https://github.com/tonuino/TonUINO-TNG) mit `#define SerialInputAsCommand` (`src/constants.hpp`). Der TonUINO muss im Leerlauf oder pausiert sein, die Karte liegt auf seinem Leser. Löschen ist in diesem Modus nicht möglich.
+
+## Kartencover
+
+Menü **Kartencover** bzw. Knopf **Kartencover** in der Ordneransicht:
+
+1. **Recherche**: Album/Interpret/Titel aus den ID3-Tags, Album-Cover (eingebettet oder über [MusicBrainz](https://musicbrainz.org)/[Cover Art Archive](https://coverartarchive.org), max. 1 Anfrage/s gemäß [API-Regeln](https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting)) und – mit API-Key – eine kurze Inhaltszusammenfassung per Gemini mit Google-Suche. Das Ergebnis ist im Dialog bearbeitbar.
+2. **Motiv**: KI-Illustration (Stil wählbar, 1–4 Varianten, Album-Cover optional als Vorlage) oder „Ambient Blur“ ohne KI. Die KI erzeugt bewusst keinen Text.
+3. **Titel & Speichern**: Titel und Ordnernummer werden per Code gesetzt; gespeichert wird im Ordner (`card.png` fertig, `card_art_raw.png` Motiv ohne Text, `card.json` Einstellungen). Titel/Ausrichtung lassen sich später ohne neue KI-Kosten ändern.
+4. **Druckbogen**: Karten auswählen, Bogen wählen, ggf. bei einem angebrochenen Bogen weiter unten beginnen, PDF speichern und in **Originalgröße (100 %)** drucken. Die Bogenränder der HERMA 5028 sind nicht offiziell veröffentlicht – vorher die **Testseite** auf Normalpapier drucken, gegen den Bogen halten und ggf. den Druck-Versatz einstellen.
+
+**Gemini-API-Key**: im [Google AI Studio](https://aistudio.google.com/apikey) erstellen und unter *Kartencover → KI-Einstellungen* eintragen (wird im Schlüsselbund des Betriebssystems gespeichert) oder als Umgebungsvariable `GEMINI_API_KEY` setzen. Die Bildgenerierung ist kostenpflichtig (grob einige Cent pro Bild). Modell-IDs (Standard: `gemini-nano-banana-2.1` für Bilder, `gemini-3.5-flash-lite` für die Recherche) sind dort ebenfalls änderbar.
 
 ## Entwicklung
 

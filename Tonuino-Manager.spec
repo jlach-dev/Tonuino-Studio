@@ -72,6 +72,13 @@ a = Analysis(
         'serial.tools.list_ports_windows',
         'serial.tools.list_ports_linux',
         'serial.tools.list_ports_osx',
+        # keyring laedt sein Backend (Windows-Anmeldeinformationen, macOS-
+        # Schluesselbund, Secret Service) ueber Entry Points zur Laufzeit
+        'keyring.backends.Windows',
+        'keyring.backends.macOS',
+        'keyring.backends.SecretService',
+        'keyring.backends.chainer',
+        'keyring.backends.fail',
     ],
     hookspath=[],
     hooksconfig={},

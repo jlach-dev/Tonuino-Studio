@@ -11,6 +11,8 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 
+from core.card_store import CARD_FILES, CARD_IMAGE
+
 
 # Maximale Anzahl Tracks pro Ordner (TonUINO adressiert Tracks mit einem Byte)
 MAX_TRACKS_PER_FOLDER = 255
@@ -46,6 +48,7 @@ class Folder:
     cover_path: str = ""
     name: Optional[str] = None
     is_special: bool = False
+    card_path: str = ""  # fertiges Kartencover (card.png), siehe core/card_store.py
 
     @property
     def track_count(self) -> int:
@@ -138,6 +141,9 @@ class SDCard:
 
             self._scan_tracks(folder)
             self._find_folder_cover(folder)
+            card_file = item / CARD_IMAGE
+            if card_file.is_file():
+                folder.card_path = str(card_file)
 
             self.folders[folder_index] = folder
     
@@ -348,10 +354,20 @@ class SDCard:
                 continue
 
             for child in item.iterdir():
-                if child.is_dir() or self._is_appledouble(child.name) or child.suffix.lower() != ".mp3":
+                if self._is_foreign_in_folder(item.name, child):
                     preview.foreign_items_in_folders += 1
 
         return preview
+
+    def _is_foreign_in_folder(self, folder_name: str, child: Path) -> bool:
+        """True fuer alles in einem erlaubten Ordner, was keine echte mp3 ist.
+        Ausnahme: die Kartencover-Dateien (card.png usw.) in den nummerierten
+        Ordnern 01-99 - die legt der Manager selbst an."""
+        if child.is_dir() or self._is_appledouble(child.name):
+            return True
+        if child.name.lower() in CARD_FILES and self.FOLDER_PATTERN.match(folder_name):
+            return False
+        return child.suffix.lower() != ".mp3"
 
     @staticmethod
     def _is_appledouble(name: str) -> bool:
@@ -406,7 +422,7 @@ class SDCard:
                 self._force_rmtree(item)
 
         # Innerhalb erlaubter Verzeichnisse: alles ausser echten mp3-Dateien
-        # entfernen - AppleDouble-Schattendateien (._*.mp3) zaehlen trotz
+        # (und den Kartencover-Dateien in 01-99) entfernen - AppleDouble-Schattendateien (._*.mp3) zaehlen trotz
         # .mp3-Endung nicht als Track und werden immer entfernt.
         for item in self.path.iterdir():
             if not item.is_dir() or not allowed_dir(item.name):
@@ -415,7 +431,7 @@ class SDCard:
             for child in item.iterdir():
                 if child.is_dir():
                     self._force_rmtree(child)
-                elif self._is_appledouble(child.name) or child.suffix.lower() != ".mp3":
+                elif self._is_foreign_in_folder(item.name, child):
                     self._force_unlink(child)
 
     def purge(self):
