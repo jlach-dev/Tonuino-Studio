@@ -271,19 +271,20 @@ class CoverResearchWorker(QThread):
     failed = pyqtSignal(str)
 
     def __init__(self, folder: Folder, metadata_manager: MetadataManager,
-                 client, text_model: str, extra: str = ""):
+                 client, text_model: str, extra: str = "", online_cover: bool = True):
         super().__init__()
         self.folder = folder
         self.metadata_manager = metadata_manager
         self.client = client
         self.text_model = text_model
         self.extra = extra
+        self.online_cover = online_cover
 
     def run(self):
         from core.cover_research import gather_folder_info, research
         try:
             info = gather_folder_info(self.folder, self.metadata_manager)
-            brief = research(info, self.client, self.text_model, self.extra)
+            brief = research(info, self.client, self.text_model, self.extra, online_cover=self.online_cover)
             self.completed.emit(info, brief)
         except Exception as e:
             log.exception("Cover-Recherche fehlgeschlagen")
@@ -331,8 +332,10 @@ class CoverBatchWorker(QThread):
     completed = pyqtSignal(int)  # Anzahl erfolgreich
 
     def __init__(self, folders: list, metadata_manager: MetadataManager, client,
-                 text_model: str, image_model: str, source: str, style: str, orientation: str):
+                 text_model: str, image_model: str, source: str, style: str, orientation: str,
+                 archive=None):
         super().__init__()
+        self.archive = archive  # optional: Ergebnisse zusaetzlich im Cover-Archiv ablegen
         self.folders = folders
         self.metadata_manager = metadata_manager
         self.client = client
@@ -347,7 +350,9 @@ class CoverBatchWorker(QThread):
         self._cancelled = True
 
     def run(self):
-        from core import card_store
+        from core import album_identity, card_store
+        from core.card_layout import prepare_card_art
+        from core.cover_archive import ROLE_CARD_COVER
         from core.cover_generator import GenerationRequest, generate_art
         from core.cover_research import gather_folder_info, research
 
@@ -366,7 +371,18 @@ class CoverBatchWorker(QThread):
                     title=info.album or label, orientation=self.orientation, source=self.source,
                     style=self.style, model=self.image_model if self.source == "ai" else "",
                     research_sources=brief.sources)
-                card_store.save_card(folder.path, art, meta, folder.index)
+                if self.archive is not None:
+                    paths = [t.filepath for t in folder.tracks]
+                    album_id = album_identity.read_album_id(paths)
+                    if not album_id:
+                        album_id = album_identity.new_album_id()
+                        album_identity.write_album_id(paths, album_id)
+                    self.archive.ensure_album(album_id, info.album or label, info.artist, path=folder.path)
+                    entry = self.archive.add_cover(album_id, art, self.source, style=self.style,
+                                                   model=meta.model)
+                    self.archive.set_role(album_id, entry.id, ROLE_CARD_COVER)
+                    meta.album_id, meta.archive_cover_id = album_id, entry.id
+                card_store.save_card(folder.path, prepare_card_art(art, self.orientation), meta, folder.index)
                 done += 1
                 self.folder_done.emit(folder.index)
             except Exception as e:

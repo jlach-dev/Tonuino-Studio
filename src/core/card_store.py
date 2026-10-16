@@ -37,6 +37,8 @@ class CardMeta:
     model: str = ""
     research_sources: list = field(default_factory=list)
     created: str = ""
+    album_id: str = ""  # Verknuepfung zum Cover-Archiv bzw. zur Bibliothek
+    archive_cover_id: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> "CardMeta":

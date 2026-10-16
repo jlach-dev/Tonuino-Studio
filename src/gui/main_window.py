@@ -30,7 +30,8 @@ from gui.track_list import HoverListWidget, reorder_with_selection
 from gui.workers import (
     SDCardScanner, TrackAddWorker, FolderNameWorker, TrackMetaWorker, PurgeWorker, CoverBatchWorker,
 )
-from gui.card_cover_dialog import AiSettingsDialog, CardCoverDialog, gemini_client, image_model, text_model
+from gui.card_cover_dialog import AiSettingsDialog, gemini_client, image_model, text_model
+from gui.cover_manager_dialog import CoverManagerDialog, get_archive
 from gui.print_sheet_dialog import PrintSheetDialog
 from gui.audio_player import AudioPlayerBar, ElidedLabel, TrackInfo
 from gui.cover_edit import CoverEditWidget
@@ -231,7 +232,7 @@ class MainWindow(QMainWindow):
         reader_group.addAction(action_reader_tonuino)
 
         cover_menu = menu_bar.addMenu("Kartencover")
-        self.action_card_cover = cover_menu.addAction("Kartencover für diesen Ordner …")
+        self.action_card_cover = cover_menu.addAction("Cover-Manager für diesen Ordner …")
         self.action_card_cover.triggered.connect(self._open_card_cover_dialog)
         self.action_card_cover_batch = cover_menu.addAction("Kartencover für alle Ordner ohne Cover …")
         self.action_card_cover_batch.triggered.connect(self._generate_missing_card_covers)
@@ -380,7 +381,7 @@ class MainWindow(QMainWindow):
         header_layout.setSpacing(24)
 
         self.cover_label = CoverEditWidget(self.FOLDER_COVER_SIZE)
-        self.cover_label.clicked.connect(self._set_folder_cover)
+        self.cover_label.clicked.connect(self._open_card_cover_dialog)
         header_layout.addWidget(self.cover_label)
 
         info_col = QVBoxLayout()
@@ -423,11 +424,11 @@ class MainWindow(QMainWindow):
         self.btn_delete_folder = btn_delete_folder
         actions.addWidget(btn_delete_folder)
 
-        btn_card_cover = QPushButton(" Kartencover")
+        btn_card_cover = QPushButton(" Cover-Manager")
         btn_card_cover.setObjectName("ghostButton")
         btn_card_cover.setIcon(icon_from_glyph("\ue8a1", color=theme.TEXT))  # Credit card
         btn_card_cover.setFixedHeight(38)
-        btn_card_cover.setToolTip("Cover im Scheckkartenformat für die RFID-Karte erzeugen")
+        btn_card_cover.setToolTip("Album-Cover und Kartencover auswählen oder per KI erzeugen")
         btn_card_cover.clicked.connect(self._open_card_cover_dialog)
         self.btn_card_cover = btn_card_cover
         actions.addWidget(btn_card_cover)
@@ -1260,12 +1261,13 @@ class MainWindow(QMainWindow):
                                     "Bitte zuerst einen Ordner mit Tracks auswählen.")
             return
         self._release_files()
-        dialog = CardCoverDialog(folder, self._resolve_folder_name(folder), self.metadata_manager, self)
+        archive = get_archive(self)
+        dialog = CoverManagerDialog(folder, self._resolve_folder_name(folder), self.metadata_manager, archive, self)
         dialog.exec()
-        if dialog.saved:
-            self.status_bar.showMessage(
-                f"Kartencover für Ordner {folder.index:02d} gespeichert" if folder.card_path
-                else f"Kartencover für Ordner {folder.index:02d} gelöscht")
+        if dialog.album_cover_changed and self.current_folder is folder:
+            self._show_folder(folder)
+        if dialog.card_changed:
+            self.status_bar.showMessage(f"Kartencover für Ordner {folder.index:02d} gespeichert")
 
     def _open_print_sheet_dialog(self):
         if not self._require_sd_card():
@@ -1313,7 +1315,7 @@ class MainWindow(QMainWindow):
         self._cover_batch_dialog.setValue(0)
 
         worker = CoverBatchWorker(folders, self.metadata_manager, client, text_model(), image_model(),
-                                  SOURCE_AI, style, orientation)
+                                  SOURCE_AI, style, orientation, archive=get_archive(self))
         worker.progress.connect(self._on_card_cover_batch_progress)
         worker.folder_done.connect(self._on_card_cover_batch_folder_done)
         worker.error.connect(lambda name, msg: self._cover_batch_errors.append(f"{name}: {msg}"))

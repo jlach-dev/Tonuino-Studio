@@ -68,12 +68,15 @@ Den Programmierweg wählst du im Menü **Einstellungen** unter **RFID-Leser**:
 
 ## Kartencover
 
-Menü **Kartencover** bzw. Knopf **Kartencover** in der Ordneransicht:
+Ein Klick auf das Cover im Ordnerkopf (oder **Cover-Manager** bzw. Menü **Kartencover**) öffnet den **Cover-Manager**:
 
-1. **Recherche**: Album/Interpret/Titel aus den ID3-Tags, Album-Cover (eingebettet oder über [MusicBrainz](https://musicbrainz.org)/[Cover Art Archive](https://coverartarchive.org), max. 1 Anfrage/s gemäß [API-Regeln](https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting)) und – mit API-Key – eine kurze Inhaltszusammenfassung per Gemini mit Google-Suche. Das Ergebnis ist im Dialog bearbeitbar.
-2. **Motiv**: KI-Illustration (Stil wählbar, 1–4 Varianten, Album-Cover optional als Vorlage) oder „Ambient Blur“ ohne KI. Die KI erzeugt bewusst keinen Text.
-3. **Titel & Speichern**: Titel und Ordnernummer werden per Code gesetzt; gespeichert wird im Ordner (`card.png` fertig, `card_art_raw.png` Motiv ohne Text, `card.json` Einstellungen). Titel/Ausrichtung lassen sich später ohne neue KI-Kosten ändern.
-4. **Druckbogen**: Karten auswählen, Bogen wählen, ggf. bei einem angebrochenen Bogen weiter unten beginnen, PDF speichern und in **Originalgröße (100 %)** drucken. Die Bogenränder der HERMA 5028 sind nicht offiziell veröffentlicht – vorher die **Testseite** auf Normalpapier drucken, gegen den Bogen halten und ggf. den Druck-Versatz einstellen.
+- **Galerie**: *Aktuell* (eingebettetes Album-Cover, Kartenmotiv auf der SD), *MusicBrainz* (Original-Cover aus dem [Cover Art Archive](https://coverartarchive.org); Suchbegriff anpassbar, max. 1 Anfrage/s gemäß [API-Regeln](https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting)), *Archiv* (alle behaltenen Cover inkl. früherer KI-Läufe) und *Neu erzeugt*.
+- **☑ Vorlage**: markierte Bilder (bis zu 6) gehen als Referenz an die KI – z. B. mehrere Original-Cover, damit die Figuren wiedererkennbar bleiben.
+- **KI erzeugen**: Recherche (Tags + Gemini mit Google-Suche, bearbeitbar), Stil, eigener Wunsch, 1–4 Varianten. Neue Varianten müssen ausdrücklich **behalten** werden; beim Schließen wird nach nicht behaltenen gefragt.
+- **Als Album-Cover**: quadratisch zugeschnitten (600 px) in alle Tracks des Ordners geschrieben. **Als Kartencover**: mit Titel als `card.png` auf die SD-Karte; quadratische Bilder werden automatisch per „Ambient Blur“ ins Kartenformat gebracht.
+- **Archiv**: alle behaltenen Cover liegen im **Datenordner der Bibliothek** (beim ersten Öffnen wählbar, Standard `Google Drive\Tonuino\Bibliothek-Daten`). Auf die SD-Karte kommt nur das aktive Kartencover. Die Zuordnung Ordner ↔ Archiv erfolgt über eine Album-ID, die als Tag `TXXX:TONUINO_ALBUM_ID` in die MP3s auf der SD-Karte geschrieben wird.
+
+**Druckbogen**: Karten auswählen, Bogen wählen, ggf. bei einem angebrochenen Bogen weiter unten beginnen, PDF speichern und in **Originalgröße (100 %)** drucken. Die Bogenränder der HERMA 5028 sind nicht offiziell veröffentlicht – vorher die **Testseite** auf Normalpapier drucken, gegen den Bogen halten und ggf. den Druck-Versatz einstellen.
 
 **Gemini-API-Key**: im [Google AI Studio](https://aistudio.google.com/apikey) erstellen und unter *Kartencover → KI-Einstellungen* eintragen (wird im Schlüsselbund des Betriebssystems gespeichert) oder als Umgebungsvariable `GEMINI_API_KEY` setzen. Die Bildgenerierung ist kostenpflichtig (grob einige Cent pro Bild). Modell-IDs (Standard: `gemini-nano-banana-2.1` für Bilder, `gemini-3.5-flash-lite` für die Recherche) sind dort ebenfalls änderbar.
 

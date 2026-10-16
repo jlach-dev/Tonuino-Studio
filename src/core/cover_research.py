@@ -4,32 +4,20 @@ Motiv aussehen?
 
 Quellen (in dieser Reihenfolge):
 1. lokale ID3-Tags (Album, Interpret, Titelliste) und das eingebettete Cover
-2. MusicBrainz + Cover Art Archive: Original-Cover, falls lokal keins da ist
-   (frei fuer nicht-kommerzielle Nutzung, ohne Key). Regeln laut
-   https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting: im Mittel max.
-   1 Anfrage/s je IP, aussagekraeftiger User-Agent "Name/Version ( Kontakt )",
-   bei Ueberschreitung antwortet der Server mit 503.
+2. MusicBrainz + Cover Art Archive (core/musicbrainz.py): Original-Cover
 3. Gemini mit Google-Suche: kurze Inhaltszusammenfassung und Bildideen
 """
 
 import json
 import logging
 import re
-import threading
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from core import __version__
+from core import musicbrainz
 from core.sd_card import Folder
 
 log = logging.getLogger(__name__)
-
-USER_AGENT = f"Tonuino-Manager/{__version__} ( https://github.com/jlach-dev/Tonuino-manager )"
-HTTP_TIMEOUT = 15
 
 
 @dataclass
@@ -92,83 +80,24 @@ def gather_folder_info(folder: Folder, metadata_manager, max_titles: int = 25) -
     return info
 
 
-# --- MusicBrainz / Cover Art Archive -------------------------------------------------
+# --- MusicBrainz / Cover Art Archive (siehe core/musicbrainz.py) -----------------------
 
-_last_mb_request = 0.0
-# Mehrere Worker (Dialog, Batch) koennen gleichzeitig anfragen - die
-# Drosselung muss deshalb prozessweit gelten
-_mb_lock = threading.Lock()
 # (album, artist) -> Cover-Bytes oder None: dieselbe Suche nicht wiederholen
 _cover_cache: dict = {}
 
 
-def _http_get(url: str, accept: str = "application/json", attempts: int = 3) -> bytes:
-    """GET mit MusicBrainz-Drosselung (>= 1 s Abstand); 503 heisst dort
-    "zu schnell" und wird mit wachsender Pause wiederholt."""
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept})
-    with _mb_lock:
-        return _throttled_open(request, attempts)
-
-
-def _throttled_open(request, attempts: int) -> bytes:
-    global _last_mb_request
-    for attempt in range(attempts):
-        wait = 1.1 * (attempt + 1) - (time.monotonic() - _last_mb_request)
-        if wait > 0:
-            time.sleep(wait)
-        try:
-            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
-                return response.read()
-        except urllib.error.HTTPError as e:
-            if e.code != 503 or attempt == attempts - 1:
-                raise
-        finally:
-            _last_mb_request = time.monotonic()
-    raise RuntimeError("unreachable")
-
-
-def _lucene_escape(text: str) -> str:
-    return re.sub(r'([+\-!(){}\[\]^"~*?:\\/]|&&|\|\|)', r"\\\1", text)
-
-
-def find_release_groups(album: str, artist: str = "") -> List[dict]:
-    """Passende MusicBrainz-Release-Groups zu Album (+ Interpret), beste zuerst"""
-    if not album.strip():
-        return []
-    query = f'releasegroup:"{_lucene_escape(album)}"'
-    if artist.strip():
-        query += f' AND artist:"{_lucene_escape(artist)}"'
-    url = "https://musicbrainz.org/ws/2/release-group/?" + urllib.parse.urlencode(
-        {"query": query, "fmt": "json", "limit": 5})
-    data = json.loads(_http_get(url))
-    return [g for g in data.get("release-groups", []) if int(g.get("score", 0)) >= 85]
-
-
-def fetch_cover_art(release_group_id: str) -> Optional[bytes]:
-    """Front-Cover (500 px) aus dem Cover Art Archive"""
-    url = f"https://coverartarchive.org/release-group/{release_group_id}/front-500"
-    try:
-        return _http_get(url, accept="image/*")
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None
-        raise
-
-
 def lookup_online_cover(info: FolderInfo) -> Optional[bytes]:
-    """Original-Cover ueber MusicBrainz/Cover Art Archive. Ergebnisse (auch
-    "nichts gefunden") werden gemerkt, Netzwerkfehler nicht."""
+    """Erstbestes Front-Cover ueber MusicBrainz/Cover Art Archive (fuer den
+    Batch-Modus; der Cover-Manager zeigt stattdessen alle Kandidaten zur
+    Auswahl). Ergebnisse werden gemerkt, Netzwerkfehler nicht."""
     key = (info.album.strip().lower(), info.artist.strip().lower())
     if key in _cover_cache:
         return _cover_cache[key]
     try:
-        groups = find_release_groups(info.album, info.artist)
-        if not groups and info.artist:
-            groups = find_release_groups(info.album)
         cover = None
         # nicht jede Release-Group hat ein Cover im Archiv - die naechsten probieren
-        for group in groups[:3]:
-            cover = fetch_cover_art(group["id"])
+        for group in musicbrainz.search_release_groups(info.album, info.artist, limit=5, min_score=85)[:3]:
+            cover = musicbrainz.fetch_front_cover(group.id)
             if cover:
                 break
     except Exception:

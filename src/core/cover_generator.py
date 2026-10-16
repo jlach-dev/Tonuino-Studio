@@ -9,7 +9,8 @@ core/card_layout.py, weil generierter Text oft Tippfehler hat.
 import base64
 import io
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List
 
 from PIL import Image
 
@@ -32,6 +33,10 @@ DEFAULT_STYLE = "Kinderbuch-Illustration"
 SOURCE_AI = "ai"
 SOURCE_BLUR = "blur"
 
+# Obergrenze fuer Vorlagenbilder pro Anfrage. Nano Banana 2.1 erlaubt laut
+# Doku bis zu 4 Figuren- und 10 Objekt-Referenzen; 6 haelt Anfragen klein.
+MAX_REFERENCE_IMAGES = 6
+
 # Grobe Kostenschaetzung je Bild (USD) fuer den Hinweis vor Batch-Laeufen
 ESTIMATED_COST_PER_IMAGE = 0.07
 
@@ -45,6 +50,15 @@ class GenerationRequest:
     extra: str = ""
     orientation: str = ORIENTATION_PORTRAIT
     use_reference: bool = True
+    # Vom Nutzer im Cover-Manager markierte Vorlagen (rohe Bilddaten). Leer =
+    # Rueckfall auf brief.reference_image (Batch-Modus)
+    reference_images: List[bytes] = field(default_factory=list)
+
+    def references(self) -> List[bytes]:
+        if not self.use_reference:
+            return []
+        refs = self.reference_images or ([self.brief.reference_image] if self.brief.reference_image else [])
+        return refs[:MAX_REFERENCE_IMAGES]
 
 
 def build_prompt(req: GenerationRequest) -> str:
@@ -67,9 +81,14 @@ def build_prompt(req: GenerationRequest) -> str:
         "IMPORTANT: absolutely no text, letters, numbers, logos or watermarks in the image.",
         "Child-friendly, cheerful, no scary or violent content.",
     ]
-    if req.use_reference and req.brief.reference_image:
+    refs = req.references()
+    if len(refs) == 1:
         lines.append("Use the attached original cover as reference for characters, mood and colors, "
                      "but recompose it as a new illustration for the card format, without its text.")
+    elif refs:
+        lines.append(f"Use the {len(refs)} attached reference images for the characters' appearance, "
+                     "mood and colors (keep the characters recognizable), but compose one new illustration "
+                     "for the card format, without any of their text.")
     return "\n\n".join(lines)
 
 
@@ -86,11 +105,11 @@ def generate_ai_art(client, model: str, req: GenerationRequest, image_size: str 
     prompt = build_prompt(req)
     aspect_ratio = "2:3" if req.orientation == ORIENTATION_PORTRAIT else "3:2"
 
-    if req.use_reference and req.brief.reference_image:
-        model_input = [
-            {"type": "text", "text": prompt},
-            {"type": "image", "data": base64.b64encode(req.brief.reference_image).decode("ascii"),
-             "mime_type": _sniff_mime(req.brief.reference_image)},
+    refs = req.references()
+    if refs:
+        model_input = [{"type": "text", "text": prompt}] + [
+            {"type": "image", "data": base64.b64encode(ref).decode("ascii"), "mime_type": _sniff_mime(ref)}
+            for ref in refs
         ]
     else:
         model_input = prompt
@@ -112,9 +131,10 @@ def generate_ai_art(client, model: str, req: GenerationRequest, image_size: str 
 
 def blur_art(req: GenerationRequest) -> Image.Image:
     """Motiv ohne KI aus dem Referenz-Cover (Ambient Blur)"""
-    if not req.brief.reference_image:
+    refs = req.reference_images or ([req.brief.reference_image] if req.brief.reference_image else [])
+    if not refs:
         raise ValueError("Kein Cover vorhanden – für Ambient Blur wird ein Album-Cover benötigt")
-    with Image.open(io.BytesIO(req.brief.reference_image)) as img:
+    with Image.open(io.BytesIO(refs[0])) as img:
         img.load()
         cover = img.convert("RGB")
     return ambient_blur(cover, CardSpec().size_px(req.orientation))

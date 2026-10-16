@@ -125,6 +125,28 @@ def ambient_blur(cover: Image.Image, size) -> Image.Image:
     return background
 
 
+def prepare_card_art(image: Image.Image, orientation: str, tolerance: float = 0.15) -> Image.Image:
+    """Macht aus einem beliebigen Bild ein Kartenmotiv: passt das
+    Seitenverhaeltnis ungefaehr, bleibt es (Zuschnitt beim Rendern);
+    sonst - typisch fuer quadratische Album-Cover - Ambient Blur, damit nichts
+    Wichtiges abgeschnitten wird."""
+    size = CardSpec().size_px(orientation)
+    target = size[0] / size[1]
+    actual = image.width / image.height
+    if abs(actual - target) / target <= tolerance:
+        return image.convert("RGB")
+    return ambient_blur(image, size)
+
+
+def album_cover_jpeg(image: Image.Image, size: int = 600) -> bytes:
+    """Quadratisches Album-Cover (JPEG) fuer die ID3-Tags"""
+    import io
+    square = ImageOps.fit(image.convert("RGB"), (size, size), Image.Resampling.LANCZOS)
+    buffer = io.BytesIO()
+    square.save(buffer, "JPEG", quality=90)
+    return buffer.getvalue()
+
+
 def _wrap_lines(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> List[str]:
     """Bricht text wortweise auf max_width um"""
     lines: List[str] = []

@@ -189,9 +189,20 @@ class MetadataManager:
 
     def set_cover(self, filepath: str, cover_path: str) -> bool:
         """Setzt das Cover fuer eine MP3-Datei"""
+        try:
+            with open(cover_path, 'rb') as f:
+                cover_data = f.read()
+        except OSError as e:
+            log.warning(f"Fehler beim Lesen des Cover-Bildes: {e}")
+            return False
+        mime = 'image/jpeg' if cover_path.lower().endswith(('.jpg', '.jpeg')) else 'image/png'
+        return self.set_cover_bytes(filepath, cover_data, mime)
+
+    def set_cover_bytes(self, filepath: str, cover_data: bytes, mime: str = 'image/jpeg') -> bool:
+        """Setzt das Cover (rohe Bilddaten) fuer eine MP3-Datei"""
         if not self._mutagen_available:
             return False
-        
+
         try:
             from mutagen.id3 import APIC
 
@@ -204,11 +215,6 @@ class MetadataManager:
             for key in keys_to_remove:
                 del audio.tags[key]
 
-            with open(cover_path, 'rb') as f:
-                cover_data = f.read()
-            
-            mime = 'image/jpeg' if cover_path.lower().endswith('.jpg') else 'image/png'
-            
             audio.tags["APIC"] = APIC(
                 encoding=3,
                 mime=mime,
@@ -216,11 +222,10 @@ class MetadataManager:
                 desc='Cover',
                 data=cover_data
             )
-            
+
             audio.save()
             return True
-            
+
         except Exception as e:
             log.warning(f"Fehler beim Setzen des Covers: {e}")
             return False
-    
