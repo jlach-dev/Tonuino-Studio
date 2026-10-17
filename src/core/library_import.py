@@ -186,15 +186,17 @@ def finish_import(sd_card: SDCard, folder: Folder, album: LibraryAlbum, archive:
 def import_album(sd_card: SDCard, folder: Folder, album: LibraryAlbum, audio_converter, metadata_manager,
                  archive: Optional[CoverArchive], write_library_tags: bool, mode: str = MODE_APPEND,
                  orientation: str = ORIENTATION_PORTRAIT,
-                 progress: Optional[Callable[[int, int, str], None]] = None) -> ImportResult:
+                 progress: Optional[Callable[[int, int, str], None]] = None,
+                 tracks: Optional[List[str]] = None) -> ImportResult:
     """Kompletter Import in einem Rutsch (synchron) - fuer Tests und einfache
     Aufrufer. Die GUI laesst den TrackAddWorker als Thread laufen und ruft
-    danach finish_import."""
+    danach finish_import. tracks = nur diese Dateien des Albums (Teilimport)."""
     from gui.workers import TrackAddWorker
     result = ImportResult()
     if mode == MODE_REPLACE:
         clear_folder_tracks(sd_card, folder)
-    worker = TrackAddWorker(folder, list(album.tracks), audio_converter, metadata_manager)
+    worker = TrackAddWorker(folder, list(tracks) if tracks else list(album.tracks), audio_converter,
+                            metadata_manager)
 
     def on_added(track):
         folder.tracks.append(track)
@@ -207,3 +209,19 @@ def import_album(sd_card: SDCard, folder: Folder, album: LibraryAlbum, audio_con
     worker.run()  # synchron im aufrufenden Thread
     folder.tracks.sort(key=lambda t: t.index)
     return finish_import(sd_card, folder, album, archive, metadata_manager, write_library_tags, orientation, result)
+
+
+def group_tracks_by_album(paths: List[str]) -> List[tuple]:
+    """Gezogene Dateien nach Albumordner buendeln: [(Albumpfad, [Dateien])] in
+    Reihenfolge des ersten Auftretens"""
+    import os
+    groups: List[tuple] = []
+    for path in paths:
+        album_dir = os.path.dirname(os.path.normpath(path))
+        for existing, files in groups:
+            if existing == album_dir:
+                files.append(path)
+                break
+        else:
+            groups.append((album_dir, [path]))
+    return groups

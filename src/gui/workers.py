@@ -581,3 +581,26 @@ class LibraryScanWorker(QThread):
         except Exception as e:
             log.exception("Bibliothek einlesen fehlgeschlagen")
             self.failed.emit(str(e))
+
+
+class AlbumTracksWorker(QThread):
+    """Liest die Tracks eines Bibliotheksalbums (Nummer, Titel, Dauer) im Hintergrund"""
+    done = pyqtSignal(str, object)  # Albumpfad, list[LibraryTrack]
+
+    def __init__(self, album):
+        super().__init__()
+        self.album = album
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        from core.library import read_album_tracks
+        try:
+            tracks = read_album_tracks(self.album, cancelled=lambda: self._cancelled)
+        except Exception:
+            log.exception("Album-Tracks nicht lesbar")
+            tracks = []
+        if not self._cancelled:
+            self.done.emit(self.album.path, tracks)

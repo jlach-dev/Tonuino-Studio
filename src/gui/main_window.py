@@ -419,6 +419,7 @@ class MainWindow(QMainWindow):
         self.folder_list.itemClicked.connect(self._on_folder_selected)
         self.folder_list.itemDoubleClicked.connect(self._on_folder_double_clicked)
         self.folder_list.albums_dropped.connect(self._on_albums_dropped)
+        self.folder_list.tracks_dropped.connect(self._on_tracks_dropped)
         layout.addWidget(self.folder_list)
         
         self.rfid_panel = RfidPanel(
@@ -474,6 +475,9 @@ class MainWindow(QMainWindow):
         
         self.folder_widget = DropArea()
         self.folder_widget.albums_dropped.connect(self._on_albums_dropped_on_current)
+        self.folder_widget.tracks_dropped.connect(
+            lambda paths: self._on_tracks_dropped(paths, self.current_folder.index if self.current_folder
+                                                  and not self.current_folder.is_special else None))
         folder_layout = QVBoxLayout(self.folder_widget)
         folder_layout.setContentsMargins(0, 0, 0, 0)
         folder_layout.setSpacing(18)
@@ -630,6 +634,8 @@ class MainWindow(QMainWindow):
         self.library_view = LibraryView()
         self.library_view.rescan_requested.connect(lambda: self._start_library_scan(force=True))
         self.library_view.sources_requested.connect(self._edit_library_sources)
+        self.library_view.tags_requested.connect(self._library_tags)
+        self.library_view.recognize_requested.connect(self._library_recognize)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.welcome_widget)
@@ -2132,8 +2138,28 @@ class MainWindow(QMainWindow):
                 return
         for i, path in enumerate(paths):
             # mehrere Alben auf einen Ordner: nur das erste ersetzt, die weiteren haengen an
-            self._import_queue.append((path, target, mode if i == 0 else library_import.MODE_APPEND))
+            self._import_queue.append((path, target, mode if i == 0 else library_import.MODE_APPEND, None))
         self._start_next_import()
+
+    def _on_tracks_dropped(self, paths: list, identity):
+        """Einzelne Tracks (aus dem Album-Panel oder dem Explorer) auf die Ordnerliste
+        bzw. einen Ordner gezogen: je Album ein Import nur dieser Dateien (haengt an)."""
+        if not self.sd_card or not paths:
+            return
+        if isinstance(identity, str):
+            QMessageBox.information(self, "Systemordner", "In die Tonuino-Systemordner (mp3/advert) können "
+                                                          "keine Tracks gelegt werden.")
+            return
+        target = self.sd_card.folders.get(identity) if isinstance(identity, int) else None
+        for album_dir, files in library_import.group_tracks_by_album(paths):
+            self._import_queue.append((album_dir, target, library_import.MODE_APPEND, files))
+        self._start_next_import()
+
+    def _library_tags(self, album):
+        QMessageBox.information(self, "Tags nachtragen", "Kommt im nächsten Schritt.")
+
+    def _library_recognize(self, album, paths):
+        QMessageBox.information(self, "Stücke erkennen", "Kommt im nächsten Schritt.")
 
     def _ask_replace_or_append(self, target: Folder, count: int) -> Optional[str]:
         """Ersetzen / Anhaengen / Abbrechen (None) fuer einen Ordner, der schon Tracks hat"""
@@ -2175,7 +2201,7 @@ class MainWindow(QMainWindow):
     def _start_next_import(self):
         if self._import_job is not None or not self._import_queue or not self.sd_card:
             return
-        path, folder, mode = self._import_queue.pop(0)
+        path, folder, mode, only_tracks = self._import_queue.pop(0)
         try:
             album = library_import.library_album_for(path, self._library_index)
         except OSError as e:
@@ -2210,14 +2236,15 @@ class MainWindow(QMainWindow):
                 self._start_next_import()
                 return
         free_slots = MAX_TRACKS_PER_FOLDER - folder.track_count
-        files = list(album.tracks)
+        files = [f for f in only_tracks if f in album.tracks] or list(only_tracks) if only_tracks else list(album.tracks)
         if len(files) > free_slots:
             QMessageBox.warning(self, "Zu viele Tracks",
                                 f"Ein TonUINO-Ordner kann maximal {MAX_TRACKS_PER_FOLDER} Tracks enthalten. "
                                 f"Es werden nur die ersten {max(free_slots, 0)} der {len(files)} Tracks kopiert.")
             files = files[:max(free_slots, 0)]
 
-        dialog = QProgressDialog(f"„{album.name}“ wird kopiert …", "Abbrechen", 0, len(files), self)
+        what = f"{len(files)} Track(s) aus „{album.name}“" if only_tracks else f"„{album.name}“"
+        dialog = QProgressDialog(f"{what} wird kopiert …", "Abbrechen", 0, len(files), self)
         dialog.setWindowTitle(f"Album in Ordner {folder.index:02d}")
         dialog.setWindowModality(Qt.WindowModality.WindowModal)
         dialog.setMinimumDuration(0)
@@ -2281,6 +2308,7 @@ class MainWindow(QMainWindow):
             if isinstance(widget, QDialog) and widget is not self and widget.isVisible():
                 widget.reject()
         self.player_bar.stop()
+        self.library_view.shutdown()
         self.rfid_panel.shutdown()
         self.update_controller.shutdown()
         self._stop_background_threads()

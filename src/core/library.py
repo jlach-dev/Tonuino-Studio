@@ -150,6 +150,16 @@ class TrackTags:
     album_id: str = ""
     mb_release_id: str = ""
     mb_release_group_id: str = ""
+    track_number: int = 0
+
+
+def _track_number(value) -> int:
+    """'3', '3/12', (3, 12) -> 3"""
+    if isinstance(value, (list, tuple)) and value and isinstance(value[0], tuple):
+        value = value[0][0]
+    text = _first(value)
+    match = re.match(r"\s*(\d+)", text)
+    return int(match.group(1)) if match else 0
 
 
 def _first(value) -> str:
@@ -197,6 +207,7 @@ def read_track_tags(path: str) -> TrackTags:
 
         tags.title, tags.artist = frame("TIT2"), frame("TPE1")
         tags.album, tags.album_artist = frame("TALB"), frame("TPE2")
+        tags.track_number = _track_number(frame("TRCK"))
         tags.album_id = txxx(ALBUM_ID_KEY)
         tags.mb_release_id, tags.mb_release_group_id = txxx(MB_ALBUM_ID_KEY), txxx(MB_RELEASE_GROUP_KEY)
         for key in raw.keys():
@@ -209,6 +220,7 @@ def read_track_tags(path: str) -> TrackTags:
 
         tags.title, tags.artist = atom("\xa9nam"), atom("\xa9ART")
         tags.album, tags.album_artist = atom("\xa9alb"), atom("aART")
+        tags.track_number = _track_number(raw.get("trkn"))
         tags.album_id = atom(f"----:com.apple.iTunes:{ALBUM_ID_KEY}")
         tags.mb_release_id = atom(f"----:com.apple.iTunes:{MB_ALBUM_ID_KEY}")
         tags.mb_release_group_id = atom(f"----:com.apple.iTunes:{MB_RELEASE_GROUP_KEY}")
@@ -221,6 +233,7 @@ def read_track_tags(path: str) -> TrackTags:
 
         tags.title, tags.artist = comment("title"), comment("artist")
         tags.album, tags.album_artist = comment("album"), comment("albumartist")
+        tags.track_number = _track_number(comment("tracknumber"))
         tags.album_id = comment(ALBUM_ID_KEY)
         tags.mb_release_id = comment("musicbrainz_albumid")
         tags.mb_release_group_id = comment("musicbrainz_releasegroupid")
@@ -236,6 +249,41 @@ def read_track_tags(path: str) -> TrackTags:
                 except Exception:
                     pass
     return tags
+
+
+@dataclass
+class LibraryTrack:
+    """Ein Track eines Bibliotheksalbums (fuer das Album-Panel und den Teilimport)"""
+    path: str
+    number: int = 0
+    title: str = ""
+    artist: str = ""
+    duration: float = 0.0
+
+    @property
+    def display(self) -> str:
+        name = self.title or os.path.splitext(os.path.basename(self.path))[0]
+        return f"{self.number:02d}  {name}" if self.number else name
+
+
+def read_album_tracks(album_or_path, cancelled: Callable[[], bool] = lambda: False) -> List[LibraryTrack]:
+    """Tracks eines Albums mit Nummer, Titel, Interpret und Dauer - sortiert nach
+    Tracknummer, sonst nach Dateiname"""
+    path = album_or_path if isinstance(album_or_path, str) else album_or_path.path
+    files = (album_or_path.tracks if not isinstance(album_or_path, str) and album_or_path.tracks
+             else album_track_files(path))
+    tracks = []
+    for index, file in enumerate(files, start=1):
+        if cancelled():
+            break
+        tags = read_track_tags(file)
+        tracks.append(LibraryTrack(file, tags.track_number or 0, tags.title, tags.artist, tags.duration))
+    if any(t.number for t in tracks):
+        tracks.sort(key=lambda t: (t.number or 999, _natural_key(os.path.basename(t.path))))
+    for index, track in enumerate(tracks, start=1):
+        if not track.number:
+            track.number = index
+    return tracks
 
 
 def write_album_id_any(path: str, album_id: str) -> bool:

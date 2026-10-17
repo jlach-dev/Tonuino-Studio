@@ -93,3 +93,25 @@ def icon_with_hover(glyph: str, color: str, hover_color: str, size: int = 16) ->
     icon.addPixmap(normal, QIcon.Mode.Normal)
     icon.addPixmap(active, QIcon.Mode.Active)
     return icon
+
+
+def configure_multi_directory_dialog(dialog) -> None:
+    """Macht aus einem QFileDialog einen Ordner-Dialog mit Mehrfachauswahl.
+    Der native Windows-Dialog kann nur einen Ordner liefern; der Qt-eigene
+    Dialog erlaubt die Mehrfachauswahl in seiner Liste bzw. seinem Baum."""
+    from PyQt6.QtWidgets import QAbstractItemView, QFileDialog, QListView, QTreeView
+    dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+    dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+    dialog.setFileMode(QFileDialog.FileMode.Directory)
+    for view in dialog.findChildren(QListView) + dialog.findChildren(QTreeView):
+        view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+
+
+def pick_directories(parent, caption: str, start: str = "") -> list:
+    """Mehrere Ordner auf einmal waehlen (Strg/Shift-Klick); leer bei Abbruch"""
+    from PyQt6.QtWidgets import QDialog, QFileDialog
+    dialog = QFileDialog(parent, caption, start)
+    configure_multi_directory_dialog(dialog)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return []
+    return [os.path.normpath(p) for p in dialog.selectedFiles() if os.path.isdir(p)]

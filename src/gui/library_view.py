@@ -13,16 +13,17 @@ from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QVBoxLayout, QWidget,
+    QPushButton, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from core.cover_archive import ROLE_CARD_COVER
 from core.library import (
-    STATE_LABELS, STATE_NEW, STATE_OFFLINE, Library, LibraryAlbum, LibraryIndex, format_duration,
+    STATE_LABELS, STATE_NEW, STATE_OFFLINE, Library, LibraryAlbum, LibraryIndex, LibraryTrack, format_duration,
 )
 from gui import theme
 from gui.common import icon_from_glyph
-from gui.library_dnd import make_album_mime
+from gui.library_dnd import make_album_mime, make_tracks_mime
+from gui.workers import AlbumTracksWorker
 
 TILE_WIDTH = 176
 COVER_SIZE = 150
@@ -58,6 +59,137 @@ class LibraryGrid(QListWidget):
         paths = [item.data(Qt.ItemDataRole.UserRole) for item in items
                  if item.flags() & Qt.ItemFlag.ItemIsDragEnabled]
         return make_album_mime(paths)
+
+
+class TrackListWidget(QListWidget):
+    """Trackliste eines Albums; die markierten Tracks lassen sich auf die SD-Karte ziehen"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("trackList")
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+        self.setDefaultDropAction(Qt.DropAction.CopyAction)
+
+    def mimeTypes(self):
+        return ["application/x-tonuino-tracks", "text/uri-list", "text/plain"]
+
+    def mimeData(self, items):
+        return make_tracks_mime([item.data(Qt.ItemDataRole.UserRole) for item in items])
+
+    def selected_paths(self) -> List[str]:
+        return [item.data(Qt.ItemDataRole.UserRole) for item in self.selectedItems()]
+
+
+class AlbumPanel(QWidget):
+    """Geoeffnetes Album: Kopf, Trackliste (Mehrfachauswahl, Drag-Quelle) und Aktionen"""
+    back_requested = pyqtSignal()
+    tags_requested = pyqtSignal(object)  # LibraryAlbum
+    recognize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien (leer = alle)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.album: Optional[LibraryAlbum] = None
+        self.tracks: List[LibraryTrack] = []
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        top = QHBoxLayout()
+        self.btn_back = QPushButton(" Zurück zur Übersicht")
+        self.btn_back.setObjectName("ghostButton")
+        self.btn_back.setIcon(icon_from_glyph("", color=theme.TEXT))  # Arrow back
+        self.btn_back.clicked.connect(self.back_requested)
+        top.addWidget(self.btn_back)
+        top.addStretch(1)
+        layout.addLayout(top)
+
+        head = QFrame()
+        head.setObjectName("heroCard")
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(20, 16, 20, 16)
+        head_layout.setSpacing(20)
+        self.cover_label = QLabel()
+        self.cover_label.setFixedSize(COVER_SIZE, COVER_SIZE)
+        self.cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        head_layout.addWidget(self.cover_label)
+        info = QVBoxLayout()
+        info.setSpacing(2)
+        self.title_label = QLabel()
+        self.title_label.setObjectName("folderTitle")
+        self.title_label.setWordWrap(True)
+        info.addWidget(self.title_label)
+        self.artist_label = QLabel()
+        self.artist_label.setObjectName("folderSubtitle")
+        info.addWidget(self.artist_label)
+        self.meta_label = QLabel()
+        self.meta_label.setObjectName("folderMeta")
+        self.meta_label.setWordWrap(True)
+        info.addWidget(self.meta_label)
+        info.addStretch(1)
+        actions = QHBoxLayout()
+        self.btn_tags = QPushButton("Tags nachtragen …")
+        self.btn_tags.setToolTip("Album, Titel und Interpret aus dem Internet (MusicBrainz, Deezer, iTunes) "
+                                 "übernehmen – mit Vorschau")
+        self.btn_tags.clicked.connect(lambda: self.tags_requested.emit(self.album))
+        actions.addWidget(self.btn_tags)
+        self.btn_recognize = QPushButton("Stücke erkennen …")
+        self.btn_recognize.setToolTip("Titel per Audio-Fingerabdruck erkennen (AcoustID) – für unklare Dateien")
+        self.btn_recognize.clicked.connect(
+            lambda: self.recognize_requested.emit(self.album, self.track_list.selected_paths()))
+        actions.addWidget(self.btn_recognize)
+        actions.addStretch(1)
+        info.addLayout(actions)
+        head_layout.addLayout(info, 1)
+        layout.addWidget(head)
+
+        list_head = QHBoxLayout()
+        list_title = QLabel("Tracks")
+        list_title.setObjectName("sectionTitle")
+        list_head.addWidget(list_title)
+        self.track_hint = QLabel("Tracks markieren und auf die Ordnerliste links ziehen (neuer Ordner) oder "
+                                 "auf einen Ordner (anhängen)")
+        self.track_hint.setObjectName("folderMeta")
+        self.track_hint.setWordWrap(True)
+        list_head.addWidget(self.track_hint, 1)
+        self.btn_all = QPushButton("Alle")
+        self.btn_all.setObjectName("ghostButton")
+        self.btn_all.clicked.connect(lambda: self.track_list.selectAll())
+        list_head.addWidget(self.btn_all)
+        layout.addLayout(list_head)
+
+        self.track_list = TrackListWidget()
+        layout.addWidget(self.track_list, 1)
+
+    def show_album(self, album: LibraryAlbum, cover: Optional[QPixmap], badges: List[tuple]):
+        self.album = album
+        self.tracks = []
+        if cover is not None and not cover.isNull():
+            self.cover_label.setPixmap(cover.scaled(COVER_SIZE, COVER_SIZE, Qt.AspectRatioMode.KeepAspectRatio,
+                                                    Qt.TransformationMode.SmoothTransformation))
+        else:
+            self.cover_label.setPixmap(icon_from_glyph("", color=theme.OVERLAY0, size=64).pixmap(64, 64))
+        self.title_label.setText(album.name)
+        self.artist_label.setText(album.artist or "–")
+        parts = [f"{album.track_count} Tracks", format_duration(album.duration), album.path]
+        parts += [text for text, _kind in badges]
+        self.meta_label.setText(" · ".join(p for p in parts if p))
+        self.track_list.clear()
+        self.track_list.addItem("Tracks werden gelesen …")
+        self.btn_tags.setEnabled(not album.offline)
+        self.btn_recognize.setEnabled(not album.offline)
+
+    def set_tracks(self, tracks: List[LibraryTrack]):
+        self.tracks = tracks
+        self.track_list.clear()
+        for track in tracks:
+            item = QListWidgetItem(track.display + (f"   {format_duration(track.duration)}" if track.duration else ""))
+            item.setData(Qt.ItemDataRole.UserRole, track.path)
+            item.setToolTip(track.path + (f"\n{track.artist}" if track.artist else ""))
+            self.track_list.addItem(item)
+        if not tracks:
+            self.track_list.addItem("Keine Audiodateien gefunden.")
 
 
 class AlbumTile(QFrame):
@@ -120,9 +252,12 @@ def _elide(text: str, limit: int) -> str:
 class LibraryView(QWidget):
     rescan_requested = pyqtSignal()
     sources_requested = pyqtSignal()
+    tags_requested = pyqtSignal(object)  # LibraryAlbum
+    recognize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._tracks_worker: Optional[AlbumTracksWorker] = None
         self.library: Optional[Library] = None
         self.index = LibraryIndex()
         self.sd_map: Dict[str, int] = {}  # Album-ID -> Ordnernummer auf der SD-Karte
@@ -180,17 +315,64 @@ class LibraryView(QWidget):
         self.hint_label.setWordWrap(True)
         layout.addWidget(self.hint_label)
 
+        self.pages = QStackedWidget()
+        overview = QWidget()
+        overview_layout = QVBoxLayout(overview)
+        overview_layout.setContentsMargins(0, 0, 0, 0)
         self.grid = LibraryGrid()
         self.grid.setIconSize(QSize(COVER_SIZE, COVER_SIZE))
-        layout.addWidget(self.grid, 1)
+        self.grid.itemDoubleClicked.connect(lambda item: self.open_album(item.data(Qt.ItemDataRole.UserRole)))
+        overview_layout.addWidget(self.grid, 1)
 
         self.empty_label = QLabel()
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setWordWrap(True)
         self.empty_label.setObjectName("folderMeta")
-        layout.addWidget(self.empty_label, 1)
+        overview_layout.addWidget(self.empty_label, 1)
         self.empty_label.hide()
+        self.pages.addWidget(overview)
+
+        self.album_panel = AlbumPanel()
+        self.album_panel.back_requested.connect(self.show_overview)
+        self.album_panel.tags_requested.connect(self.tags_requested)
+        self.album_panel.recognize_requested.connect(self.recognize_requested)
+        self.pages.addWidget(self.album_panel)
+        layout.addWidget(self.pages, 1)
         self._rebuild_series_combo()
+
+    # --- Album-Panel ---
+
+    def open_album(self, path: str):
+        """Doppelklick auf eine Kachel: Album mit Trackliste zeigen"""
+        album = self.index.find(path)
+        if album is None:
+            return
+        self.album_panel.show_album(album, self._pixmap(album), self.badges_for(album))
+        self.pages.setCurrentWidget(self.album_panel)
+        if self._tracks_worker is not None and self._tracks_worker.isRunning():
+            self._tracks_worker.cancel()
+            self._tracks_worker.wait(1000)
+        self._tracks_worker = AlbumTracksWorker(album)
+        self._tracks_worker.done.connect(self._on_tracks_read)
+        self._tracks_worker.start()
+
+    def _on_tracks_read(self, path: str, tracks: list):
+        if self.album_panel.album is not None and self.album_panel.album.path == path:
+            self.album_panel.set_tracks(tracks)
+
+    def show_overview(self):
+        self.pages.setCurrentIndex(0)
+
+    @property
+    def open_album_path(self) -> Optional[str]:
+        if self.pages.currentWidget() is self.album_panel and self.album_panel.album is not None:
+            return self.album_panel.album.path
+        return None
+
+    def shutdown(self):
+        if self._tracks_worker is not None and self._tracks_worker.isRunning():
+            self._tracks_worker.cancel()
+            self._tracks_worker.wait(2000)
 
     # --- Daten ---
 
