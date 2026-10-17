@@ -44,7 +44,7 @@ from gui.card_cover_dialog import (
     ORIENTATIONS, _select_data, gemini_client, image_model, pil_to_pixmap, text_model,
 )
 from gui.common import confirm_action, icon_from_glyph
-from gui.text_style_dialog import TextStyleDialog
+from gui.text_style_dialog import TextStylesPopup
 from gui import theme
 from gui.tag_diff_dialog import TagDiffDialog
 from gui.workers import CoverExtendWorker, CoverGenerateWorker, CoverResearchWorker
@@ -519,12 +519,12 @@ class CoverManagerDialog(QDialog):
         self.series_edit = QLineEdit()
         self.series_edit.setPlaceholderText("z.B. Die Fuchsbande · Folge 39")
         self.series_edit.textChanged.connect(self._render_preview)
-        form.addRow("Reihe (klein):", self._with_gear(self.series_edit, "Reihe", "series"))
+        form.addRow("Reihe (klein):", self._with_gear(self.series_edit))
         self.title_edit = QPlainTextEdit()
         self.title_edit.setPlaceholderText("Eine Zeile je Folge")
         self.title_edit.setFixedHeight(76)
         self.title_edit.textChanged.connect(self._render_preview)
-        form.addRow("Titel:", self._with_gear(self.title_edit, "Titel", "title"))
+        form.addRow("Titel:", self.title_edit)
         self.btn_from_tags = QPushButton("Aus Tags übernehmen")
         self.btn_from_tags.setObjectName("ghostButton")
         self.btn_from_tags.setToolTip("Reihe und Folgentitel aus den MP3-Tags (Album, Interpret) ableiten")
@@ -632,8 +632,8 @@ class CoverManagerDialog(QDialog):
         self._on_back_mode_changed()
         return tab
 
-    def _with_gear(self, widget: QWidget, label: str, which: str) -> QWidget:
-        """Eingabefeld mit Zahnrad oben rechts (Schriftart, Groesse, Farbe)"""
+    def _with_gear(self, widget: QWidget) -> QWidget:
+        """Eingabefeld mit Zahnrad oben rechts: Schrift fuer Reihe und Titel"""
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -643,24 +643,35 @@ class CoverManagerDialog(QDialog):
         gear.setObjectName("ghostButton")
         gear.setIcon(icon_from_glyph("\ue8b8", color=theme.TEXT))  # Settings
         gear.setFixedSize(28, 28)
-        gear.setToolTip(f"Schrift für „{label}“: Schriftart, Größe, Farbe")
-        gear.clicked.connect(lambda: self._edit_text_style(which, label))
+        gear.setToolTip("Schrift für Reihe und Titel: Schriftart, Größe, Farbe (Vorschau folgt live)")
+        gear.clicked.connect(self._open_text_styles)
         layout.addWidget(gear, 0, Qt.AlignmentFlag.AlignTop)
+        self._styles_popup: Optional[TextStylesPopup] = None
         return row
 
-    def _edit_text_style(self, which: str, label: str):
-        current = self.title_style if which == "title" else self.series_style
-        dialog = TextStyleDialog(label, current, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+    def _open_text_styles(self):
+        """Nicht-modales Popup; jede Aenderung geht sofort in die Vorschau"""
+        if self._styles_popup is not None and self._styles_popup.isVisible():
+            self._styles_popup.raise_()
+            self._styles_popup.activateWindow()
             return
-        style = dialog.result_style()
-        if which == "title":
-            self.title_style = style
-            QSettings().setValue(SETTINGS_TITLE_STYLE, json.dumps(style.to_dict()))
-        else:
-            self.series_style = style
-            QSettings().setValue(SETTINGS_SERIES_STYLE, json.dumps(style.to_dict()))
+        popup = TextStylesPopup(self.series_style, self.title_style, self)
+        popup.styles_changed.connect(self._on_text_styles_changed)
+        popup.accepted.connect(self._persist_text_styles)
+        popup.finished.connect(lambda _r: setattr(self, "_styles_popup", None))
+        self._styles_popup = popup
+        self.tabs.setCurrentIndex(1)
+        self.side_bar.setCurrentIndex(0)
+        popup.show()
+
+    def _on_text_styles_changed(self, series_style: TextStyle, title_style: TextStyle):
+        self.series_style, self.title_style = series_style, title_style
         self._render_preview()
+
+    def _persist_text_styles(self):
+        settings = QSettings()
+        settings.setValue(SETTINGS_TITLE_STYLE, json.dumps(self.title_style.to_dict()))
+        settings.setValue(SETTINGS_SERIES_STYLE, json.dumps(self.series_style.to_dict()))
 
     def _ai_tab(self) -> QWidget:
         tab = QWidget()

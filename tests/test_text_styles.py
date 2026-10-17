@@ -56,7 +56,7 @@ def test_preview_shows_card_only_on_card_tab_and_style_dialog(qt_app, tmp_path, 
     from core.metadata import MetadataManager
     from core.sd_card import SDCard
     from gui import cover_manager_dialog as cm
-    from gui.text_style_dialog import TextStyleDialog
+    from gui.text_style_dialog import TextStylesPopup
 
     folder = tmp_path / "sd" / "01"
     folder.mkdir(parents=True)
@@ -84,27 +84,29 @@ def test_preview_shows_card_only_on_card_tab_and_style_dialog(qt_app, tmp_path, 
     card = dialog.preview.pixmap()
     assert card.height() > card.width() * 1.3
 
-    # Zahnrad-Dialog: Stil uebernehmen landet in Meta und Einstellungen
-    style_dialog = TextStyleDialog("Titel", TextStyle(), dialog)
-    style_dialog.size_spin.setValue(4.0)
-    style_dialog._set_color("#00ff00")
-    style = style_dialog.result_style()
-    assert style.size_mm == 4.0 and style.color == "#00ff00" and style.family == ""
-    monkeypatch.setattr(cm, "TextStyleDialog", lambda *a, **k: _Accepting(style_dialog))
-    dialog._edit_text_style("title", "Titel")
-    assert dialog.title_style.color == "#00ff00"
+    # Zahnrad: ein Popup fuer beide Bereiche, Aenderungen gehen live in die Vorschau
+    renders = []
+    monkeypatch.setattr(dialog, "_render_preview", lambda *a: renders.append(True))
+    dialog._open_text_styles()
+    popup = dialog._styles_popup
+    assert isinstance(popup, TextStylesPopup) and popup.isVisible()
+    popup.title_editor.size_spin.setValue(4.0)
+    popup.title_editor._set_color("#00ff00")
+    popup.title_editor.changed.emit()
+    popup.series_editor.bold_check.setChecked(False)
+    assert dialog.title_style.size_mm == 4.0 and dialog.title_style.color == "#00ff00"
+    assert dialog.series_style.bold is False
+    assert len(renders) >= 2
     assert dialog._card_meta_now(None).title_style["size_mm"] == 4.0
+
+    # Abbrechen stellt die Ausgangswerte wieder her, Fertig speichert sie als Vorgabe
+    popup.reject()
+    assert dialog.title_style.size_mm == 0.0 and dialog.series_style.bold is True
+    dialog._open_text_styles()
+    popup = dialog._styles_popup
+    popup.title_editor.size_spin.setValue(3.0)
+    popup.accept()
+    from PyQt6.QtCore import QSettings
+    assert '"size_mm": 3.0' in QSettings().value(cm.SETTINGS_TITLE_STYLE, "", type=str)
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
-
-
-class _Accepting:
-    def __init__(self, inner):
-        self.inner = inner
-
-    def exec(self):
-        from PyQt6.QtWidgets import QDialog
-        return QDialog.DialogCode.Accepted
-
-    def result_style(self):
-        return self.inner.result_style()
