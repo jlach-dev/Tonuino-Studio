@@ -21,7 +21,7 @@ from PIL import Image
 from PyQt6.QtCore import Qt, QSettings, QSize, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
     QScrollArea, QSplitter, QTabBar, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -34,8 +34,10 @@ from core.card_layout import (
     prepare_card_art,
 )
 from core.cover_archive import (
-    KIND_AI, KIND_FILE, KIND_LOCAL, KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive, CoverEntry, sha1,
+    KIND_AI, KIND_FILE, KIND_LOCAL, KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER, ROLE_SERIES_ANCHOR,
+    CoverArchive, CoverEntry, sha1,
 )
+from core.series import MAX_ANCHORS, SIDE_BACK, SIDE_FRONT, AnchorRef, SeriesProfile, load_anchor_bytes
 from core.cover_generator import (
     DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, MAX_REFERENCE_IMAGES, SOURCE_AI, STYLE_PRESETS, GenerationRequest,
 )
@@ -49,7 +51,8 @@ from gui.text_style_dialog import TextStylesPopup
 from gui import theme
 from gui.tag_diff_dialog import TagDiffDialog
 from gui.workers import (
-    BackIdeasWorker, CoverBackGenerateWorker, CoverExtendWorker, CoverGenerateWorker, CoverResearchWorker,
+    BackIdeasWorker, CharacterSheetWorker, CoverBackGenerateWorker, CoverExtendWorker, CoverGenerateWorker,
+    CoverResearchWorker, SeriesDetectWorker, StyleBibleWorker,
 )
 
 log = logging.getLogger(__name__)
@@ -268,6 +271,13 @@ class CoverManagerDialog(QDialog):
         self._extend_worker: Optional[CoverExtendWorker] = None
         self._back_worker: Optional[CoverBackGenerateWorker] = None
         self._ideas_worker: Optional[BackIdeasWorker] = None
+        self._series_detect_worker: Optional[SeriesDetectWorker] = None
+        self._bible_worker: Optional[StyleBibleWorker] = None
+        self._sheet_worker: Optional[CharacterSheetWorker] = None
+        # Serie (core/series.py): zugeordnetes Profil, erkannte Reihe, geladene Anker-Bilder
+        self.series_profile: Optional[SeriesProfile] = None
+        self._detected_series = ("", "")  # Name, MusicBrainz-Serien-ID
+        self._anchor_images: List[bytes] = []
         self._extend_jobs: list = []  # anstehende KI-Schritte beim Uebernehmen
         # explizit gewaehlte Bildquellen (sonst: angeklicktes Bild bzw. dessen Rueckseite)
         self.front_source: Optional[SideSource] = None
@@ -278,6 +288,7 @@ class CoverManagerDialog(QDialog):
         self._resolve_album()
         self._load_current()
         self._load_archive()
+        self._load_series()
         self._update_buttons()
         QTimer.singleShot(0, self._start_research)
 
@@ -413,7 +424,8 @@ class CoverManagerDialog(QDialog):
         left.addLayout(mark_bar)
 
         hint = QLabel("Klick = groß anzeigen · Haken = markieren · ★ im Archiv · ○ nicht gespeichert "
-                      "(verschwindet beim Schließen) · ◆ KI-Vorlage · ♪ Album-Cover · ▭ Kartencover · ⧉ mit Rückseite")
+                      "(verschwindet beim Schließen) · ◆ KI-Vorlage · ♪ Album-Cover · ▭ Kartencover · ⧉ mit Rückseite "
+                      "· ⚓ Serien-Anker")
         hint.setObjectName("folderMeta")
         hint.setWordWrap(True)
         left.addWidget(hint)
@@ -430,6 +442,7 @@ class CoverManagerDialog(QDialog):
         self.tabs.addTab(self._search_tab(), "Cover suchen")
         self.tabs.addTab(self._card_tab(), "Karte")
         self.tabs.addTab(self._ai_tab(), "KI erzeugen")
+        self.tabs.addTab(self._series_tab(), "Serie")
         self.tabs.currentChanged.connect(self._render_preview)
         right.addWidget(self.tabs, 1)
 
@@ -775,6 +788,11 @@ class CoverManagerDialog(QDialog):
         self.refs_label = QLabel()
         self.refs_label.setWordWrap(True)
         layout.addWidget(self.refs_label)
+        self.series_hint_label = QLabel()
+        self.series_hint_label.setObjectName("folderMeta")
+        self.series_hint_label.setWordWrap(True)
+        self.series_hint_label.setToolTip("Zuordnung und Anker-Bilder im Tab „Serie“")
+        layout.addWidget(self.series_hint_label)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Varianten:"))
@@ -789,6 +807,406 @@ class CoverManagerDialog(QDialog):
         row.addWidget(self.btn_generate)
         layout.addLayout(row)
         return tab
+
+    def _series_tab(self) -> QWidget:
+        tab = QScrollArea()
+        tab.setWidgetResizable(True)
+        tab.setFrameShape(QScrollArea.Shape.NoFrame)
+        tab.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        inner = QWidget()
+        tab.setWidget(inner)
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(8, 8, 14, 8)
+        intro = QLabel("Folgen einer Hörspielreihe bekommen so Kartencover mit denselben Figuren, demselben "
+                       "Illustrationsstil und derselben Farbwelt: Anker-Bilder gehen bei jeder KI-Erzeugung als "
+                       "erste Vorlagen mit, die Stilbibel beschreibt den Look in Worten.")
+        intro.setObjectName("folderMeta")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        combo_row = QHBoxLayout()
+        self.series_combo = QComboBox()
+        self.series_combo.setToolTip("Serie, zu der dieses Album gehört (erkannt aus MusicBrainz bzw. den Tags, "
+                                     "vorhandene Profile oder neu anlegen)")
+        self.series_combo.currentIndexChanged.connect(self._on_series_combo_changed)
+        combo_row.addWidget(self.series_combo, 1)
+        self.btn_series_new = QPushButton("Neue Serie …")
+        self.btn_series_new.setObjectName("ghostButton")
+        self.btn_series_new.clicked.connect(self._create_series)
+        combo_row.addWidget(self.btn_series_new)
+        form.addRow("Serie:", combo_row)
+        self.series_info_label = QLabel()
+        self.series_info_label.setObjectName("folderMeta")
+        self.series_info_label.setWordWrap(True)
+        form.addRow("", self.series_info_label)
+        self.series_style_combo = QComboBox()
+        self.series_style_combo.addItem("wie im Tab „KI erzeugen“", "")
+        for preset in STYLE_PRESETS:
+            self.series_style_combo.addItem(preset, preset)
+        self.series_style_combo.setToolTip("Fester Stil für alle Folgen der Serie (auch im Serien-Batch)")
+        self.series_style_combo.currentIndexChanged.connect(self._on_series_edited)
+        form.addRow("Stil:", self.series_style_combo)
+        layout.addLayout(form)
+
+        bible_header = QHBoxLayout()
+        bible_header.addWidget(QLabel("Stilbibel (Figuren, Palette, Bildsprache – bearbeitbar):"), 1)
+        self.btn_bible_suggest = QPushButton("Vorschlagen")
+        self.btn_bible_suggest.setObjectName("ghostButton")
+        self.btn_bible_suggest.setToolTip("Das Textmodell beschreibt Figuren, Stil und Farben aus den Anker-Bildern "
+                                          "und der Recherche (günstiger Aufruf)")
+        self.btn_bible_suggest.clicked.connect(self._suggest_style_bible)
+        bible_header.addWidget(self.btn_bible_suggest)
+        layout.addLayout(bible_header)
+        self.bible_edit = QPlainTextEdit()
+        self.bible_edit.setPlaceholderText("z.B. Figuren: Fuchs Finn, rotes Fell, blaue Latzhose …\n"
+                                           "Stil: weiche Kinderbuch-Illustration …\nFarben: …\nBildsprache: …")
+        self.bible_edit.setMinimumHeight(140)
+        self.bible_edit.textChanged.connect(self._on_series_edited)
+        layout.addWidget(self.bible_edit, 1)
+
+        anchors_title = QLabel(f"Anker-Bilder (max. {MAX_ANCHORS})")
+        anchors_title.setObjectName("sectionTitle")
+        layout.addWidget(anchors_title)
+        self.anchor_list = QListWidget()
+        self.anchor_list.setObjectName("coverGallery")
+        self.anchor_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.anchor_list.setIconSize(QSize(self.THUMB, self.THUMB))
+        self.anchor_list.setGridSize(QSize(self.THUMB + 22, self.THUMB + 40))
+        self.anchor_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.anchor_list.setMovement(QListWidget.Movement.Static)
+        self.anchor_list.setFixedHeight(self.THUMB + 54)
+        self.anchor_list.currentItemChanged.connect(lambda *_: self._update_series_ui())
+        layout.addWidget(self.anchor_list)
+        anchor_buttons = QHBoxLayout()
+        self.btn_anchor_add = QPushButton("Angeklicktes Bild als Anker")
+        self.btn_anchor_add.setToolTip("Das gerade groß angezeigte Bild (Vorder- oder Rückseite) als Anker der Serie "
+                                       "– es wird dafür im Archiv behalten")
+        self.btn_anchor_add.clicked.connect(self._add_anchor_from_preview)
+        self.btn_anchor_remove = QPushButton("Anker entfernen")
+        self.btn_anchor_remove.setObjectName("ghostButton")
+        self.btn_anchor_remove.clicked.connect(self._remove_selected_anchor)
+        self.btn_character_sheet = QPushButton("Charakterblatt erzeugen (1 Bildaufruf)")
+        self.btn_character_sheet.setObjectName("ghostButton")
+        self.btn_character_sheet.setToolTip("Ein Bild mit den Hauptfiguren auf neutralem Hintergrund (Nano Banana, "
+                                            "Anker als Vorlage) – wird im Archiv gespeichert und als Anker gesetzt")
+        self.btn_character_sheet.clicked.connect(self._generate_character_sheet)
+        for button in (self.btn_anchor_add, self.btn_anchor_remove, self.btn_character_sheet):
+            anchor_buttons.addWidget(button)
+        anchor_buttons.addStretch(1)
+        layout.addLayout(anchor_buttons)
+        self.series_status = QLabel()
+        self.series_status.setObjectName("folderMeta")
+        self.series_status.setWordWrap(True)
+        layout.addWidget(self.series_status)
+
+        self._series_save_timer = QTimer(self)
+        self._series_save_timer.setSingleShot(True)
+        self._series_save_timer.setInterval(800)
+        self._series_save_timer.timeout.connect(self._save_series_profile)
+        self._series_loading = False
+        return tab
+
+    # --- Serie --------------------------------------------------------------------------------
+
+    def _series_store(self):
+        return self.archive.series if self.archive is not None else None
+
+    def _load_series(self):
+        """Profil aus der Album-Zuordnung im Archiv laden und Auswahl aufbauen"""
+        store = self._series_store()
+        if store is not None:
+            record = self.archive.load_album(self.album_id)
+            if record is not None and record.series_id:
+                self.series_profile = store.load(record.series_id)
+        self._rebuild_series_combo()
+
+    def _rebuild_series_combo(self):
+        self._series_loading = True
+        self.series_combo.blockSignals(True)
+        self.series_combo.clear()
+        self.series_combo.addItem("keine", "")
+        store = self._series_store()
+        profiles = store.list_all() if store is not None else []
+        for profile in profiles:
+            self.series_combo.addItem(profile.name, profile.id)
+        detected_name, detected_mb = self._detected_series
+        if detected_name and not any(self._matches_detected(p) for p in profiles):
+            self.series_combo.addItem(f"Erkannt: {detected_name} (neu anlegen)", "__detected__")
+        _select_data(self.series_combo, self.series_profile.id if self.series_profile is not None else "")
+        self.series_combo.blockSignals(False)
+        self.series_combo.setEnabled(store is not None)
+        self.btn_series_new.setEnabled(store is not None)
+        self._load_series_editor()
+        self._series_loading = False
+        self._update_series_ui()
+
+    def _matches_detected(self, profile: SeriesProfile) -> bool:
+        from core.series import normalize_series_name
+        name, mb_id = self._detected_series
+        if mb_id and profile.mb_series_id == mb_id:
+            return True
+        return bool(name) and normalize_series_name(profile.name) == normalize_series_name(name)
+
+    def _load_series_editor(self):
+        """Stilbibel, Stil und Anker des gewaehlten Profils in die Felder"""
+        self._series_loading = True
+        profile = self.series_profile
+        self.bible_edit.setPlainText(profile.style_bible if profile else "")
+        _select_data(self.series_style_combo, profile.style if profile and profile.style in STYLE_PRESETS else "")
+        self.anchor_list.clear()
+        self._anchor_images = []
+        if profile is not None and self.archive is not None:
+            for anchor in profile.anchors:
+                data = load_anchor_bytes(self.archive, anchor)
+                if not data:
+                    continue
+                self._anchor_images.append(data)
+                with Image.open(io.BytesIO(data)) as img:
+                    img.load()
+                    thumb = img.convert("RGB")
+                thumb.thumbnail((self.THUMB * 2, self.THUMB * 2))
+                side = "Rückseite" if anchor.side == SIDE_BACK else "Vorderseite"
+                item = QListWidgetItem(QIcon(pil_to_pixmap(thumb)), f"Anker {self.anchor_list.count() + 1}")
+                item.setToolTip(f"{side} · Album {anchor.album_id[:8]} · Cover {anchor.cover_id}")
+                item.setData(Qt.ItemDataRole.UserRole, anchor)
+                self.anchor_list.addItem(item)
+        self._series_loading = False
+
+    def _on_series_combo_changed(self, *_):
+        if self._series_loading:
+            return
+        data = self.series_combo.currentData()
+        if data == "__detected__":
+            self._create_series(self._detected_series[0], self._detected_series[1])
+            return
+        store = self._series_store()
+        self._assign_series(store.load(data) if store is not None and data else None)
+
+    def _assign_series(self, profile: Optional[SeriesProfile]):
+        """Album dem Profil zuordnen (None = keine Serie). Im Archiv wird das
+        erst festgehalten, wenn das Album dort angelegt ist (sonst beim naechsten
+        Speichern ueber _persist_album)."""
+        self._series_save_timer.stop()
+        self.series_profile = profile
+        if self.archive is not None and self.archive.load_album(self.album_id) is not None:
+            self.archive.assign_album(self.album_id, profile.id if profile else "")
+        self._load_series_editor()
+        self._update_series_ui()
+        if profile is not None:
+            self._flash(f"Album der Serie „{profile.name}“ zugeordnet.")
+
+    def _create_series(self, name: str = "", mb_series_id: str = ""):
+        store = self._series_store()
+        if store is None:
+            return
+        if not isinstance(name, str) or not name:
+            work = describe_work(self.info, self.brief)
+            from core.series import clean_series_name
+            suggestion = self._detected_series[0] or clean_series_name(work.series) or self.info.artist
+            name, ok = QInputDialog.getText(self, "Neue Serie", "Name der Hörspielreihe:", text=suggestion)
+            if not ok or not name.strip():
+                self._rebuild_series_combo()
+                return
+            if self._detected_series[0] and name.strip().lower() == self._detected_series[0].lower():
+                mb_series_id = self._detected_series[1]
+        existing = store.find_by_name(name)
+        profile = existing or store.create(name, mb_series_id, self.style_combo.currentText())
+        self.series_profile = profile
+        self._rebuild_series_combo()
+        self._assign_series(profile)
+
+    def _on_series_detected(self, name: str, mb_series_id: str):
+        self._detected_series = (name, mb_series_id)
+        store = self._series_store()
+        if self.series_profile is None and store is not None and name:
+            match = store.find_by_mb_id(mb_series_id) or store.find_by_name(name)
+            if match is not None:
+                self.series_profile = match
+                if self.archive.load_album(self.album_id) is not None:
+                    self.archive.assign_album(self.album_id, match.id)
+        self._rebuild_series_combo()
+
+    def _start_series_detection(self):
+        if self._series_detect_worker is not None and self._series_detect_worker.isRunning():
+            return
+        release_group_id = ""
+        if self.folder.tracks and self.info.tags_verified:
+            release_group_id = album_identity.read_mb_ids(self.folder.tracks[0].filepath)["release_group_id"]
+        self._series_detect_worker = SeriesDetectWorker(self.info, release_group_id)
+        self._series_detect_worker.done.connect(self._on_series_detected)
+        self._series_detect_worker.start()
+
+    def _on_series_edited(self, *_):
+        if not self._series_loading and self.series_profile is not None:
+            self._series_save_timer.start()
+
+    def _save_series_profile(self):
+        store = self._series_store()
+        profile = self.series_profile
+        if store is None or profile is None:
+            return
+        profile.style_bible = self.bible_edit.toPlainText().strip()
+        profile.style = self.series_style_combo.currentData() or ""
+        store.save(profile)
+        self._update_series_ui()
+
+    def _series_request_fields(self) -> dict:
+        """Felder fuer GenerationRequest: Name, Stilbibel und Anker-Bilder der Serie"""
+        if self.series_profile is None:
+            return {}
+        return {"series_name": self.series_profile.name, "series_bible": self.bible_edit.toPlainText().strip(),
+                "anchor_images": list(self._anchor_images)}
+
+    def _update_series_ui(self):
+        if not hasattr(self, "series_hint_label") or not hasattr(self, "anchor_list"):
+            return
+        profile = self.series_profile
+        has_profile = profile is not None
+        anchors = len(self._anchor_images)
+        for widget in (self.bible_edit, self.series_style_combo, self.btn_bible_suggest):
+            widget.setEnabled(has_profile)
+        preview = self._preview_source() if hasattr(self, "side_bar") else None
+        self.btn_anchor_add.setEnabled(has_profile and preview is not None and self.archive is not None
+                                       and anchors < MAX_ANCHORS)
+        self.btn_anchor_remove.setEnabled(has_profile and self.anchor_list.currentItem() is not None)
+        self.btn_character_sheet.setEnabled(has_profile and self.client is not None and anchors < MAX_ANCHORS)
+        if self.archive is None:
+            self.series_info_label.setText("Kein Datenordner gewählt – Serienprofile brauchen das Archiv.")
+            self.series_hint_label.setText("")
+            return
+        detected = self._detected_series[0]
+        if profile is None:
+            self.series_info_label.setText(f"Erkannt: {detected}" if detected
+                                           else "Keine Reihe erkannt – bei Bedarf „Neue Serie …“ anlegen.")
+            self.series_hint_label.setText("Keine Serie zugeordnet (Tab „Serie“) – ohne Anker-Bilder.")
+            self.series_status.setText("")
+            return
+        source = " · MusicBrainz-Serie" if profile.mb_series_id else ""
+        self.series_info_label.setText(f"Zugeordnet: {profile.name}{source} · {anchors} Anker · "
+                                       + ("mit" if profile.style_bible.strip() else "ohne") + " Stilbibel")
+        self.series_hint_label.setText(f"Serie: {profile.name} – {anchors} Anker-Bild(er) werden als Vorlage "
+                                       "mitgegeben" + (", dazu die Stilbibel" if self.bible_edit.toPlainText().strip()
+                                                       else "") + ".")
+        if anchors == 0:
+            self.series_status.setText("Noch keine Anker: ein gutes Cover der Reihe anklicken und „Angeklicktes Bild "
+                                       "als Anker“ wählen, oder ein Charakterblatt erzeugen.")
+        elif anchors >= MAX_ANCHORS:
+            self.series_status.setText(f"Alle {MAX_ANCHORS} Anker-Plätze belegt.")
+        else:
+            self.series_status.setText("")
+
+    def _add_anchor_from_preview(self):
+        profile, source = self.series_profile, self._preview_source()
+        if profile is None or source is None or self.archive is None:
+            return
+        if len(profile.anchors) >= MAX_ANCHORS:
+            QMessageBox.information(self, "Anker", f"Höchstens {MAX_ANCHORS} Anker je Serie – zuerst einen entfernen.")
+            return
+        entry = self._keep(source.candidate)
+        if entry is None:
+            return
+        side = SIDE_BACK if source.back else SIDE_FRONT
+        if source.back and not entry.back_file:
+            QMessageBox.information(self, "Anker", "Diese Rückseite liegt nicht im Archiv.")
+            return
+        if not profile.add_anchor(self.album_id, entry.id, side):
+            self._flash("Dieses Bild ist bereits ein Anker.")
+            return
+        self.archive.set_role(self.album_id, entry.id, ROLE_SERIES_ANCHOR, exclusive=False)
+        self._series_store().save(profile)
+        self._sync_roles()
+        self._load_series_editor()
+        self._update_series_ui()
+        self._update_mark_bar()
+        self._flash(f"✓ Anker {len(profile.anchors)} für „{profile.name}“ gesetzt.")
+
+    def _remove_selected_anchor(self):
+        item = self.anchor_list.currentItem()
+        profile = self.series_profile
+        if item is None or profile is None:
+            return
+        anchor: AnchorRef = item.data(Qt.ItemDataRole.UserRole)
+        profile.remove_anchor(anchor.album_id, anchor.cover_id, anchor.side)
+        if not any(a.album_id == anchor.album_id and a.cover_id == anchor.cover_id for a in profile.anchors):
+            try:
+                self.archive.clear_role(anchor.album_id, anchor.cover_id, ROLE_SERIES_ANCHOR)
+            except (OSError, ValueError):
+                pass
+        self._series_store().save(profile)
+        self._sync_roles()
+        self._load_series_editor()
+        self._update_series_ui()
+        self._update_mark_bar()
+
+    def _suggest_style_bible(self):
+        profile = self.series_profile
+        if profile is None:
+            return
+        if self.client is None:
+            QMessageBox.information(self, "Kein API-Key", "Für die Stilbibel bitte zuerst unter "
+                                                          "Kartencover → KI & Online-Dienste einen Gemini-API-Key hinterlegen.")
+            return
+        if self._bible_worker is not None and self._bible_worker.isRunning():
+            return
+        if not self._anchor_images and not confirm_action(
+                self, "Stilbibel ohne Anker", "Es gibt noch keine Anker-Bilder – die Stilbibel würde nur aus der "
+                                              "Recherche entstehen. Trotzdem vorschlagen?", default_no=False):
+            return
+        self.btn_bible_suggest.setEnabled(False)
+        self.btn_bible_suggest.setText("Vorschlag …")
+        self._bible_worker = StyleBibleWorker(self.client, text_model(), profile.name, list(self._anchor_images),
+                                              self.research_edit.toPlainText())
+        self._bible_worker.done.connect(self._on_style_bible)
+        self._bible_worker.failed.connect(lambda m: QMessageBox.warning(self, "Keine Stilbibel", m))
+        self._bible_worker.finished.connect(lambda: (self.btn_bible_suggest.setEnabled(True),
+                                                     self.btn_bible_suggest.setText("Vorschlagen")))
+        self._bible_worker.start()
+
+    def _on_style_bible(self, text: str):
+        current = self.bible_edit.toPlainText().strip()
+        if current and current != text and not confirm_action(
+                self, "Stilbibel ersetzen", "Die vorhandene Stilbibel durch den Vorschlag ersetzen?", default_no=False):
+            return
+        self.bible_edit.setPlainText(text)
+        self._save_series_profile()
+        self._flash("✓ Stilbibel vorgeschlagen – bei Bedarf bearbeiten.")
+
+    def _generate_character_sheet(self):
+        profile = self.series_profile
+        if profile is None or self.client is None:
+            return
+        if self._sheet_worker is not None and self._sheet_worker.isRunning():
+            return
+        style = self.series_style_combo.currentData() or self.style_combo.currentText()
+        self.btn_character_sheet.setEnabled(False)
+        self.status_label.setText(f"Charakterblatt für „{profile.name}“ wird erzeugt … "
+                                  f"(ca. {ESTIMATED_COST_PER_IMAGE:.2f} USD)")
+        self._sheet_worker = CharacterSheetWorker(self.client, image_model(), profile.name, style,
+                                                  self.bible_edit.toPlainText(), list(self._anchor_images))
+        self._sheet_worker.done.connect(self._on_character_sheet)
+        self._sheet_worker.failed.connect(lambda m: QMessageBox.warning(self, "Charakterblatt nicht erzeugt", m))
+        self._sheet_worker.finished.connect(self._update_series_ui)
+        self._sheet_worker.start()
+
+    def _on_character_sheet(self, image: Image.Image):
+        """Im Archiv speichern, als Anker setzen und in der Galerie zeigen"""
+        profile = self.series_profile
+        if profile is None or self.archive is None:
+            return
+        self._persist_album()
+        entry = self.archive.add_cover(self.album_id, image, KIND_AI, style="Charakterblatt", model=image_model(),
+                                       prompt=f"Charakterblatt {profile.name}")
+        self.archive.set_role(self.album_id, entry.id, ROLE_SERIES_ANCHOR, exclusive=False)
+        candidate = Candidate(SECTION_ARCHIVE, entry.label, _pil_bytes(image), KIND_AI, entry=entry,
+                              meta={"style": "Charakterblatt", "model": image_model()})
+        candidate._image = image
+        self._add_candidate(candidate, select=True)
+        profile.add_anchor(self.album_id, entry.id, SIDE_FRONT)
+        self._series_store().save(profile)
+        self._load_series_editor()
+        self._update_series_ui()
+        self._flash(f"✓ Charakterblatt gespeichert und als Anker {len(profile.anchors)} gesetzt.")
 
     # --- Album-Zuordnung ----------------------------------------------------------------------
 
@@ -813,6 +1231,8 @@ class CoverManagerDialog(QDialog):
             return
         title = self.info.album or self.brief.album_title or self.search_title_edit.text().strip()
         self.archive.ensure_album(self.album_id, title, self.info.artist, path=self.folder.path)
+        if self.series_profile is not None:
+            self.archive.assign_album(self.album_id, self.series_profile.id)
         if not self._album_tagged and self.folder.tracks:
             self._release_player()
             album_identity.write_album_id(self._track_paths(), self.album_id)
@@ -854,6 +1274,8 @@ class CoverManagerDialog(QDialog):
                 marks += "♪"
             if ROLE_CARD_COVER in candidate.entry.roles:
                 marks += "▭"
+            if ROLE_SERIES_ANCHOR in candidate.entry.roles:
+                marks += "⚓"
         if candidate.has_back:
             marks += "⧉"
         short = candidate.online.source if candidate.online is not None else candidate.label
@@ -989,12 +1411,15 @@ class CoverManagerDialog(QDialog):
         self.btn_discard.setEnabled(bool(discardable))
         self.btn_unmark.setEnabled(bool(marked))
         refs = len(self._references())
-        text = f"Vorlagen: {refs} Bild(er) mit ◆ (max. {MAX_REFERENCE_IMAGES})"
-        if refs > MAX_REFERENCE_IMAGES:
+        anchors = len(self._anchor_images)
+        text = f"Vorlagen: {refs} Bild(er) mit ◆ (max. {MAX_REFERENCE_IMAGES - anchors}"
+        text += f" neben {anchors} Serien-Anker(n))" if anchors else ")"
+        if refs + anchors > MAX_REFERENCE_IMAGES:
             text += " – zu viele, nur die ersten werden verwendet"
         if not refs:
             text = "Keine Vorlagen – Bilder in der Galerie markieren und „Als KI-Vorlage“ wählen."
         self.refs_label.setText(text)
+        self._update_series_ui()
 
     def _keep_marked(self):
         marked = [c for c in self._marked_candidates() if not c.kept]
@@ -1163,6 +1588,8 @@ class CoverManagerDialog(QDialog):
             self.sources_label.setText(f"Quellen: {links}")
         self.status_label.setText("Recherche fertig." if self.client else
                                   "Ohne API-Key nur Tags gelesen – Cover-Suche läuft trotzdem.")
+        if self.archive is not None:
+            self._start_series_detection()
         archived_online = any(c.kind == KIND_ONLINE for c in self.candidates if c.kept)
         if archived_online and not self._search_started:
             self.search_status.setText("Im Archiv liegen schon gefundene Cover – „Cover suchen“ sucht erneut.")
@@ -1186,11 +1613,14 @@ class CoverManagerDialog(QDialog):
         request = GenerationRequest(
             info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText(),
             style=self.style_combo.currentText(), extra=self.extra_edit.text(),
-            orientation=self.orientation_combo.currentData(), use_reference=bool(refs), reference_images=refs)
+            orientation=self.orientation_combo.currentData(), use_reference=bool(refs), reference_images=refs,
+            **self._series_request_fields())
         self._generation_meta = {"style": self.style_combo.currentText(), "model": image_model(),
                                  "prompt": self.extra_edit.text()}
-        self.status_label.setText(f"Erzeuge {count} Motiv(e) mit {len(refs)} Vorlage(n) … "
-                                  f"(ca. {count * ESTIMATED_COST_PER_IMAGE:.2f} USD)")
+        anchors = len(request.anchors())
+        self.status_label.setText(f"Erzeuge {count} Motiv(e) mit {len(refs)} Vorlage(n)"
+                                  + (f" und {anchors} Serien-Anker(n)" if anchors else "")
+                                  + f" … (ca. {count * ESTIMATED_COST_PER_IMAGE:.2f} USD)")
         self._generate_worker = CoverGenerateWorker(SOURCE_AI, request, self.client, image_model(), count)
         self._generate_worker.variant_ready.connect(self._on_variant_ready)
         self._generate_worker.failed.connect(lambda m: QMessageBox.warning(self, "Motiv nicht erzeugt", m))
@@ -1636,7 +2066,8 @@ class CoverManagerDialog(QDialog):
             return False
         request = GenerationRequest(
             info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText(),
-            style=self.style_combo.currentText(), orientation=self.orientation_combo.currentData())
+            style=self.style_combo.currentText(), orientation=self.orientation_combo.currentData(),
+            **self._series_request_fields())
         self.status_label.setText("KI-Rückseite wird erzeugt (passend zur Vorderseite) …")
         self._back_front = front
         self._back_worker = CoverBackGenerateWorker(self.client, image_model(), request, _pil_bytes(front.image()),
@@ -1889,8 +2320,12 @@ class CoverManagerDialog(QDialog):
             settings.setValue("cover_manager/geometry", self.saveGeometry())
         settings.setValue("cover_manager/splitter", self.main_splitter.saveState())
         settings.setValue("cover_manager/left_splitter", self.left_splitter.saveState())
+        if self._series_save_timer.isActive():
+            self._series_save_timer.stop()
+            self._save_series_profile()
         for worker in (self._search_worker, self._research_worker, self._generate_worker, self._extend_worker,
-                       self._back_worker, self._ideas_worker):
+                       self._back_worker, self._ideas_worker, self._series_detect_worker, self._bible_worker,
+                       self._sheet_worker):
             if worker is not None and worker.isRunning():
                 if hasattr(worker, "cancel"):
                     worker.cancel()

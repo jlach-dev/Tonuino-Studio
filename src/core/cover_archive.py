@@ -260,8 +260,33 @@ class CoverArchive:
                 entry.roles.remove(role)
         self._save_covers(album_id, entries)
 
+    def clear_role(self, album_id: str, cover_id: str, role: str):
+        entries = self.covers(album_id)
+        for entry in entries:
+            if entry.id == cover_id and role in entry.roles:
+                entry.roles.remove(role)
+        self._save_covers(album_id, entries)
+
     def load_bytes(self, album_id: str, entry: CoverEntry) -> bytes:
         return self.cover_path(album_id, entry).read_bytes()
+
+    # --- Serien (siehe core/series.py) ---------------------------------------------------------
+
+    @property
+    def series(self):
+        """SeriesStore im selben Datenordner"""
+        from core.series import SeriesStore
+        return SeriesStore(str(self.root))
+
+    def assign_album(self, album_id: str, series_id: str, title: str = "", artist: str = ""):
+        """Album einer Serie zuordnen (leere series_id = keine Serie)"""
+        record = self.ensure_album(album_id, title, artist)
+        if record.series_id != series_id:
+            record.series_id = series_id
+            self.save_album(record)
+
+    def albums_in_series(self, series_id: str) -> List[AlbumRecord]:
+        return [a for a in self.all_albums() if series_id and a.series_id == series_id]
 
     def load_image(self, album_id: str, entry: CoverEntry) -> Image.Image:
         with Image.open(self.cover_path(album_id, entry)) as img:

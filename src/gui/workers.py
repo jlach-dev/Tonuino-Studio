@@ -333,9 +333,15 @@ class CoverBatchWorker(QThread):
 
     def __init__(self, folders: list, metadata_manager: MetadataManager, client,
                  text_model: str, image_model: str, source: str, style: str, orientation: str,
-                 archive=None):
+                 archive=None, series_profile=None, anchor_images=None):
         super().__init__()
         self.archive = archive  # optional: Ergebnisse zusaetzlich im Cover-Archiv ablegen
+        # optional: alle Ordner gehoeren zu dieser Serie (core/series.py) - Anker
+        # und Stilbibel gehen mit, die Alben werden der Serie zugeordnet
+        self.series_profile = series_profile
+        self.anchor_images = list(anchor_images or [])
+        if series_profile is not None and series_profile.style:
+            style = series_profile.style
         self.folders = folders
         self.metadata_manager = metadata_manager
         self.client = client
@@ -367,6 +373,10 @@ class CoverBatchWorker(QThread):
                 info = gather_folder_info(folder, self.metadata_manager)
                 brief = research(info, self.client, self.text_model)
                 request = GenerationRequest(info=info, brief=brief, style=self.style, orientation=self.orientation)
+                if self.series_profile is not None:
+                    request.series_name = self.series_profile.name
+                    request.series_bible = self.series_profile.style_bible
+                    request.anchor_images = list(self.anchor_images)
                 art = generate_art(self.source, request, self.client, self.image_model)
                 series, title = derive_card_text(info, brief)
                 meta = card_store.CardMeta(
@@ -381,6 +391,8 @@ class CoverBatchWorker(QThread):
                         album_id = album_identity.new_album_id()
                         album_identity.write_album_id(paths, album_id)
                     self.archive.ensure_album(album_id, info.album or label, info.artist, path=folder.path)
+                    if self.series_profile is not None:
+                        self.archive.assign_album(album_id, self.series_profile.id)
                     entry = self.archive.add_cover(album_id, art, self.source, style=self.style,
                                                    model=meta.model)
                     self.archive.set_role(album_id, entry.id, ROLE_CARD_COVER)
@@ -460,4 +472,73 @@ class BackIdeasWorker(QThread):
             self.done.emit(ideas)
         except Exception as e:
             log.exception("Rueckseiten-Ideen fehlgeschlagen")
+            self.failed.emit(str(e))
+
+
+# --- Serien (core/series.py) ---------------------------------------------------------------------
+
+class SeriesDetectWorker(QThread):
+    """Reihe eines Ordners erkennen: MusicBrainz-Serienrelation (falls die
+    Tags eine Release-Group-ID tragen), sonst die Reihe aus den Tags"""
+    done = pyqtSignal(str, str)  # Name, MusicBrainz-Serien-ID
+
+    def __init__(self, info, release_group_id: str = ""):
+        super().__init__()
+        self.info = info
+        self.release_group_id = release_group_id
+
+    def run(self):
+        from core.series import detect_series
+        try:
+            name, mb_id = detect_series(self.info, self.release_group_id)
+        except Exception:
+            log.exception("Serien-Erkennung fehlgeschlagen")
+            name, mb_id = "", ""
+        self.done.emit(name, mb_id)
+
+
+class StyleBibleWorker(QThread):
+    """Stilbibel vom Textmodell (Anker-Bilder + Recherche)"""
+    done = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, client, text_model: str, name: str, anchor_images: list, research: str):
+        super().__init__()
+        self.client = client
+        self.text_model = text_model
+        self.name = name
+        self.anchor_images = anchor_images
+        self.research = research
+
+    def run(self):
+        from core.series import suggest_style_bible
+        try:
+            self.done.emit(suggest_style_bible(self.client, self.text_model, self.name, self.anchor_images,
+                                               self.research))
+        except Exception as e:
+            log.exception("Stilbibel fehlgeschlagen")
+            self.failed.emit(str(e))
+
+
+class CharacterSheetWorker(QThread):
+    """Charakterblatt der Reihe vom Bildmodell (Anker als Referenz)"""
+    done = pyqtSignal(object)  # PIL.Image
+    failed = pyqtSignal(str)
+
+    def __init__(self, client, image_model: str, name: str, style: str, style_bible: str, anchor_images: list):
+        super().__init__()
+        self.client = client
+        self.image_model = image_model
+        self.name = name
+        self.style = style
+        self.style_bible = style_bible
+        self.anchor_images = anchor_images
+
+    def run(self):
+        from core.series import generate_character_sheet
+        try:
+            self.done.emit(generate_character_sheet(self.client, self.image_model, self.name, self.style,
+                                                    self.style_bible, self.anchor_images))
+        except Exception as e:
+            log.exception("Charakterblatt fehlgeschlagen")
             self.failed.emit(str(e))
