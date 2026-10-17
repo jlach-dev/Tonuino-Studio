@@ -76,6 +76,43 @@ class ReleaseGroupHit:
 
 
 @dataclass
+class ReleaseTrack:
+    """Ein Track eines Releases (Position fortlaufend ueber alle Medien)"""
+    position: int
+    title: str
+    artist: str = ""
+    length: float = 0.0  # Sekunden, 0 = unbekannt
+    recording_id: str = ""
+    track_id: str = ""
+    artist_ids: List[str] = field(default_factory=list)
+
+
+@dataclass
+class ReleaseHit:
+    """Ein konkretes Release (Ausgabe) mit Trackliste - Grundlage fuer das Tagging"""
+    id: str
+    title: str
+    artist: str = ""
+    date: str = ""
+    track_count: int = 0
+    release_group_id: str = ""
+    artist_ids: List[str] = field(default_factory=list)
+    score: int = 0
+    tracks: List[ReleaseTrack] = field(default_factory=list)
+
+    @property
+    def label(self) -> str:
+        parts = [self.title]
+        if self.artist:
+            parts.append(self.artist)
+        if self.date:
+            parts.append(self.date[:4])
+        if self.track_count:
+            parts.append(f"{self.track_count} Tracks")
+        return " · ".join(parts)
+
+
+@dataclass
 class CoverArtImage:
     """Ein Bild aus dem Cover Art Archive"""
     release_group: ReleaseGroupHit
@@ -114,6 +151,70 @@ def _search(album: str, artist: str, limit: int, min_score: int) -> List[Release
         hits.append(ReleaseGroupHit(group["id"], group.get("title", ""), artist_name,
                                     group.get("first-release-date", ""), score))
     return hits
+
+
+def _credit(credits) -> str:
+    return "".join(c.get("name", "") + c.get("joinphrase", "") for c in (credits or []))
+
+
+def _credit_ids(credits) -> List[str]:
+    return [c["artist"]["id"] for c in (credits or []) if (c.get("artist") or {}).get("id")]
+
+
+def search_releases(album: str, artist: str = "", limit: int = 10, min_score: int = 60) -> List[ReleaseHit]:
+    """Passende Releases (ohne Trackliste), beste zuerst. Mit Interpret ohne
+    Treffer wird noch einmal nur nach dem Titel gesucht."""
+    if not album.strip():
+        return []
+    hits = _search_releases(album, artist, limit, min_score)
+    if not hits and artist.strip():
+        hits = _search_releases(album, "", limit, min_score)
+    return hits
+
+
+def _search_releases(album: str, artist: str, limit: int, min_score: int) -> List[ReleaseHit]:
+    query = f'release:"{_lucene_escape(album)}"'
+    if artist.strip():
+        query += f' AND artist:"{_lucene_escape(artist)}"'
+    url = "https://musicbrainz.org/ws/2/release/?" + urllib.parse.urlencode(
+        {"query": query, "fmt": "json", "limit": limit})
+    data = json.loads(_http_get(url))
+    hits = []
+    for release in data.get("releases", []):
+        score = int(release.get("score", 0))
+        if score < min_score:
+            continue
+        hits.append(ReleaseHit(
+            release["id"], release.get("title", ""), _credit(release.get("artist-credit")),
+            release.get("date", ""), int(release.get("track-count") or 0),
+            (release.get("release-group") or {}).get("id", ""), _credit_ids(release.get("artist-credit")), score))
+    return hits
+
+
+def lookup_release(release_id: str) -> ReleaseHit:
+    """Release mit vollstaendiger Trackliste (Aufnahmen und Interpreten).
+    Bei mehreren Medien (CD 1/2) werden die Positionen fortlaufend gezaehlt."""
+    url = (f"https://musicbrainz.org/ws/2/release/{release_id}?"
+           + urllib.parse.urlencode({"inc": "recordings+artist-credits+release-groups", "fmt": "json"}))
+    data = json.loads(_http_get(url))
+    hit = ReleaseHit(data.get("id", release_id), data.get("title", ""), _credit(data.get("artist-credit")),
+                     data.get("date", ""), 0, (data.get("release-group") or {}).get("id", ""),
+                     _credit_ids(data.get("artist-credit")))
+    offset = 0
+    for medium in data.get("media", []):
+        tracks = medium.get("tracks", [])
+        for track in tracks:
+            recording = track.get("recording") or {}
+            length_ms = track.get("length") or recording.get("length") or 0
+            credits = track.get("artist-credit") or recording.get("artist-credit")
+            hit.tracks.append(ReleaseTrack(
+                offset + int(track.get("position") or len(hit.tracks) - offset + 1),
+                track.get("title") or recording.get("title", ""), _credit(credits) or hit.artist,
+                float(length_ms) / 1000.0, recording.get("id", ""), track.get("id", ""), _credit_ids(credits)))
+        offset += int(medium.get("track-count") or len(tracks))
+    hit.tracks.sort(key=lambda t: t.position)
+    hit.track_count = len(hit.tracks)
+    return hit
 
 
 def list_cover_art(group: ReleaseGroupHit) -> List[CoverArtImage]:

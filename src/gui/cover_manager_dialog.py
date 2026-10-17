@@ -34,12 +34,13 @@ from core.cover_archive import (
 from core.cover_generator import (
     DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, MAX_REFERENCE_IMAGES, SOURCE_AI, STYLE_PRESETS, GenerationRequest,
 )
-from core.cover_research import CoverBrief, FolderInfo, suggest_search_title
+from core.cover_research import CoverBrief, FolderInfo, gather_folder_info, suggest_search_title
 from core.sd_card import Folder
 from gui.card_cover_dialog import (
     ORIENTATIONS, _select_data, gemini_client, image_model, pil_to_pixmap, text_model,
 )
 from gui.common import confirm_action
+from gui.tag_diff_dialog import TagDiffDialog
 from gui.workers import CoverGenerateWorker, CoverResearchWorker
 
 log = logging.getLogger(__name__)
@@ -195,6 +196,10 @@ class CoverManagerDialog(QDialog):
 
         self.album_cover_changed = False
         self.card_changed = False
+        # Tags ueber "Tags von MusicBrainz" geschrieben: Hauptfenster frischt Ordnername und Trackliste auf
+        self.tags_changed = False
+        self.tags_album = ""
+        self.tags_written = 0
 
         self._search_worker: Optional[OnlineCoverSearchWorker] = None
         self._research_worker: Optional[CoverResearchWorker] = None
@@ -363,6 +368,12 @@ class CoverManagerDialog(QDialog):
         self.btn_file.setObjectName("ghostButton")
         self.btn_file.clicked.connect(self._add_file)
         button_row.addWidget(self.btn_file)
+        self.btn_tags = QPushButton("Tags von MusicBrainz …")
+        self.btn_tags.setObjectName("ghostButton")
+        self.btn_tags.setToolTip("Album, Titel, Tracknummern und MusicBrainz-IDs der Tracks aus MusicBrainz "
+                                 "(bzw. Deezer/iTunes) übernehmen - mit Prüfung alt → neu")
+        self.btn_tags.clicked.connect(self._open_tag_lookup)
+        button_row.addWidget(self.btn_tags)
         button_row.addStretch(1)
         layout.addLayout(button_row)
 
@@ -716,6 +727,28 @@ class CoverManagerDialog(QDialog):
         self._search_worker.finished.connect(self._update_buttons)
         self._search_worker.start()
         self._update_buttons()
+
+    def _open_tag_lookup(self):
+        """Tags der Tracks aus MusicBrainz uebernehmen; danach Suchfelder und
+        Kartentext aus den neuen Tags ableiten"""
+        if not self.folder.tracks:
+            return
+        self._release_player()
+        dialog = TagDiffDialog(self.folder, self.metadata_manager, self,
+                               self.search_title_edit.text().strip(), self.search_artist_edit.text().strip())
+        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.written:
+            return
+        self.tags_changed = True
+        self.tags_album = dialog.applied_album or self.tags_album
+        self.tags_written += dialog.written
+        self.info = gather_folder_info(self.folder, self.metadata_manager)
+        if self.info.album:
+            self.folder_name = self.info.album
+        self.search_title_edit.setText(suggest_search_title(self.info, self.brief))
+        self.search_artist_edit.setText(self.info.artist or self.brief.series)
+        self._fill_text_from_tags()
+        self.search_status.setText(f"Tags in {dialog.written} Track(s) geschrieben – Suchfelder und Kartentext "
+                                   "wurden aus den neuen Tags übernommen.")
 
     def _on_online_found(self, cover: cover_sources.OnlineCover, data: bytes):
         self._add_candidate(Candidate(SECTION_ONLINE, cover.label, data, KIND_ONLINE, online=cover),

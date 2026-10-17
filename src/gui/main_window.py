@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QFrame, QFileDialog, QMessageBox,
     QStatusBar, QSplitter,
     QAbstractItemView, QProgressDialog,
-    QMenuBar, QStyle, QStyleOptionViewItem, QInputDialog
+    QMenuBar, QStyle, QStyleOptionViewItem, QInputDialog, QDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint, QRect
 from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup
@@ -35,6 +35,7 @@ from gui.workers import (
 from gui.card_cover_dialog import AiSettingsDialog, gemini_client, image_model, text_model
 from gui.cover_manager_dialog import CoverManagerDialog, get_archive
 from gui.print_sheet_dialog import PrintSheetDialog
+from gui.tag_diff_dialog import TagDiffDialog
 from gui.audio_player import AudioPlayerBar, ElidedLabel, TrackInfo
 from gui.cover_edit import CoverEditWidget
 from gui.rfid_panel import RfidPanel
@@ -240,6 +241,11 @@ class MainWindow(QMainWindow):
         self.action_card_cover_batch.triggered.connect(self._generate_missing_card_covers)
         self.action_print_sheet = cover_menu.addAction("Druckbogen (PDF) erstellen …")
         self.action_print_sheet.triggered.connect(self._open_print_sheet_dialog)
+        cover_menu.addSeparator()
+        self.action_tag_lookup = cover_menu.addAction("Tags von MusicBrainz …")
+        self.action_tag_lookup.setToolTip("Album, Titel, Tracknummern und MusicBrainz-IDs für den gewählten Ordner "
+                                          "aus MusicBrainz (bzw. Deezer/iTunes) übernehmen")
+        self.action_tag_lookup.triggered.connect(self._open_tag_lookup_dialog)
         cover_menu.addSeparator()
         action_ai_settings = cover_menu.addAction("KI & Online-Dienste (Gemini, Spotify) …")
         action_ai_settings.triggered.connect(lambda: AiSettingsDialog(self).exec())
@@ -1334,10 +1340,34 @@ class MainWindow(QMainWindow):
         archive = get_archive(self)
         dialog = CoverManagerDialog(folder, self._resolve_folder_name(folder), self.metadata_manager, archive, self)
         dialog.exec()
-        if dialog.album_cover_changed and self.current_folder is folder:
+        if dialog.tags_changed:
+            self._after_tags_written(folder, dialog.tags_album, dialog.tags_written)
+        elif dialog.album_cover_changed and self.current_folder is folder:
             self._show_folder(folder)
         if dialog.card_changed:
             self.status_bar.showMessage(f"Kartencover für Ordner {folder.index:02d} gespeichert")
+
+    def _open_tag_lookup_dialog(self):
+        """Tags des gewaehlten Ordners aus MusicBrainz (bzw. Deezer/iTunes) uebernehmen"""
+        folder = self.current_folder
+        if folder is None or self._is_special_folder(folder) or not folder.tracks:
+            QMessageBox.information(self, "Kein Ordner gewählt",
+                                    "Bitte zuerst einen Ordner mit Tracks auswählen.")
+            return
+        self._release_files()
+        dialog = TagDiffDialog(folder, self.metadata_manager, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.written:
+            self._after_tags_written(folder, dialog.applied_album, dialog.written)
+
+    def _after_tags_written(self, folder: Folder, album: str, written: int):
+        """Ordnername (Album-Tag) und Trackliste nach dem Tag-Schreiben auffrischen"""
+        if album:
+            self._set_folder_name(folder.index, album)
+        else:
+            self._folder_name_cache.pop(folder.index, None)
+        if self.current_folder is folder:
+            self._show_folder(folder)
+        self.status_bar.showMessage(f"Tags in {written} Track(s) von Ordner {folder.index:02d} geschrieben")
 
     def _open_print_sheet_dialog(self):
         if not self._require_sd_card():
