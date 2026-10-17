@@ -28,7 +28,18 @@ def _open(filepath: str):
     return MetadataManager._open_mp3(filepath)
 
 
+def _is_mp3(filepath: str) -> bool:
+    return filepath.lower().endswith(".mp3")
+
+
 def read_txxx(filepath: str, desc: str) -> Optional[str]:
+    if not _is_mp3(filepath):
+        # Bibliotheksformate: ueber den formatunabhaengigen Leser (nur die bekannten Felder)
+        from core.library import read_track_tags
+        tags = read_track_tags(filepath)
+        value = {ALBUM_ID_DESC: tags.album_id, MB_ALBUM_ID_DESC: tags.mb_release_id,
+                 MB_RELEASE_GROUP_ID_DESC: tags.mb_release_group_id}.get(desc, "")
+        return (value or "").strip() or None
     try:
         audio = _open(filepath)
     except Exception:
@@ -43,6 +54,9 @@ def read_txxx(filepath: str, desc: str) -> Optional[str]:
 
 
 def write_txxx(filepath: str, desc: str, value: str) -> bool:
+    if not _is_mp3(filepath):
+        from core.library import write_tags_any
+        return write_tags_any(filepath, {}, {desc: value})
     from mutagen.id3 import TXXX
     try:
         audio = _open(filepath)

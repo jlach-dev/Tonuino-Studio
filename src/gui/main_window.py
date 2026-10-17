@@ -36,7 +36,7 @@ from gui.workers import (
     LibraryScanWorker,
 )
 from gui.card_cover_dialog import AiSettingsDialog, gemini_client, image_model, text_model
-from gui.workers import RecognizeWorker
+from gui.workers import EmbedCoversWorker, RecognizeWorker
 from gui.cover_manager_dialog import CoverManagerDialog, SETTINGS_DATA_DIR, get_archive
 from gui.library_dnd import DropArea, FolderListWidget
 from gui.library_settings_dialog import LibrarySourcesDialog, library_sources
@@ -641,6 +641,8 @@ class MainWindow(QMainWindow):
         self.library_view.tags_requested.connect(self._library_tags)
         self.library_view.recognize_requested.connect(self._library_recognize)
         self.library_view.organize_requested.connect(self._library_organize)
+        self.library_view.cover_requested.connect(self._library_cover)
+        self.library_view.embed_covers_requested.connect(self._library_embed_covers)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.welcome_widget)
@@ -2179,7 +2181,8 @@ class MainWindow(QMainWindow):
         if self._library is None:
             return
         try:
-            self._library_index = self._library.refresh_album(path, self._library_index)
+            self._library_index = self._library.refresh_album(path, self._library_index,
+                                                              get_archive(self, ask=False))
         except Exception:
             log.exception("Album konnte nicht neu eingelesen werden")
             return
@@ -2218,6 +2221,73 @@ class MainWindow(QMainWindow):
         worker.failed.connect(lambda m: (dialog.close(), QMessageBox.warning(self, "Erkennung fehlgeschlagen", m)))
         dialog.canceled.connect(worker.cancel)
         worker.start()
+
+    def _library_cover(self, album):
+        """Cover-Manager fuer ein Bibliotheksalbum: Album-Cover in die Dateien (+ cover.jpg),
+        Kartencover ins Archiv"""
+        if album is None or not album.tracks:
+            return
+        archive = get_archive(self)
+        if archive is None:
+            return
+        self.player_bar.stop()
+        self._release_files()
+        tracks = [Track(index=i, filename=os.path.basename(p), filepath=p)
+                  for i, p in enumerate(album.tracks, start=1)]
+        cover_file = next((os.path.join(album.path, n) for n in ("cover.jpg", "cover.png", "folder.jpg")
+                           if os.path.isfile(os.path.join(album.path, n))), "")
+        folder = Folder(index=None, path=album.path, tracks=tracks, cover_path=cover_file, name=album.name)
+        dialog = CoverManagerDialog(folder, album.title or album.name, self.metadata_manager, archive, self,
+                                    focus=CoverManagerDialog.FOCUS_ALBUM, library=True, album_id=album.album_id)
+        dialog.exec()
+        if dialog.tags_changed or dialog.album_cover_changed or dialog.card_changed:
+            if dialog.album_cover_changed:
+                self.status_bar.showMessage(f"Album-Cover von „{album.name}“ in die Bibliothek geschrieben")
+            self._refresh_library_album(album.path)
+
+    def _library_embed_covers(self):
+        """Stapellauf: Album-Cover aus dem Archiv in alle Bibliotheksalben ohne Cover einbetten"""
+        if self._library is None or not self._library_index.albums:
+            QMessageBox.information(self, "Cover nachtragen", "Die Bibliothek ist leer.")
+            return
+        archive = get_archive(self)
+        if archive is None:
+            return
+        todo = [a for a in self._library_index.albums if not a.offline and not a.has_cover and a.album_id]
+        if not todo:
+            QMessageBox.information(self, "Cover nachtragen",
+                                    "Alle verknüpften Alben haben bereits ein Cover. Alben ohne Verknüpfung zum "
+                                    "Archiv bekommen ihr Cover über „Cover …“ im geöffneten Album.")
+            return
+        if not confirm_action(self, "Cover nachtragen",
+                              f"{len(todo)} Album/Alben ohne Cover werden geprüft. Wo das Archiv ein Album-Cover "
+                              "hat, wird es in die Dateien eingebettet und als cover.jpg abgelegt.\n\nFortfahren?",
+                              default_no=False):
+            return
+        self.player_bar.stop()
+        self._release_files()
+        dialog = QProgressDialog("Album-Cover werden nachgetragen …", "Abbrechen", 0, len(todo), self)
+        dialog.setWindowTitle("Cover nachtragen")
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setValue(0)
+        worker = EmbedCoversWorker(self._library_index, archive)
+        self._embed_job = {"worker": worker, "dialog": dialog}
+        worker.progress.connect(lambda cur, total, name: self._on_import_progress(dialog, cur, total, name))
+        worker.done.connect(lambda result: self._on_covers_embedded(dialog, result))
+        worker.failed.connect(lambda m: (dialog.close(), QMessageBox.warning(self, "Cover nachtragen", m)))
+        dialog.canceled.connect(worker.cancel)
+        worker.start()
+
+    def _on_covers_embedded(self, dialog, result):
+        dialog.close()
+        self._embed_job = None
+        text = f"{result.albums} Album/Alben mit Cover versehen ({result.tracks} Datei(en))"
+        if result.skipped:
+            text += f", {result.skipped} ohne Album-Cover im Archiv übersprungen"
+        self.status_bar.showMessage(text)
+        QMessageBox.information(self, "Cover nachtragen", text + ".")
+        self._start_library_scan(force=True)
 
     def _library_organize(self, album, paths):
         """Dateien eines Bibliotheksalbums nach Tags in Interpret/Album-Ordner verschieben"""

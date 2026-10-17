@@ -606,6 +606,32 @@ class AlbumTracksWorker(QThread):
             self.done.emit(self.album.path, tracks)
 
 
+class EmbedCoversWorker(QThread):
+    """Stapellauf: Album-Cover aus dem Archiv in Bibliotheksalben ohne Cover einbetten"""
+    progress = pyqtSignal(int, int, str)
+    done = pyqtSignal(object)  # EmbedResult
+    failed = pyqtSignal(str)
+
+    def __init__(self, index, archive):
+        super().__init__()
+        self.index = index
+        self.archive = archive
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        from core.library_import import embed_archive_covers
+        try:
+            result = embed_archive_covers(self.index, self.archive, progress=self.progress.emit,
+                                          cancelled=lambda: self._cancelled)
+            self.done.emit(result)
+        except Exception as e:
+            log.exception("Cover nachtragen fehlgeschlagen")
+            self.failed.emit(str(e))
+
+
 class RecognizeWorker(QThread):
     """Stuecke per fpcalc + AcoustID erkennen; danach die Releases der
     gemeinsamen Release-Group (MusicBrainz) als Kandidaten laden"""

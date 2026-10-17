@@ -20,7 +20,7 @@ from typing import Callable, List, Optional
 from core import album_identity, card_store
 from core.card_layout import BACK_MODE_IMAGE, ORIENTATION_PORTRAIT, prepare_card_art
 from core.cover_archive import ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive
-from core.library import LibraryAlbum, read_album, write_album_id_to_album
+from core.library import LibraryAlbum, LibraryIndex, read_album, write_album_cover, write_album_id_to_album
 from core.sd_card import Folder, SDCard, Track
 
 log = logging.getLogger(__name__)
@@ -113,7 +113,9 @@ def _write_card(folder: Folder, album: LibraryAlbum, album_id: str, archive: Cov
     from core.cover_research import gather_folder_info
     info = gather_folder_info(folder, metadata_manager, max_titles=25)
     series, title = derive_card_text(info)
-    existing = card_store.load_meta(folder.path)
+    # Gestaltung einer frueheren Karte dieses Ordners bzw. der im Cover-Manager
+    # aus der Bibliothek heraus gespeicherten Karte behalten
+    existing = card_store.load_meta(folder.path) or card_store.load_meta(str(archive.card_dir(album_id)))
     meta = card_store.CardMeta(
         title=title or album.name, series=series, orientation=orientation,
         source=entry.kind, style=entry.style, prompt=entry.prompt, model=entry.model,
@@ -138,6 +140,61 @@ def _write_card(folder: Folder, album: LibraryAlbum, album_id: str, archive: Cov
         result.back_written = True
     else:
         card_store.delete_back(folder.path)
+
+
+def archive_album_cover(archive: CoverArchive, album_id: str) -> Optional[bytes]:
+    """Das im Archiv als Album-Cover markierte Bild (Rohdaten) oder None"""
+    entry = next((e for e in archive.covers(album_id) if ROLE_ALBUM_COVER in e.roles), None)
+    if entry is None:
+        return None
+    try:
+        return archive.load_bytes(album_id, entry)
+    except OSError:
+        return None
+
+
+@dataclass
+class EmbedResult:
+    albums: int = 0  # Alben, die ein Cover bekommen haben
+    tracks: int = 0  # Dateien mit eingebettetem Cover
+    skipped: int = 0  # Alben ohne Cover, fuer die das Archiv keins hat
+
+
+def embed_archive_covers(index: LibraryIndex, archive: CoverArchive,
+                         progress: Optional[Callable[[int, int, str], None]] = None,
+                         cancelled: Optional[Callable[[], bool]] = None) -> EmbedResult:
+    """Alle Bibliotheksalben ohne Cover: das im Archiv gesetzte Album-Cover in die
+    Dateien einbetten und als cover.jpg ablegen (Stapellauf)"""
+    from core.card_layout import album_cover_jpeg
+    from PIL import Image
+    import io
+    result = EmbedResult()
+    todo = [a for a in index.albums if not a.offline and not a.has_cover and a.album_id and a.tracks]
+    for i, album in enumerate(todo, start=1):
+        if cancelled is not None and cancelled():
+            break
+        if progress is not None:
+            progress(i, len(todo), album.name)
+        data = archive_album_cover(archive, album.album_id)
+        if data is None:
+            result.skipped += 1
+            continue
+        try:
+            with Image.open(io.BytesIO(data)) as img:
+                img.load()
+                jpeg = album_cover_jpeg(img)
+        except Exception as e:
+            log.warning("Archiv-Cover von %s nicht lesbar: %s", album.name, e)
+            result.skipped += 1
+            continue
+        written = write_album_cover(list(album.tracks), album.path, jpeg)
+        if written:
+            result.albums += 1
+            result.tracks += written
+            album.has_cover = True
+        else:
+            result.skipped += 1
+    return result
 
 
 def finish_import(sd_card: SDCard, folder: Folder, album: LibraryAlbum, archive: Optional[CoverArchive],

@@ -113,6 +113,8 @@ Die eigene Sammlung bleibt, wo sie ist – auf dem PC, auf einem NAS, in mehrere
 - **Tags nachtragen …**: wie „Tags von MusicBrainz“ für SD-Ordner, aber für das Bibliotheksalbum (MP3, FLAC, M4A, OGG; WAV wird übersprungen) – mit Vorschau alt → neu.
 - **Stücke erkennen …**: Audio-Fingerabdruck per [Chromaprint](https://acoustid.org/chromaprint) (`fpcalc`) und [AcoustID](https://acoustid.org) (kostenloser Key, nicht-kommerziell), Einstellungen unter *Kartencover → KI & Online-Dienste* (Key, `fpcalc`-Pfad oder „Herunterladen …“). Gehören die Dateien zu einem gemeinsamen Album, öffnet sich der Tag-Dialog mit den Ausgaben dieses Albums und ordnet die Tracks über die erkannte Aufnahme zu; sonst gibt es eine Tabelle mit dem besten Treffer je Datei (Titel, Interpret, Album).
 - **Einsortieren …**: verschiebt die Dateien nach ihren Tags nach `<Quellordner>/<Interpret>/<Album>/<NN - Titel>` (Schema anpassbar), mit Vorschau; vorhandene Dateien werden nie überschrieben, leere Ursprungsordner entfernt. Die Album-ID im Tag hält die Zuordnung.
+- **Cover …** (im geöffneten Album): der Cover-Manager für das Bibliotheksalbum. „Als Album-Cover setzen“ schreibt das Bild in alle Dateien des Albums (MP3, FLAC, M4A, OGG) und als `cover.jpg` in den Albumordner; das Kartencover samt Gestaltung landet im Archiv und wird beim Übertragen auf die SD-Karte geschrieben.
+- **Cover nachtragen** (Kopfzeile): Stapellauf für alle Alben ohne Cover – wo das Archiv ein Album-Cover kennt (einmal im Cover-Manager gesetzt), wird es eingebettet und als `cover.jpg` abgelegt.
 - **SD-Ansicht**: Der Ordnerkopf zeigt **aus Bibliothek: <Album>**, wenn der Ordner einem Bibliotheksalbum entspricht, und warnt, wenn die Bibliothek mehr Tracks hat als der Ordner auf der Karte.
 
 ## Entwicklung

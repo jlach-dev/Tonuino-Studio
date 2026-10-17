@@ -392,6 +392,58 @@ def write_tags_any(path: str, fields: Dict[str, object], custom: Optional[Dict[s
         return False
 
 
+def write_cover_any(path: str, data: bytes, mime: str = "image/jpeg") -> bool:
+    """Bettet ein Cover in MP3 (APIC), FLAC (Picture), M4A (covr) oder OGG/Opus
+    (metadata_block_picture) ein; vorhandene Cover werden ersetzt. WAV wird
+    bewusst nicht angefasst. True, wenn geschrieben wurde."""
+    if path.lower().endswith(".wav"):
+        return False
+    audio = _open_any(path)
+    if audio is None:
+        return False
+    try:
+        from mutagen.flac import FLAC, Picture
+        from mutagen.id3 import APIC, ID3
+        from mutagen.mp4 import MP4Cover, MP4Tags
+        if audio.tags is None:
+            audio.add_tags()
+        raw = audio.tags
+        if isinstance(raw, ID3):
+            raw.delall("APIC")
+            raw.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=data))
+        elif isinstance(raw, MP4Tags):
+            fmt = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
+            raw["covr"] = [MP4Cover(data, imageformat=fmt)]
+        else:
+            picture = Picture()
+            picture.type, picture.mime, picture.desc, picture.data = 3, mime, "Cover", data
+            if isinstance(audio, FLAC):
+                audio.clear_pictures()
+                audio.add_picture(picture)
+            else:  # OGG/Opus: Picture base64-kodiert als Vorbis-Kommentar
+                raw["metadata_block_picture"] = [base64.b64encode(picture.write()).decode("ascii")]
+        audio.save()
+        return True
+    except Exception as e:
+        log.warning("Cover konnte nicht geschrieben werden (%s): %s", path, e)
+        return False
+
+
+COVER_FILE = "cover.jpg"
+
+
+def write_album_cover(paths: List[str], folder: str, jpeg: bytes, write_file: bool = True) -> int:
+    """Album-Cover (JPEG) in alle Dateien einbetten und als cover.jpg in den
+    Albumordner legen; Rueckgabe: Zahl der Dateien mit eingebettetem Cover"""
+    written = sum(1 for p in paths if write_cover_any(p, jpeg, "image/jpeg"))
+    if write_file and folder:
+        try:
+            Path(folder, COVER_FILE).write_bytes(jpeg)
+        except OSError as e:
+            log.warning("cover.jpg konnte nicht geschrieben werden (%s): %s", folder, e)
+    return written
+
+
 def write_album_id_any(path: str, album_id: str) -> bool:
     """Schreibt die App-Album-ID in eine Bibliotheksdatei (MP3, FLAC, M4A, OGG/Opus);
     WAV wird bewusst nicht angefasst. True, wenn geschrieben wurde."""

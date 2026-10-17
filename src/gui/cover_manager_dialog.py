@@ -226,10 +226,16 @@ class CoverManagerDialog(QDialog):
     FOCUS_ALBUM = "album"
 
     def __init__(self, folder: Folder, folder_name: str, metadata_manager, archive: Optional[CoverArchive],
-                 parent=None, focus: str = "card"):
+                 parent=None, focus: str = "card", library: bool = False, album_id: str = ""):
+        """library=True: der 'Ordner' ist ein Bibliotheksalbum (folder.index None).
+        Das Album-Cover wird dann in die Bibliotheksdateien und als cover.jpg
+        geschrieben; Kartendateien landen im Archiv statt auf einer SD-Karte."""
         super().__init__(parent)
         self.focus = focus
-        self.setWindowTitle(f"Cover-Manager – Album-Cover & Kartencover – Ordner {folder.index:02d}")
+        self.library_mode = library
+        self._album_id_hint = album_id
+        where = f"Bibliothek: {folder_name}" if library else f"Ordner {folder.index:02d}"
+        self.setWindowTitle(f"Cover-Manager – Album-Cover & Kartencover – {where}")
         # Wie das Hauptfenster: maximierbar (Dialoge haben den Knopf sonst nicht)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint
                             | Qt.WindowType.WindowMinimizeButtonHint)
@@ -283,9 +289,16 @@ class CoverManagerDialog(QDialog):
         self.front_source: Optional[SideSource] = None
         self.back_source: Optional[SideSource] = None
 
-        self._card_meta = card_store.load_meta(folder.path)
+        # Kartendateien: auf der SD-Karte im Ordner, aus der Bibliothek heraus im Archiv
+        self._card_dir = folder.path
+        self._card_meta = None if library else card_store.load_meta(folder.path)
         self._setup_ui()
         self._resolve_album()
+        if library and self.archive is not None:
+            self._card_dir = str(self.archive.card_dir(self.album_id))
+            self._card_meta = card_store.load_meta(self._card_dir)
+            if self._card_meta is not None:
+                self._apply_meta_to_ui(self._card_meta)
         self._load_current()
         self._load_archive()
         self._load_series()
@@ -685,27 +698,7 @@ class CoverManagerDialog(QDialog):
         self.btn_back_from_tags.clicked.connect(self._fill_back_from_tags)
         form.addRow("", self.btn_back_from_tags)
 
-        meta = self._card_meta
-        settings = QSettings()
-        self.title_style = TextStyle.from_dict(
-            meta.title_style if meta and meta.title_style else json.loads(settings.value(SETTINGS_TITLE_STYLE, "{}")))
-        self.series_style = TextStyle.from_dict(
-            meta.series_style if meta and meta.series_style else json.loads(settings.value(SETTINGS_SERIES_STYLE, "{}")))
-        self.title_edit.setPlainText(meta.title if meta else self.folder_name)
-        if meta:
-            self.series_edit.setText(meta.series)
-            _select_data(self.orientation_combo, meta.orientation)
-            self.number_check.setChecked(meta.show_number)
-            mode = meta.back_mode
-            if mode == BACK_MODE_TRACKLIST:  # alter eigener Modus -> Flag + Bild/Blur
-                mode = BACK_MODE_IMAGE if card_store.has_back(self.folder.path) else BACK_MODE_BLUR
-                self.back_tracklist_check.setChecked(True)
-            else:
-                self.back_tracklist_check.setChecked(meta.back_tracklist)
-            _select_data(self.back_mode_combo, mode)
-            self.back_wish_edit.setText(meta.back_prompt)
-            self.back_heading_edit.setText(meta.back_heading)
-            self.back_lines_edit.setPlainText("\n".join(meta.back_lines))
+        self._apply_meta_to_ui(self._card_meta)
         self._on_back_mode_changed()
         return tab
 
@@ -1225,12 +1218,36 @@ class CoverManagerDialog(QDialog):
     def _track_paths(self) -> List[str]:
         return [t.filepath for t in self.folder.tracks]
 
+    def _apply_meta_to_ui(self, meta):
+        """Gespeicherte Kartengestaltung (card.json) in die Felder uebernehmen"""
+        settings = QSettings()
+        self.title_style = TextStyle.from_dict(
+            meta.title_style if meta and meta.title_style else json.loads(settings.value(SETTINGS_TITLE_STYLE, "{}")))
+        self.series_style = TextStyle.from_dict(
+            meta.series_style if meta and meta.series_style else json.loads(settings.value(SETTINGS_SERIES_STYLE, "{}")))
+        self.title_edit.setPlainText(meta.title if meta else self.folder_name)
+        if meta:
+            self.series_edit.setText(meta.series)
+            _select_data(self.orientation_combo, meta.orientation)
+            self.number_check.setChecked(meta.show_number)
+            mode = meta.back_mode
+            if mode == BACK_MODE_TRACKLIST:  # alter eigener Modus -> Flag + Bild/Blur
+                mode = BACK_MODE_IMAGE if card_store.has_back(self._card_dir) else BACK_MODE_BLUR
+                self.back_tracklist_check.setChecked(True)
+            else:
+                self.back_tracklist_check.setChecked(meta.back_tracklist)
+            _select_data(self.back_mode_combo, mode)
+            self.back_wish_edit.setText(meta.back_prompt)
+            self.back_heading_edit.setText(meta.back_heading)
+            self.back_lines_edit.setPlainText("\n".join(meta.back_lines))
+        self._on_back_mode_changed()
+
     def _resolve_album(self):
         """Album-ID aus card.json bzw. ID-Tag der Tracks; sonst Treffer im
         Archiv ueber den Titel; sonst neu (wird erst beim ersten Speichern
         dauerhaft angelegt)."""
         tagged_id = album_identity.read_album_id(self._track_paths())
-        album_id = (self._card_meta.album_id if self._card_meta else "") or tagged_id
+        album_id = (self._card_meta.album_id if self._card_meta else "") or tagged_id or self._album_id_hint
         self._album_tagged = bool(album_id) and tagged_id == album_id
         if not album_id and self.archive is not None and self.info.album:
             record = self.archive.find_album(self.info.album)
@@ -1350,11 +1367,11 @@ class CoverManagerDialog(QDialog):
         if cover:
             self._add_candidate(Candidate(SECTION_CURRENT, "Album-Cover (MP3)", cover, KIND_LOCAL,
                                           is_album_cover=True))
-        raw_path = card_store.card_paths(self.folder.path)[1]
+        raw_path = card_store.card_paths(self._card_dir)[1]
         if raw_path.exists():
             try:
-                back_raw = card_store.back_paths(self.folder.path)[1]
-                self._add_candidate(Candidate(SECTION_CURRENT, "Kartenmotiv (SD)", raw_path.read_bytes(),
+                back_raw = card_store.back_paths(self._card_dir)[1]
+                self._add_candidate(Candidate(SECTION_CURRENT, self._card_art_label(), raw_path.read_bytes(),
                                               KIND_LOCAL, is_sd_card_art=True,
                                               back_data=back_raw.read_bytes() if back_raw.exists() else None),
                                     select=True)
@@ -1719,6 +1736,8 @@ class CoverManagerDialog(QDialog):
                     self._archive_previous(current, "Früheres Album-Cover")
 
         entry = self._keep(candidate)
+        if entry:
+            self._persist_album()  # auch bei Archiv-Bildern: Album anlegen und Dateien mit der ID taggen
         source = self.archive.load_image(self.album_id, entry) if entry else candidate.image()
         jpeg = album_cover_jpeg(source)
         self._release_player()
@@ -1726,6 +1745,14 @@ class CoverManagerDialog(QDialog):
         try:
             updated = sum(1 for t in self.folder.tracks
                           if self.metadata_manager.set_cover_bytes(t.filepath, jpeg, "image/jpeg"))
+            if self.library_mode:
+                from core.library import COVER_FILE
+                cover_file = Path(self.folder.path) / COVER_FILE
+                try:
+                    cover_file.write_bytes(jpeg)
+                    self.folder.cover_path = str(cover_file)
+                except OSError as e:
+                    log.warning("cover.jpg konnte nicht geschrieben werden: %s", e)
         finally:
             QApplication.restoreOverrideCursor()
         if entry:
@@ -1750,6 +1777,9 @@ class CoverManagerDialog(QDialog):
         else:
             QMessageBox.warning(self, "Album-Cover", f"Album-Cover nur in {updated} von {total} Track(s) "
                                                      "geschrieben – Datei gesperrt oder schreibgeschützt?")
+
+    def _card_art_label(self) -> str:
+        return "Kartenmotiv (Archiv)" if self.library_mode else "Kartenmotiv (SD)"
 
     def _card_meta_now(self, entry: Optional[CoverEntry]) -> card_store.CardMeta:
         return card_store.CardMeta(
@@ -1787,6 +1817,8 @@ class CoverManagerDialog(QDialog):
                 self._persist_album()
                 self._archive_previous(current, "Früheres Kartenmotiv")
         entry = None if front.candidate.is_sd_card_art else self._keep(front.candidate)
+        if entry:
+            self._persist_album()
         if entry and not front.back:
             source = self.archive.load_image(self.album_id, entry)
         else:
@@ -1796,28 +1828,33 @@ class CoverManagerDialog(QDialog):
         QSettings().setValue(ai_settings.SETTINGS_ORIENTATION, orientation)
         QSettings().setValue(ai_settings.SETTINGS_STYLE, self.style_combo.currentText())
         try:
-            card_store.save_card(self.folder.path, art, self._card_meta_now(entry), self.folder.index)
+            Path(self._card_dir).mkdir(parents=True, exist_ok=True)
+            card_store.save_card(self._card_dir, art, self._card_meta_now(entry), self.folder.index)
         except OSError as e:
             QMessageBox.warning(self, "Speichern fehlgeschlagen", str(e))
             return
-        self.folder.card_path = str(card_store.card_paths(self.folder.path)[0])
+        self.folder.card_path = str(card_store.card_paths(self._card_dir)[0])
         if entry:
             self.archive.set_role(self.album_id, entry.id, ROLE_CARD_COVER)
             self._sync_roles()
         back_note = self._save_back(front.candidate, orientation)
         self.card_changed = True
-        self._card_meta = card_store.load_meta(self.folder.path)
+        self._card_meta = card_store.load_meta(self._card_dir)
         if current is not candidate:
             # "Aktuell" sofort auf den neuen Stand bringen (inkl. Rueckseite)
             if current is not None:
                 self._remove_candidate(current)
-            back_raw = card_store.back_paths(self.folder.path)[1]
-            self._add_candidate(Candidate(SECTION_CURRENT, "Kartenmotiv (SD)",
-                                          card_store.card_paths(self.folder.path)[1].read_bytes(),
+            back_raw = card_store.back_paths(self._card_dir)[1]
+            self._add_candidate(Candidate(SECTION_CURRENT, self._card_art_label(),
+                                          card_store.card_paths(self._card_dir)[1].read_bytes(),
                                           KIND_LOCAL, is_sd_card_art=True,
                                           back_data=back_raw.read_bytes() if back_raw.exists() else None))
         self._render_preview()
-        self._flash("✓ Kartencover auf der SD-Karte gespeichert (card.png)." + back_note)
+        if self.library_mode:
+            self._flash("✓ Kartencover im Archiv gespeichert – wird beim Übertragen auf die SD-Karte "
+                        "geschrieben." + back_note)
+        else:
+            self._flash("✓ Kartencover auf der SD-Karte gespeichert (card.png)." + back_note)
 
     # --- Rueckseite ---------------------------------------------------------------------------
 
@@ -1992,7 +2029,9 @@ class CoverManagerDialog(QDialog):
             self.apply_note.setText(f"Beim Übernehmen per KI: {', '.join(jobs)} "
                                     f"(ca. {len(jobs) * ESTIMATED_COST_PER_IMAGE:.2f} USD), dann speichern.")
         else:
-            self.apply_note.setText("Beim Übernehmen werden Vorder- und Rückseite auf die SD-Karte gespeichert.")
+            self.apply_note.setText("Beim Übernehmen werden Vorder- und Rückseite im Archiv gespeichert und beim "
+                                    "Übertragen auf die SD-Karte geschrieben." if self.library_mode else
+                                    "Beim Übernehmen werden Vorder- und Rückseite auf die SD-Karte gespeichert.")
 
     # --- Rand per KI ergaenzen --------------------------------------------------------------
 
@@ -2192,23 +2231,23 @@ class CoverManagerDialog(QDialog):
     def _save_back(self, front: Candidate, orientation: str) -> str:
         """Schreibt (oder entfernt) die Rueckseite passend zur Einstellung; gibt einen Hinweis zurueck"""
         mode = self.back_mode_combo.currentData()
-        meta = card_store.load_meta(self.folder.path)
+        meta = card_store.load_meta(self._card_dir)
         if meta is None:
             return ""
         if mode == BACK_MODE_NONE:
-            card_store.delete_back(self.folder.path, meta)
+            card_store.delete_back(self._card_dir, meta)
             return ""
         source = self._back_source_image(front)
         if source is None:
-            card_store.delete_back(self.folder.path, meta)
+            card_store.delete_back(self._card_dir, meta)
             return " Keine Rückseite gespeichert (kein Rückseiten-Bild vorhanden)."
         extended = bool(self.back_source is not None and self.back_source.candidate.meta.get("style") == "Rand ergänzt")
         if mode == BACK_MODE_AI and self._ai_back_source() is None:
-            card_store.delete_back(self.folder.path, meta)
+            card_store.delete_back(self._card_dir, meta)
             return " KI-Rückseite wurde nicht erzeugt, daher keine Rückseite gespeichert."
         art = prepare_card_art(source, orientation)
         try:
-            card_store.save_back(self.folder.path, art, self._back_meta(meta, extended))
+            card_store.save_back(self._card_dir, art, self._back_meta(meta, extended))
         except OSError as e:
             return f" Rückseite nicht gespeichert: {e}"
         if front.is_sd_card_art:

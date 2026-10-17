@@ -88,6 +88,7 @@ class AlbumPanel(QWidget):
     tags_requested = pyqtSignal(object)  # LibraryAlbum
     recognize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien (leer = alle)
     organize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien (leer = alle)
+    cover_requested = pyqtSignal(object)  # LibraryAlbum: Cover-Manager oeffnen
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -130,6 +131,11 @@ class AlbumPanel(QWidget):
         info.addWidget(self.meta_label)
         info.addStretch(1)
         actions = QHBoxLayout()
+        self.btn_cover = QPushButton("Cover …")
+        self.btn_cover.setToolTip("Cover-Manager für dieses Album: Album-Cover suchen oder per KI erzeugen und in "
+                                  "die Dateien schreiben, Kartencover fürs Archiv gestalten")
+        self.btn_cover.clicked.connect(lambda: self.cover_requested.emit(self.album))
+        actions.addWidget(self.btn_cover)
         self.btn_tags = QPushButton("Tags nachtragen …")
         self.btn_tags.setToolTip("Album, Titel und Interpret aus dem Internet (MusicBrainz, Deezer, iTunes) "
                                  "übernehmen – mit Vorschau")
@@ -183,6 +189,7 @@ class AlbumPanel(QWidget):
         self.meta_label.setText(" · ".join(p for p in parts if p))
         self.track_list.clear()
         self.track_list.addItem("Tracks werden gelesen …")
+        self.btn_cover.setEnabled(not album.offline)
         self.btn_tags.setEnabled(not album.offline)
         self.btn_recognize.setEnabled(not album.offline)
         self.btn_organize.setEnabled(not album.offline)
@@ -262,6 +269,8 @@ class LibraryView(QWidget):
     tags_requested = pyqtSignal(object)  # LibraryAlbum
     recognize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien
     organize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien
+    cover_requested = pyqtSignal(object)  # LibraryAlbum
+    embed_covers_requested = pyqtSignal()  # Album-Cover aus dem Archiv nachtragen (alle Alben ohne Cover)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -310,6 +319,14 @@ class LibraryView(QWidget):
         self.btn_rescan.clicked.connect(self.rescan_requested)
         head.addWidget(self.btn_rescan)
 
+        self.btn_embed = QPushButton(" Cover nachtragen")
+        self.btn_embed.setObjectName("ghostButton")
+        self.btn_embed.setIcon(icon_from_glyph("\ue3f4", color=theme.TEXT))  # Image
+        self.btn_embed.setToolTip("Alben ohne Cover: das im Cover-Manager gesetzte Album-Cover aus dem Archiv in "
+                                  "die Dateien einbetten und als cover.jpg ablegen")
+        self.btn_embed.clicked.connect(self.embed_covers_requested)
+        head.addWidget(self.btn_embed)
+
         self.btn_sources = QPushButton(" Ordner …")
         self.btn_sources.setObjectName("ghostButton")
         self.btn_sources.setIcon(icon_from_glyph("", color=theme.TEXT))  # Folder
@@ -345,6 +362,7 @@ class LibraryView(QWidget):
         self.album_panel.tags_requested.connect(self.tags_requested)
         self.album_panel.recognize_requested.connect(self.recognize_requested)
         self.album_panel.organize_requested.connect(self.organize_requested)
+        self.album_panel.cover_requested.connect(self.cover_requested)
         self.pages.addWidget(self.album_panel)
         layout.addWidget(self.pages, 1)
         self._rebuild_series_combo()

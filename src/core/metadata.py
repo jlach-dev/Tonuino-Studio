@@ -58,15 +58,37 @@ class MetadataManager:
         """Liest Metadaten aus einer MP3-Datei"""
         return self.read_metadata_and_cover(filepath)[0]
 
+    @staticmethod
+    def _is_mp3(filepath: str) -> bool:
+        return filepath.lower().endswith(".mp3")
+
+    def _read_other(self, filepath: str) -> Tuple[TrackMetadata, Optional[bytes]]:
+        """FLAC, M4A, OGG/Opus, WAV (Bibliothek): ueber den formatunabhaengigen Leser"""
+        from core.library import read_track_tags
+        tags = read_track_tags(filepath)
+        metadata = TrackMetadata(title=tags.title, artist=tags.artist, album=tags.album,
+                                 album_artist=tags.album_artist, track_number=int(tags.track_number or 0),
+                                 duration=tags.duration, has_cover=tags.cover is not None,
+                                 cover_mime="image/jpeg" if tags.cover and tags.cover[:3] == b"\xff\xd8\xff"
+                                 else ("image/png" if tags.cover else ""))
+        return metadata, tags.cover
+
     def read_metadata_and_cover(self, filepath: str) -> Tuple[TrackMetadata, Optional[bytes]]:
         """Liest Metadaten und rohe Cover-Daten (APIC) in einem Durchgang -
         die Datei wird nur einmal geoeffnet (auf einer SD-Karte ist jeder
-        Zugriff teuer)."""
+        Zugriff teuer). Andere Formate als MP3 (Bibliothek) laufen ueber
+        core.library."""
         metadata = TrackMetadata()
         cover_bytes = None
 
         if not self._mutagen_available:
             return metadata, cover_bytes
+        if not self._is_mp3(filepath):
+            try:
+                return self._read_other(filepath)
+            except Exception as e:
+                log.warning(f"Fehler beim Lesen der Metadaten: {e}")
+                return metadata, cover_bytes
 
         try:
             audio = self._open_mp3(filepath)
@@ -172,6 +194,8 @@ class MetadataManager:
         """Gibt die rohen Cover-Bilddaten (APIC) einer MP3-Datei zurueck, falls vorhanden"""
         if not self._mutagen_available:
             return None
+        if not self._is_mp3(filepath):
+            return self.read_metadata_and_cover(filepath)[1]
 
         try:
             audio = self._open_mp3(filepath)
@@ -199,9 +223,13 @@ class MetadataManager:
         return self.set_cover_bytes(filepath, cover_data, mime)
 
     def set_cover_bytes(self, filepath: str, cover_data: bytes, mime: str = 'image/jpeg') -> bool:
-        """Setzt das Cover (rohe Bilddaten) fuer eine MP3-Datei"""
+        """Setzt das Cover (rohe Bilddaten) fuer eine MP3-Datei; andere Formate
+        (FLAC, M4A, OGG/Opus) ueber core.library"""
         if not self._mutagen_available:
             return False
+        if not self._is_mp3(filepath):
+            from core.library import write_cover_any
+            return write_cover_any(filepath, cover_data, mime)
 
         try:
             from mutagen.id3 import APIC

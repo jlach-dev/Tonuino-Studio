@@ -122,6 +122,11 @@ class CoverArchive:
             raise ValueError(f"Ungueltige Album-ID: {album_id!r}")
         return self.root / "albums" / album_id
 
+    def card_dir(self, album_id: str) -> Path:
+        """Ordner fuer card.png/card.json eines Albums, das (noch) nicht auf einer
+        SD-Karte liegt - der Cover-Manager aus der Bibliothek speichert hier"""
+        return self._album_dir(album_id) / "card"
+
     def load_album(self, album_id: str) -> Optional[AlbumRecord]:
         try:
             data = json.loads((self._album_dir(album_id) / "album.json").read_text(encoding="utf-8"))
