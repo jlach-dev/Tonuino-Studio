@@ -9,6 +9,7 @@ Hier landen alle behaltenen Cover (MusicBrainz, lokal, Datei, KI-Varianten).
 Auf die SD-Karte kommt nur das aktive Kartencover (siehe core/card_store.py).
 """
 
+import hashlib
 import io
 import json
 import os
@@ -37,6 +38,10 @@ KIND_LABELS = {
     KIND_LOCAL: "Lokal",
     KIND_FILE: "Datei",
 }
+
+
+def sha1(data: bytes) -> str:
+    return hashlib.sha1(data).hexdigest()
 
 
 def _now() -> str:
@@ -69,6 +74,7 @@ class AlbumRecord:
     mb_release_id: str = ""
     series_id: str = ""
     paths: List[str] = field(default_factory=list)  # bekannte Orte (SD-Ordner, Bibliothek)
+    album_cover_sha1: str = ""  # SHA-1 des zuletzt eingebetteten Album-Covers (bereits archiviert)
     created: str = ""
 
     @classmethod

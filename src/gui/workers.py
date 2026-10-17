@@ -352,6 +352,7 @@ class CoverBatchWorker(QThread):
     def run(self):
         from core import album_identity, card_store
         from core.card_layout import prepare_card_art
+        from core.card_text import derive_card_text
         from core.cover_archive import ROLE_CARD_COVER
         from core.cover_generator import GenerationRequest, generate_art
         from core.cover_research import gather_folder_info, research
@@ -367,8 +368,10 @@ class CoverBatchWorker(QThread):
                 brief = research(info, self.client, self.text_model)
                 request = GenerationRequest(info=info, brief=brief, style=self.style, orientation=self.orientation)
                 art = generate_art(self.source, request, self.client, self.image_model)
+                series, title = derive_card_text(info, brief)
                 meta = card_store.CardMeta(
-                    title=info.album or label, orientation=self.orientation, source=self.source,
+                    title=title or info.album or label, series=series, orientation=self.orientation,
+                    source=self.source,
                     style=self.style, model=self.image_model if self.source == "ai" else "",
                     research_sources=brief.sources)
                 if self.archive is not None:

@@ -28,7 +28,8 @@ CARD_FILES = (CARD_IMAGE, CARD_RAW, CARD_META)
 
 @dataclass
 class CardMeta:
-    title: str = ""
+    title: str = ""  # eine Zeile je Folge
+    series: str = ""  # Hoerspielreihe (klein ueber dem Titel)
     orientation: str = ORIENTATION_PORTRAIT
     show_number: bool = True
     source: str = ""  # "ai", "blur"
@@ -73,7 +74,8 @@ def load_raw_art(folder_path: str) -> Optional[Image.Image]:
 
 
 def render_from_meta(art: Image.Image, meta: CardMeta, folder_number: Optional[int], spec=None) -> Image.Image:
-    text = CardText(title=meta.title, folder_number=folder_number if meta.show_number else None)
+    text = CardText(title=meta.title, folder_number=folder_number if meta.show_number else None,
+                    series=meta.series)
     return render_card(art, text, meta.orientation, spec)
 
 

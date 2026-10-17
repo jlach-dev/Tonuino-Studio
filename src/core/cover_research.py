@@ -27,6 +27,8 @@ class FolderInfo:
     artist: str = ""
     titles: List[str] = field(default_factory=list)
     cover_bytes: Optional[bytes] = None
+    albums: List[str] = field(default_factory=list)  # alle verschiedenen Album-Tags (mehrere Folgen je Karte)
+    album_artist: str = ""
 
 
 @dataclass
@@ -70,6 +72,9 @@ def gather_folder_info(folder: Folder, metadata_manager, max_titles: int = 25) -
         metadata, cover = metadata_manager.read_metadata_and_cover(track.filepath)
         info.album = info.album or metadata.album
         info.artist = info.artist or metadata.album_artist or metadata.artist
+        info.album_artist = info.album_artist or metadata.album_artist
+        if metadata.album and metadata.album not in info.albums:
+            info.albums.append(metadata.album)
         if metadata.title:
             info.titles.append(metadata.title)
         if info.cover_bytes is None and cover:

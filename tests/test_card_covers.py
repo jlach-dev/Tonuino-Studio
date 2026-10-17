@@ -86,3 +86,27 @@ def test_sheet_layout_fits_on_a4_and_paginates(tmp_path):
 def test_test_page_without_items():
     pages = build_sheets([], LABEL_TEMPLATES["herma5028"], outline=True, dpi=100)
     assert len(pages) == 1
+
+
+def test_card_text_from_tags_series_and_double_episodes():
+    from core.card_text import derive_card_text
+    from core.cover_research import FolderInfo
+
+    assert derive_card_text(FolderInfo(
+        albums=["Folge 39: Fall 77: Die verschleppte Schleppe/Fall 78: Der gefiederte Vergessling"],
+        artist="Die Fuchsbande")) == (
+        "Die Fuchsbande · Folge 39", "Fall 77: Die verschleppte Schleppe\nFall 78: Der gefiederte Vergessling")
+    assert derive_card_text(FolderInfo(
+        albums=["Bibi Blocksberg - Folge 1: Hexen gibt es doch", "Bibi Blocksberg - Folge 2: Der Superbesen"],
+        artist="Bibi Blocksberg")) == ("Bibi Blocksberg", "Folge 1: Hexen gibt es doch\nFolge 2: Der Superbesen")
+    assert derive_card_text(FolderInfo(albums=["AC/DC Live"], artist="AC/DC")) == ("AC/DC", "Live")
+    assert derive_card_text(FolderInfo(titles=["Die kleine Hexe (1/2): A", "Die kleine Hexe (2/2): B"])) == (
+        "", "Die kleine Hexe")
+
+
+def test_multi_episode_text_fits_card():
+    art = Image.new("RGB", (800, 1200), (10, 120, 200))
+    text = CardText("Fall 77: Die verschleppte Schleppe\nFall 78: Der gefiederte Vergessling\nFall 79: Noch einer",
+                    5, "Die Fuchsbande · Folge 39")
+    for orientation in (ORIENTATION_PORTRAIT, ORIENTATION_LANDSCAPE):
+        assert render_card(art, text, orientation).size == CardSpec().size_px(orientation)

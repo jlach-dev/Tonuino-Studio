@@ -96,7 +96,7 @@ def test_cover_manager_online_cover_as_card_and_album_cover(app, sd, tmp_path, m
     assert section_count(dialog, cm.SECTION_ONLINE) == 1  # iTunes-Duplikat aussortiert
     assert dialog.selected is not None and dialog.selected.online.source == "Deezer"
 
-    dialog.title_edit.setText("Fall 77")
+    dialog.title_edit.setPlainText("Fall 77")
     dialog._set_card_cover()
     dialog._set_album_cover()
 
@@ -155,3 +155,79 @@ def test_print_sheet_dialog_renders_items(app, sd):
     dialog = PrintSheetDialog([folder], {1: "X"})
     dialog.copies_spin.setValue(3)
     assert len(dialog._items()) == 3
+
+
+def test_cover_manager_marking_keep_reference_discard(app, sd, tmp_path, monkeypatch, fake_sources):
+    from PyQt6.QtCore import Qt
+    from gui import cover_manager_dialog as cm
+
+    monkeypatch.setattr(cm, "gemini_client", lambda: None)
+    archive = CoverArchive(str(tmp_path / "data"))
+    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), archive)
+    run_workers(app, dialog)
+    dialog._generation_meta = {"style": "Aquarell", "model": "m", "prompt": ""}
+    for color in ("green", "blue", "red"):
+        dialog._on_variant_ready(Image.new("RGB", (400, 600), color))
+
+    def mark(*indices):
+        new = [c for c in dialog.candidates if c.section == cm.SECTION_NEW]
+        for item in dialog._items():
+            if item.data(Qt.ItemDataRole.UserRole) in [new[i] for i in indices]:
+                item.setCheckState(Qt.CheckState.Checked)
+        return [new[i] for i in indices]
+
+    kept = mark(0, 1)
+    assert dialog.btn_keep.text() == "Behalten (2)"
+    dialog._keep_marked()
+    assert len(archive.covers(dialog.album_id)) == 2
+    assert all(c.kept for c in kept) and not dialog._marked_candidates()
+
+    mark_items = [c for c in dialog.candidates if c.kept]
+    for item in dialog._items():
+        if item.data(Qt.ItemDataRole.UserRole) in mark_items:
+            item.setCheckState(Qt.CheckState.Checked)
+    dialog._toggle_reference_marked()
+    assert len(dialog._references()) == 2
+    assert "◆" in dialog._item_text(mark_items[0])
+
+    monkeypatch.setattr(cm, "confirm_action", lambda *a, **k: True)
+    for item in dialog._items():
+        if item.data(Qt.ItemDataRole.UserRole) is mark_items[0]:
+            item.setCheckState(Qt.CheckState.Checked)
+    dialog._discard_marked()
+    assert len(archive.covers(dialog.album_id)) == 1
+    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    dialog.done(0)
+
+
+def test_replacing_album_cover_archives_previous_and_refreshes(app, sd, tmp_path, monkeypatch, fake_sources):
+    from gui import cover_manager_dialog as cm
+
+    folder = sd.folders[1]
+    for track in folder.tracks:
+        MetadataManager().set_cover_bytes(track.filepath, png_bytes(color=(1, 2, 3)), "image/png")
+    monkeypatch.setattr(cm, "gemini_client", lambda: None)
+    archive = CoverArchive(str(tmp_path / "data"))
+    dialog = cm.CoverManagerDialog(folder, "X", MetadataManager(), archive)
+    run_workers(app, dialog)
+    old = dialog._current_candidate("is_album_cover")
+    assert old is not None
+
+    asked = []
+    monkeypatch.setattr(dialog, "_ask_archive_previous", lambda what: asked.append(what) or True)
+    dialog._generation_meta = {"style": "Aquarell", "model": "m", "prompt": ""}
+    dialog._on_variant_ready(Image.new("RGB", (500, 500), "green"))
+    dialog._set_album_cover()
+
+    assert asked == ["Album-Cover"]
+    sources = sorted(e.source for e in archive.covers(dialog.album_id))
+    assert "Früheres Album-Cover" in sources
+    new_current = dialog._current_candidate("is_album_cover")
+    assert new_current is not old and new_current.data == MetadataManager().get_cover_bytes(folder.tracks[0].filepath)
+
+    # zweites Ersetzen: das jetzige Cover ist bereits archiviert -> keine Rueckfrage
+    dialog._on_variant_ready(Image.new("RGB", (500, 500), "blue"))
+    dialog._set_album_cover()
+    assert asked == ["Album-Cover"]
+    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    dialog.done(0)

@@ -35,7 +35,7 @@ QDialog, QMessageBox {
 
 /* Dialog ist heller als das Hauptfenster - Eingabefelder und Buttons
    brauchen darin eigene Toene, sonst gehen sie im Dialoggrund unter. */
-QDialog QLineEdit, QDialog QTextEdit, QDialog QComboBox, QDialog QSpinBox {
+QDialog QLineEdit, QDialog QTextEdit, QDialog QPlainTextEdit, QDialog QComboBox, QDialog QSpinBox {
     background-color: @BASE@;
 }
 
@@ -398,6 +398,16 @@ QListWidget::indicator:checked {
         stop:0 @BLUE@, stop:0.38 @BLUE@, stop:0.5 transparent, stop:1 transparent);
 }
 
+/* Cover-Galerie: eckige Markierungs-Kaestchen (Haken = markieren) */
+QListWidget#coverGallery::indicator {
+    border-radius: 4px;
+}
+
+QListWidget#coverGallery::indicator:checked {
+    background-color: @BLUE@;
+    border-color: @BLUE@;
+}
+
 /* Track-Liste: schlanke Zeilen ohne Rahmen */
 QListWidget#trackList {
     background: transparent;
@@ -556,6 +566,19 @@ QLineEdit {
 }
 
 QLineEdit:focus {
+    border-color: @BLUE@;
+}
+
+QPlainTextEdit, QTextEdit {
+    background-color: @SURFACE0@;
+    color: @TEXT@;
+    border: 1px solid @SURFACE1@;
+    border-radius: 6px;
+    padding: 4px;
+    selection-background-color: @BLUE@;
+}
+
+QPlainTextEdit:focus, QTextEdit:focus {
     border-color: @BLUE@;
 }
 

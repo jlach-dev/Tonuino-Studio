@@ -52,9 +52,16 @@ class CardSpec:
 
 @dataclass
 class CardText:
-    """Was per Code auf die Karte gesetzt wird"""
+    """Was per Code auf die Karte gesetzt wird. title darf mehrere Zeilen
+    enthalten (eine je Folge, z.B. bei Doppelfolgen); series steht klein
+    darueber (Hoerspielreihe, ggf. mit Folgennummer)."""
     title: str = ""
     folder_number: Optional[int] = None
+    series: str = ""
+
+    @property
+    def paragraphs(self) -> List[str]:
+        return [line.strip() for line in self.title.splitlines() if line.strip()]
 
 
 # Schriftarten: zuerst eine mitgelieferte Schrift (src/resources/card_fonts/*.ttf),
@@ -163,33 +170,81 @@ def _wrap_lines(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> L
     return lines
 
 
+def _truncate(draw, line: str, font, max_width: int) -> str:
+    while line and draw.textlength(line + "…", font=font) > max_width:
+        line = line[:-1]
+    return line.rstrip() + "…"
+
+
 def fit_title(draw: ImageDraw.ImageDraw, text: str, font_path: Optional[str],
               max_width: int, max_height: int, max_lines: int, start_size: int, min_size: int = 10):
-    """Groesste Schriftgroesse, mit der der Titel in max_lines Zeilen in die
-    Box passt. Gibt (font, lines, line_height) zurueck; passt es selbst in der
-    Mindestgroesse nicht, wird die letzte Zeile mit ... gekuerzt."""
+    """Einzeiliger Sonderfall von fit_text_block (ohne Reihe)"""
+    block = fit_text_block(draw, "", [text], font_path, max_width, max_height, max_lines, start_size, min_size)
+    return block.font, block.lines, block.line_height
+
+
+@dataclass
+class TextBlock:
+    font: object
+    lines: List[str]
+    line_height: int
+    series_font: object = None
+    series_lines: Optional[List[str]] = None
+    series_line_height: int = 0
+    paragraph_starts: frozenset = frozenset()  # Zeilen, mit denen eine weitere Folge beginnt
+
+    @property
+    def paragraph_gap(self) -> int:
+        return round(self.line_height * 0.35)
+
+    @property
+    def height(self) -> int:
+        series = len(self.series_lines or []) * self.series_line_height
+        gap = round(self.series_line_height * 0.25) if self.series_lines else 0
+        paragraphs = sum(1 for i in self.paragraph_starts if 0 < i < len(self.lines)) * self.paragraph_gap
+        return series + gap + len(self.lines) * self.line_height + paragraphs
+
+
+def fit_text_block(draw: ImageDraw.ImageDraw, series: str, paragraphs: List[str], font_path: Optional[str],
+                   max_width: int, max_height: int, max_lines: int, start_size: int,
+                   min_size: int = 10) -> TextBlock:
+    """Groesste Schriftgroesse, mit der Reihe (klein) und alle Titelzeilen in
+    die Box passen; jede Folge beginnt in einer neuen Zeile. Passt es selbst in
+    der Mindestgroesse nicht, wird gekuerzt (…)."""
     size = start_size
     while True:
         font = _load_font(font_path, size)
-        lines = _wrap_lines(draw, text, font, max_width)
-        line_height = round(size * 1.15)
+        series_size = max(min_size, round(size * 0.58))
+        series_font = _load_font(font_path, series_size)
+        lines, starts = [], set()
+        for paragraph in paragraphs:
+            starts.add(len(lines))
+            lines.extend(_wrap_lines(draw, paragraph, font, max_width))
+        series_lines = _wrap_lines(draw, series, series_font, max_width)[:1] if series.strip() else []
+        block = TextBlock(font, lines, round(size * 1.15), series_font, series_lines, round(series_size * 1.2),
+                          frozenset(starts))
         fits_width = all(draw.textlength(line, font=font) <= max_width for line in lines)
-        if (len(lines) <= max_lines and len(lines) * line_height <= max_height and fits_width) or size <= min_size:
+        if (len(lines) <= max_lines and block.height <= max_height and fits_width) or size <= min_size:
             break
         size -= 2
 
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-        last = lines[-1]
-        while last and draw.textlength(last + "…", font=font) > max_width:
-            last = last[:-1]
-        lines[-1] = last.rstrip() + "…"
-    return font, lines, line_height
+    if block.series_lines and draw.textlength(block.series_lines[0], font=series_font) > max_width:
+        block.series_lines[0] = _truncate(draw, block.series_lines[0], series_font, max_width)
+    if len(block.lines) > max_lines:
+        block.lines = block.lines[:max_lines]
+        block.lines[-1] = _truncate(draw, block.lines[-1], block.font, max_width)
+    return block
+
+
+def _draw_centered(draw, y: float, line: str, font, width: int, shadow: int, fill):
+    x = (width - draw.textlength(line, font=font)) / 2
+    draw.text((x + shadow, y + shadow), line, font=font, fill=(0, 0, 0, 160))
+    draw.text((x, y), line, font=font, fill=fill)
 
 
 def render_card(art: Image.Image, text: CardText, orientation: str,
                 spec: Optional[CardSpec] = None, with_bleed: bool = True, dpi: int = DPI) -> Image.Image:
-    """Setzt Motiv, Titelband und optionale Ordnernummer zur fertigen Karte zusammen."""
+    """Setzt Motiv, Textband (Reihe + Titel) und optionale Ordnernummer zur fertigen Karte zusammen."""
     spec = spec or CardSpec()
     size = spec.size_px(orientation, with_bleed, dpi)
     card = fit_art(art, size).convert("RGBA")
@@ -197,34 +252,41 @@ def render_card(art: Image.Image, text: CardText, orientation: str,
     bleed = mm_to_px(spec.bleed_mm, dpi) if with_bleed else 0
     safe = bleed + mm_to_px(spec.safe_mm, dpi)
     width, height = size
+    paragraphs = text.paragraphs
 
-    if text.title.strip():
-        # Titelband unten: weicher Verlauf von transparent nach dunkel, damit
-        # weisse Schrift auf jedem Motiv lesbar bleibt
+    if paragraphs or text.series.strip():
         portrait = orientation == ORIENTATION_PORTRAIT
-        band_height = round(height * (0.30 if portrait else 0.36))
+        draw = ImageDraw.Draw(card)
+        block = fit_text_block(
+            draw, text.series.strip(), paragraphs, find_title_font(), width - 2 * safe,
+            max_height=round(height * (0.40 if portrait else 0.46)),
+            max_lines=(5 if portrait else 3) if len(paragraphs) > 1 else (3 if portrait else 2),
+            start_size=mm_to_px(6.0 if len(paragraphs) <= 1 else 4.6, dpi))
+
+        # Textband unten: weicher Verlauf von transparent nach dunkel, damit
+        # weisse Schrift auf jedem Motiv lesbar bleibt; waechst mit dem Text
+        band_height = max(round(height * (0.30 if portrait else 0.36)), round(block.height * 1.7) + safe)
+        band_height = min(band_height, height)
         gradient = Image.new("L", (1, band_height))
         for y in range(band_height):
-            gradient.putpixel((0, y), round(200 * (y / band_height) ** 1.4))
+            gradient.putpixel((0, y), round(205 * (y / band_height) ** 1.3))
         overlay = Image.new("RGBA", (width, band_height), (0, 0, 0, 255))
         overlay.putalpha(gradient.resize((width, band_height)))
         card.alpha_composite(overlay, (0, height - band_height))
 
         draw = ImageDraw.Draw(card)
-        max_width = width - 2 * safe
-        max_height = round(band_height * 0.62)
-        font, lines, line_height = fit_title(
-            draw, text.title.strip(), find_title_font(), max_width, max_height,
-            max_lines=3 if portrait else 2, start_size=mm_to_px(6.0, dpi))
-
-        y = height - safe - len(lines) * line_height
-        shadow = max(2, line_height // 18)
-        for line in lines:
-            line_width = draw.textlength(line, font=font)
-            x = (width - line_width) / 2
-            draw.text((x + shadow, y + shadow), line, font=font, fill=(0, 0, 0, 160))
-            draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-            y += line_height
+        y = height - safe - block.height
+        shadow = max(2, block.line_height // 18)
+        for line in block.series_lines or []:
+            _draw_centered(draw, y, line, block.series_font, width, max(1, shadow // 2), (255, 255, 255, 215))
+            y += block.series_line_height
+        if block.series_lines:
+            y += round(block.series_line_height * 0.25)
+        for index, line in enumerate(block.lines):
+            if index and index in block.paragraph_starts:
+                y += block.paragraph_gap
+            _draw_centered(draw, y, line, block.font, width, shadow, (255, 255, 255, 255))
+            y += block.line_height
 
     if text.folder_number is not None:
         # Kleines Nummern-Badge oben rechts - hilft Eltern beim Zuordnen
