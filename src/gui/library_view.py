@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 
 from core.cover_archive import ROLE_CARD_COVER
 from core.library import (
-    STATE_LABELS, STATE_NEW, STATE_OFFLINE, Library, LibraryAlbum, LibraryIndex, LibraryTrack, format_duration,
+    STATE_LABELS, STATE_NEW, STATE_OFFLINE, Library, LibraryAlbum, LibraryIndex, LibraryTrack, format_duration, format_time,
 )
 from gui import theme
 from gui.common import icon_from_glyph
@@ -198,7 +198,7 @@ class AlbumPanel(QWidget):
         self.tracks = tracks
         self.track_list.clear()
         for track in tracks:
-            item = QListWidgetItem(track.display + (f"   {format_duration(track.duration)}" if track.duration else ""))
+            item = QListWidgetItem(track.display + (f"   {format_time(track.duration)}" if track.duration else ""))
             item.setData(Qt.ItemDataRole.UserRole, track.path)
             item.setToolTip(track.path + (f"\n{track.artist}" if track.artist else ""))
             self.track_list.addItem(item)

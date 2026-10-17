@@ -769,7 +769,16 @@ def sd_album_ids(folders) -> Dict[str, int]:
     return result
 
 
+def format_time(seconds: float) -> str:
+    """Spieldauer eines Stuecks als M:SS bzw. H:MM:SS (z.B. 3:07, 1:02:45)"""
+    total = int(round(seconds or 0))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
 def format_duration(seconds: float) -> str:
+    """Gesamtdauer eines Albums/Ordners, gerundet (z.B. 48 Min., 1 Std. 12 Min.)"""
     if seconds < 60:
         return f"{int(seconds)} Sek." if seconds >= 1 else ""
     minutes = round(seconds / 60)

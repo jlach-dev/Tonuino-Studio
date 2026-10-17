@@ -114,3 +114,10 @@ def test_library_view_album_panel(tmp_path):
     assert view.open_album_path is None
     view.shutdown()
     QSettings().clear()
+
+
+def test_format_time():
+    from core.library import format_time
+    assert format_time(187.4) == "3:07"
+    assert format_time(5) == "0:05"
+    assert format_time(3765) == "1:02:45"
