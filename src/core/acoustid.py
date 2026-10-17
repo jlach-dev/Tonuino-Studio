@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -183,11 +184,32 @@ def lookup(api_key: str, duration: float, fp: str) -> List[Match]:
     request = urllib.request.Request(LOOKUP_URL, data=params.encode("ascii"),
                                      headers={"User-Agent": USER_AGENT,
                                               "Content-Type": "application/x-www-form-urlencoded"})
-    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
-        data = json.loads(response.read())
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+            data = json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        # AcoustID antwortet bei Client-Fehlern mit 400 und einer JSON-Fehlermeldung im Body
+        try:
+            data = json.loads(e.read())
+        except (ValueError, OSError):
+            raise RuntimeError(f"AcoustID: HTTP {e.code} {e.reason}") from e
     if data.get("status") != "ok":
-        raise RuntimeError(f"AcoustID: {(data.get('error') or {}).get('message', data.get('status'))}")
+        raise RuntimeError(error_text(data))
     return parse_lookup(data)
+
+
+ERROR_HINTS = {
+    "invalid API key": "ungültiger API-Key – es wird der Application-Key von "
+                       "https://acoustid.org/applications benötigt (nicht der User-Key)",
+    "invalid fingerprint": "ungültiger Fingerabdruck (fpcalc-Ausgabe)",
+    "invalid duration": "ungültige Dauer",
+}
+
+
+def error_text(data: dict) -> str:
+    """Deutsche Fehlermeldung aus einer AcoustID-Fehlerantwort"""
+    message = str((data.get("error") or {}).get("message") or data.get("status") or "Fehler")
+    return "AcoustID: " + ERROR_HINTS.get(message, message)
 
 
 def parse_lookup(data: dict) -> List[Match]:

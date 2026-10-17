@@ -175,3 +175,20 @@ def test_tag_dialog_preset_skips_search(tmp_path, monkeypatch):
     dialog._stop_workers()
     dialog.done(0)
     QSettings().clear()
+
+
+def test_lookup_reports_acoustid_error(monkeypatch):
+    import io
+    import urllib.error
+    from core import acoustid
+
+    body = b'{"error": {"code": 4, "message": "invalid API key"}, "status": "error"}'
+
+    def fail(request, timeout=0):
+        raise urllib.error.HTTPError(acoustid.LOOKUP_URL, 400, "Bad Request", {}, io.BytesIO(body))
+
+    monkeypatch.setattr(acoustid.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(acoustid, "_throttle", lambda: None)
+    with pytest.raises(RuntimeError) as info:
+        acoustid.lookup("falsch", 12.0, "AQAA")
+    assert "Application-Key" in str(info.value) and "HTTP" not in str(info.value)
