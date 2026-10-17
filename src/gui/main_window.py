@@ -27,7 +27,7 @@ from core.card_store import card_paths
 from core.card_text import derive_card_text
 from core.cover_research import gather_folder_info
 from core.cover_generator import DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, SOURCE_AI
-from core.library import SETTINGS_WRITE_ID_TAGS, Library, LibraryIndex
+from core.library import SETTINGS_WRITE_ID_TAGS, Library, LibraryIndex, format_time
 from core import library_import
 from gui.common import resource_path, heading_font, confirm_action, icon_from_glyph, icon_with_hover
 from gui.track_list import HoverListWidget, reorder_with_selection
@@ -1065,11 +1065,7 @@ class MainWindow(QMainWindow):
         total = self._track_meta_total
         parts = [f"{count} Track" if count == 1 else f"{count} Tracks"]
         if total >= 1:
-            if total < 60:
-                parts.append(f"{int(total)} Sek.")
-            else:
-                minutes = round(total / 60)
-                parts.append(f"{minutes // 60} Std. {minutes % 60} Min." if minutes >= 60 else f"{minutes} Min.")
+            parts.append(format_time(total))
         self.folder_meta.setText(" · ".join(parts))
 
     def _create_new_folder(self):

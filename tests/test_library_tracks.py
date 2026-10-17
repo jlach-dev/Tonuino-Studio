@@ -121,3 +121,5 @@ def test_format_time():
     assert format_time(187.4) == "3:07"
     assert format_time(5) == "0:05"
     assert format_time(3765) == "1:02:45"
+    from core.library import format_duration
+    assert format_duration(2900) == "48:20" and format_duration(0.4) == ""

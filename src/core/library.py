@@ -778,8 +778,5 @@ def format_time(seconds: float) -> str:
 
 
 def format_duration(seconds: float) -> str:
-    """Gesamtdauer eines Albums/Ordners, gerundet (z.B. 48 Min., 1 Std. 12 Min.)"""
-    if seconds < 60:
-        return f"{int(seconds)} Sek." if seconds >= 1 else ""
-    minutes = round(seconds / 60)
-    return f"{minutes // 60} Std. {minutes % 60} Min." if minutes >= 60 else f"{minutes} Min."
+    """Gesamtdauer eines Albums/Ordners als M:SS bzw. H:MM:SS; leer unter einer Sekunde"""
+    return format_time(seconds) if seconds and seconds >= 1 else ""
