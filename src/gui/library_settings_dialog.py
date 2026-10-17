@@ -81,8 +81,7 @@ class LibrarySourcesDialog(QDialog):
 
         intro = QLabel("Ordner, in denen deine Hörspiele und deine Musik liegen (PC, NAS). Jeder Unterordner mit "
                        "Audiodateien gilt als Album; CD1/CD2-Unterordner werden zusammengefasst. Die Dateien "
-                       "bleiben, wo sie sind. Mehrere Ordner auf einmal: im Dialog mit Strg/Shift markieren oder "
-                       "aus dem Explorer in die Liste ziehen.")
+                       "bleiben, wo sie sind. Mehrere Ordner auf einmal: aus dem Explorer in die Liste ziehen.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -131,7 +130,7 @@ class LibrarySourcesDialog(QDialog):
         self.list.item(self.list.count() - 1).setData(0x0100, source)
 
     def _add(self):
-        self.add_sources(pick_directories(self, "Bibliothek-Ordner wählen (Mehrfachauswahl mit Strg/Shift)"))
+        self.add_sources(pick_directories(self, "Bibliothek-Ordner wählen"))
 
     def add_sources(self, paths: List[str]) -> List[str]:
         """Fuegt Ordner hinzu; Duplikate und verschachtelte Ordner werden gemeldet. Gibt die neuen zurueck."""

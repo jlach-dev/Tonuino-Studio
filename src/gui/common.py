@@ -108,10 +108,10 @@ def configure_multi_directory_dialog(dialog) -> None:
 
 
 def pick_directories(parent, caption: str, start: str = "") -> list:
-    """Mehrere Ordner auf einmal waehlen (Strg/Shift-Klick); leer bei Abbruch"""
-    from PyQt6.QtWidgets import QDialog, QFileDialog
-    dialog = QFileDialog(parent, caption, start)
-    configure_multi_directory_dialog(dialog)
-    if dialog.exec() != QDialog.DialogCode.Accepted:
-        return []
-    return [os.path.normpath(p) for p in dialog.selectedFiles() if os.path.isdir(p)]
+    """Ordner waehlen - im nativen Dialog des Systems (einer je Aufruf; mehrere
+    Ordner kommen per Drag & Drop aus dem Explorer in die Quellenliste). Der
+    Qt-eigene Dialog mit Mehrfachauswahl (configure_multi_directory_dialog)
+    passt optisch nicht zur Anwendung. Leer bei Abbruch."""
+    from PyQt6.QtWidgets import QFileDialog
+    path = QFileDialog.getExistingDirectory(parent, caption, start, QFileDialog.Option.ShowDirsOnly)
+    return [os.path.normpath(path)] if path and os.path.isdir(path) else []
