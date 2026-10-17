@@ -214,7 +214,13 @@ class CoverManagerDialog(QDialog):
                  parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Cover-Manager – Ordner {folder.index:02d}")
-        self.resize(1180, 760)
+        self.setMinimumSize(900, 600)
+        self.setSizeGripEnabled(True)
+        geometry = QSettings().value("cover_manager/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        else:
+            self.resize(1180, 760)
         self.folder = folder
         # "Ordner NN" ist nur der Anzeigename des Managers, kein Titel
         self.folder_name = "" if folder_name.startswith("Ordner ") else folder_name
@@ -263,7 +269,7 @@ class CoverManagerDialog(QDialog):
         left = QVBoxLayout()
         self.preview = QLabel("Bild in der Galerie auswählen")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumSize(380, 300)
+        self.preview.setMinimumSize(300, 220)
         self.preview.setStyleSheet("border: 1px dashed palette(mid); border-radius: 8px;")
         left.addWidget(self.preview, 1)
 
@@ -320,10 +326,10 @@ class CoverManagerDialog(QDialog):
         self.gallery.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.gallery.setMovement(QListWidget.Movement.Static)
         self.gallery.setWordWrap(True)
-        self.gallery.setFixedHeight(2 * (self.THUMB + 40) + 14)
+        self.gallery.setMinimumHeight(self.THUMB + 54)
         self.gallery.currentItemChanged.connect(self._on_item_selected)
         self.gallery.itemChanged.connect(lambda _item: self._update_mark_bar())
-        left.addWidget(self.gallery)
+        left.addWidget(self.gallery, 1)
 
         # Sammelaktionen fuer die markierten (abgehakten) Bilder
         mark_bar = QHBoxLayout()
@@ -1560,6 +1566,7 @@ class CoverManagerDialog(QDialog):
                     self._keep(candidate)
             elif box.clickedButton() != btn_discard:
                 return
+        QSettings().setValue("cover_manager/geometry", self.saveGeometry())
         for worker in (self._search_worker, self._research_worker, self._generate_worker, self._extend_worker):
             if worker is not None and worker.isRunning():
                 if hasattr(worker, "cancel"):

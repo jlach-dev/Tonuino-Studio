@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QMenuBar, QStyle, QStyleOptionViewItem, QInputDialog, QDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint, QRect
-from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup
+from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup, QKeySequence, QShortcut
 
 from core import __version__
 from core.sd_card import SDCard, Folder, Track, PurgePreview, MAX_TRACKS_PER_FOLDER
@@ -74,7 +74,9 @@ class MainWindow(QMainWindow):
         self._row_icons = {}
         if sys.platform == "win32":
             self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
-        self.setMinimumSize(1200, 800)
+        # Frei veraenderbar; die Mindestgroesse haelt nur die Bedienelemente lesbar
+        self.setMinimumSize(900, 600)
+        self.resize(1200, 800)
 
         self.sd_card: SDCard = None
         self.audio_converter = AudioConverter()
@@ -96,6 +98,11 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_statusbar()
         self._check_dependencies()
+        self._restore_window_state()
+
+        # Vollbild per F11 (Esc beendet es), Maximieren per Doppelklick auf die Titelleiste
+        QShortcut(QKeySequence("F11"), self, activated=self.toggle_full_screen)
+        QShortcut(QKeySequence("Escape"), self, activated=self._leave_full_screen)
         
         # SD-Karten-Timer: erkennt, wenn die geoeffnete SD-Karte (z.B. per
         # USB/Kartenleser) waehrend der Nutzung entfernt wird, und setzt die
@@ -167,7 +174,7 @@ class MainWindow(QMainWindow):
         HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT = 10, 11, 12, 13, 14
         HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT = 15, 16, 17
 
-        if not self.isMaximized():
+        if not self.isMaximized() and not self.isFullScreen():
             b = self.RESIZE_BORDER
             left, right = pos.x() < b, pos.x() >= self.width() - b
             top, bottom = pos.y() < b, pos.y() >= self.height() - b
@@ -193,9 +200,52 @@ class MainWindow(QMainWindow):
         return None
 
     def changeEvent(self, event):
-        if event.type() == QEvent.Type.WindowStateChange and self._title_bar is not None:
-            self._title_bar.update_maximize_button()
+        if event.type() == QEvent.Type.WindowStateChange:
+            if self._title_bar is not None:
+                self._title_bar.update_maximize_button()
+            if hasattr(self, "action_full_screen"):
+                self.action_full_screen.setChecked(self.isFullScreen())
         super().changeEvent(event)
+
+    # --- Fenstergroesse / Vollbild ----------------------------------------------------
+
+    def toggle_full_screen(self):
+        if self.isFullScreen():
+            self._leave_full_screen()
+        else:
+            self._was_maximized = self.isMaximized()
+            self.showFullScreen()
+
+    def _leave_full_screen(self):
+        if not self.isFullScreen():
+            return
+        if getattr(self, "_was_maximized", False):
+            self.showMaximized()
+        else:
+            self.showNormal()
+
+    def toggle_maximized(self):
+        if self.isFullScreen():
+            self._leave_full_screen()
+        elif self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def _restore_window_state(self):
+        """Groesse, Position und Maximiert-Zustand der letzten Sitzung"""
+        settings = QSettings()
+        geometry = settings.value("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        if settings.value("window/maximized", False, type=bool):
+            self.showMaximized()
+
+    def _save_window_state(self):
+        settings = QSettings()
+        settings.setValue("window/maximized", self.isMaximized() or self.isFullScreen())
+        if not self.isMaximized() and not self.isFullScreen():
+            settings.setValue("window/geometry", self.saveGeometry())
 
     def _create_menu_bar(self, menu_bar: QMenuBar):
         """Erstellt das Menue Einstellungen in der Menueleiste des Fensters
@@ -233,6 +283,14 @@ class MainWindow(QMainWindow):
             lambda: self.rfid_panel.set_reader_mode(RfidPanel.READER_MODE_TONUINO)
         )
         reader_group.addAction(action_reader_tonuino)
+
+        view_menu = menu_bar.addMenu("Ansicht")
+        self.action_full_screen = view_menu.addAction("Vollbild")
+        self.action_full_screen.setCheckable(True)
+        self.action_full_screen.setShortcut("F11")
+        self.action_full_screen.triggered.connect(self.toggle_full_screen)
+        action_maximize = view_menu.addAction("Maximieren / Wiederherstellen")
+        action_maximize.triggered.connect(self.toggle_maximized)
 
         cover_menu = menu_bar.addMenu("Kartencover")
         self.action_card_cover = cover_menu.addAction("Cover-Manager für diesen Ordner …")
@@ -1760,6 +1818,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Wird beim Schliessen aufgerufen"""
+        self._save_window_state()
         self.player_bar.stop()
         self.rfid_panel.shutdown()
         self.update_controller.shutdown()

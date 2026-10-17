@@ -20,7 +20,8 @@ class PrintSheetDialog(QDialog):
     def __init__(self, folders: List[Folder], folder_names: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Druckbogen für Kartencover")
-        self.setMinimumSize(560, 560)
+        self.setMinimumSize(480, 480)
+        self.setSizeGripEnabled(True)
         self.folders = [f for f in folders if f.card_path]
         settings = QSettings()
 

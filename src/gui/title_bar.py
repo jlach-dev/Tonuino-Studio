@@ -90,10 +90,18 @@ class TitleBar(QWidget):
         return btn
 
     def _toggle_maximize(self):
-        if self._window.isMaximized():
+        if hasattr(self._window, "toggle_maximized"):
+            self._window.toggle_maximized()
+        elif self._window.isMaximized():
             self._window.showNormal()
         else:
             self._window.showMaximized()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.is_draggable_at(
+                self.mapTo(self._window, event.position().toPoint())):
+            self._toggle_maximize()
+        super().mouseDoubleClickEvent(event)
 
     def update_maximize_button(self):
         """Wechselt Symbol und Tooltip passend zum Fensterzustand"""
