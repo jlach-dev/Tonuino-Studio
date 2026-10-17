@@ -359,3 +359,38 @@ def test_ai_back_is_generated_on_apply_and_becomes_new_version(qt_app, tmp_path,
     dialog._apply()
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
+
+
+def test_clicking_generated_version_keeps_ai_back(qt_app, tmp_path, monkeypatch):
+    from core.metadata import MetadataManager
+    from gui import cover_manager_dialog as cm
+
+    folder = tmp_path / "sd" / "01"
+    folder.mkdir(parents=True)
+    (folder / "001.mp3").write_bytes(b"x")
+    sd = SDCard(str(tmp_path / "sd"))
+    sd.scan()
+    monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm, "image_model", lambda: "m")
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+    front = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes(color=(0, 0, 200)), KIND_ONLINE)
+    dialog._add_candidate(front, select=True)
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_AI)
+    dialog._back_front = cm.SideSource(front)
+    monkeypatch.setattr(dialog, "_set_card_cover", lambda: None)  # nur die Zuordnung pruefen
+    dialog._on_back_generated(Image.new("RGB", (400, 600), (9, 9, 9)))
+    generated = [c for c in dialog.candidates if c.section == cm.SECTION_NEW][0]
+
+    # neue Version anklicken: Zuordnung bleibt, kein erneutes Erzeugen noetig
+    dialog.gallery.setCurrentRow(dialog.gallery.count() - 1)
+    assert dialog.selected is generated
+    assert not dialog._needs_ai_back()
+    assert dialog._back_source_image(generated).size == (400, 600)
+    assert "wiederverwendet" in dialog.back_source_label.text()
+
+    # Haken "neu erzeugen" -> beim Uebernehmen wird wieder erzeugt
+    dialog.back_regenerate_check.setChecked(True)
+    assert dialog._needs_ai_back()
+    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    dialog.done(0)
