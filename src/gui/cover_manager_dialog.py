@@ -487,6 +487,7 @@ class CoverManagerDialog(QDialog):
         inner = QWidget()
         tab.setWidget(inner)
         tab_layout = QVBoxLayout(inner)
+        tab_layout.setContentsMargins(8, 8, 14, 8)  # rechts Platz fuer die Scrollleiste
         form = QFormLayout()
         tab_layout.addLayout(form)
         tab_layout.addStretch(1)
