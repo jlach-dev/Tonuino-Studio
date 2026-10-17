@@ -760,7 +760,12 @@ class CoverManagerDialog(QDialog):
     def _on_item_selected(self, item: Optional[QListWidgetItem], _previous=None):
         if item is None:
             return
-        self.selected = item.data(Qt.ItemDataRole.UserRole)
+        candidate = item.data(Qt.ItemDataRole.UserRole)
+        if candidate is not self.selected:
+            # Ein Klick bestimmt die Vorderseite neu; eine explizit gewaehlte
+            # Rueckseite bleibt dagegen bestehen
+            self.front_source = None
+        self.selected = candidate
         self.selection_label.setText(self._item_tooltip(self.selected).replace("\n", " · "))
         self._update_side_controls()
         self._render_preview()

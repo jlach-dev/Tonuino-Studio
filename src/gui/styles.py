@@ -645,17 +645,17 @@ QSpinBox, QDoubleSpinBox {
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
     width: 0px;
     height: 0px;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-bottom: 5px solid @TEXT@;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 6px solid @TEXT@;
 }
 
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
     width: 0px;
     height: 0px;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid @TEXT@;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid @TEXT@;
 }
 
 QSpinBox::up-arrow:disabled, QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:off {
