@@ -301,6 +301,10 @@ class MainWindow(QMainWindow):
         self.action_card_cover.triggered.connect(self._open_card_cover_dialog)
         self.action_card_cover_batch = cover_menu.addAction("Kartencover für alle Ordner ohne Cover …")
         self.action_card_cover_batch.triggered.connect(self._generate_missing_card_covers)
+        self.action_series_cover_batch = cover_menu.addAction("Kartencover für alle Folgen der Serie ohne Cover …")
+        self.action_series_cover_batch.setToolTip("Serie wählen – alle Ordner dieser Hörspielreihe ohne Kartencover "
+                                                  "bekommen ein KI-Cover mit den Anker-Bildern und der Stilbibel")
+        self.action_series_cover_batch.triggered.connect(self._generate_series_card_covers)
         self.action_print_sheet = cover_menu.addAction("Druckbogen (PDF) erstellen …")
         self.action_print_sheet.triggered.connect(self._open_print_sheet_dialog)
         cover_menu.addSeparator()
@@ -1469,7 +1473,81 @@ class MainWindow(QMainWindow):
                 f"Geschätzte Kosten: ca. {len(folders) * ESTIMATED_COST_PER_IMAGE:.2f} USD. Fortfahren?",
                 default_no=False):
             return
+        self._start_cover_batch(folders, client, style, orientation, archive=get_archive(self))
 
+    def _series_folders(self, profile, archive) -> list:
+        """Ordner ohne Kartencover, die zur Serie gehoeren: ueber die Album-ID im
+        Archiv zugeordnet oder mit erkannter Reihe gleichen Namens (Tags)"""
+        from core import album_identity
+        from core.series import detect_series, normalize_series_name
+        key = normalize_series_name(profile.name)
+        result = []
+        for _, folder in sorted(self.sd_card.folders.items()):
+            if not folder.tracks or folder.card_path or self._is_special_folder(folder):
+                continue
+            album_id = album_identity.read_album_id([t.filepath for t in folder.tracks])
+            record = archive.load_album(album_id) if album_id else None
+            if record is not None and record.series_id:
+                if record.series_id == profile.id:
+                    result.append(folder)
+                continue
+            info = gather_folder_info(folder, self.metadata_manager, max_titles=5)
+            name, _mb = detect_series(info, lookup=lambda _rg: [])
+            if name and normalize_series_name(name) == key:
+                result.append(folder)
+        return result
+
+    def _generate_series_card_covers(self):
+        """Alle Folgen einer Serie ohne Kartencover: KI-Cover mit Ankern und Stilbibel"""
+        if not self._require_sd_card():
+            return
+        if self._cover_batch_worker is not None and self._cover_batch_worker.isRunning():
+            return
+        archive = get_archive(self)
+        if archive is None:
+            return
+        profiles = archive.series.list_all()
+        if not profiles:
+            QMessageBox.information(self, "Keine Serien", "Es gibt noch keine Serienprofile – im Cover-Manager "
+                                                           "im Tab „Serie“ eine Serie anlegen und Anker-Bilder setzen.")
+            return
+        names = [p.name for p in profiles]
+        name, ok = QInputDialog.getItem(self, "Serie wählen", "Hörspielreihe:", names, 0, False)
+        if not ok or name not in names:
+            return
+        profile = profiles[names.index(name)]
+        client = gemini_client()
+        if client is None:
+            QMessageBox.information(self, "Kein API-Key",
+                                    "Für die automatische Erzeugung bitte zuerst unter "
+                                    "Kartencover → KI & Online-Dienste einen Gemini-API-Key hinterlegen.")
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            folders = self._series_folders(profile, archive)
+            anchors = archive.series.anchor_images(profile, archive)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not folders:
+            QMessageBox.information(self, "Nichts zu tun", f"Alle Ordner der Serie „{profile.name}“ haben bereits "
+                                                            "ein Kartencover (oder keiner gehört dazu).")
+            return
+        settings = QSettings()
+        style = profile.style or settings.value(SETTINGS_STYLE, DEFAULT_STYLE, type=str)
+        orientation = settings.value(SETTINGS_ORIENTATION, ORIENTATION_PORTRAIT, type=str)
+        orientation_label = "Hochformat" if orientation == ORIENTATION_PORTRAIT else "Querformat"
+        bible = "mit Stilbibel" if profile.style_bible.strip() else "ohne Stilbibel"
+        if not confirm_action(
+                self, "Kartencover für die Serie erzeugen",
+                f"Für {len(folders)} Ordner der Serie „{profile.name}“ wird je ein Kartencover erzeugt "
+                f"(Stil „{style}“, {orientation_label}, {len(anchors)} Anker-Bild(er), {bible}).\n\n"
+                f"Geschätzte Kosten: ca. {len(folders) * ESTIMATED_COST_PER_IMAGE:.2f} USD. Fortfahren?",
+                default_no=False):
+            return
+        self._start_cover_batch(folders, client, style, orientation, archive=archive, series_profile=profile,
+                                anchor_images=anchors)
+
+    def _start_cover_batch(self, folders: list, client, style: str, orientation: str, **worker_kwargs):
         self._release_files()
         self._cover_batch_errors = []
         self._cover_batch_dialog = QProgressDialog("Kartencover werden erzeugt …", "Abbrechen", 0, len(folders), self)
@@ -1479,7 +1557,7 @@ class MainWindow(QMainWindow):
         self._cover_batch_dialog.setValue(0)
 
         worker = CoverBatchWorker(folders, self.metadata_manager, client, text_model(), image_model(),
-                                  SOURCE_AI, style, orientation, archive=get_archive(self))
+                                  SOURCE_AI, style, orientation, **worker_kwargs)
         worker.progress.connect(self._on_card_cover_batch_progress)
         worker.folder_done.connect(self._on_card_cover_batch_folder_done)
         worker.error.connect(lambda name, msg: self._cover_batch_errors.append(f"{name}: {msg}"))

@@ -53,12 +53,53 @@ class GenerationRequest:
     # Vom Nutzer im Cover-Manager markierte Vorlagen (rohe Bilddaten). Leer =
     # Rueckfall auf brief.reference_image (Batch-Modus)
     reference_images: List[bytes] = field(default_factory=list)
+    # Serie (core/series.py): Anker-Bilder gehen immer zuerst mit (Figuren-Slots),
+    # die Stilbibel wird an den Prompt angehaengt
+    series_name: str = ""
+    series_bible: str = ""
+    anchor_images: List[bytes] = field(default_factory=list)
+
+    def anchors(self) -> List[bytes]:
+        return self.anchor_images[:MAX_REFERENCE_IMAGES]
 
     def references(self) -> List[bytes]:
-        if not self.use_reference:
-            return []
-        refs = self.reference_images or ([self.brief.reference_image] if self.brief.reference_image else [])
-        return refs[:MAX_REFERENCE_IMAGES]
+        """Anker zuerst, dann die Vorlagen des Nutzers; zusammen hoechstens
+        MAX_REFERENCE_IMAGES (Anker gewinnen), Dubletten nur einmal"""
+        anchors = self.anchors()
+        refs: List[bytes] = []
+        if self.use_reference:
+            refs = self.reference_images or ([self.brief.reference_image] if self.brief.reference_image else [])
+        result = list(anchors)
+        for ref in refs:
+            if ref not in result and len(result) < MAX_REFERENCE_IMAGES:
+                result.append(ref)
+        return result
+
+    @property
+    def has_series(self) -> bool:
+        return bool(self.anchor_images or self.series_bible.strip())
+
+
+def series_prompt_lines(req: GenerationRequest, extra_refs: int) -> List[str]:
+    """Prompt-Zeilen fuer Serien-Konsistenz: Stilbibel und Anker-Hinweis"""
+    lines = []
+    anchors = len(req.anchors())
+    if req.series_bible.strip():
+        label = f" for the series \"{req.series_name}\"" if req.series_name else ""
+        lines.append(f"Series style bible{label} (German, binding for characters, style and colors):\n"
+                     f"{req.series_bible.strip()}")
+    if anchors:
+        text = (f"The first {anchors} attached image(s) are the series reference images (character sheet or "
+                "earlier covers of the same series): use exactly the same characters, illustration style and "
+                "palette as the reference images, so this card is instantly recognizable as part of the series.")
+        if extra_refs:
+            text += (f" The remaining {extra_refs} attached image(s) show this episode's original cover: take "
+                     "subject, mood and composition hints from them, without their text.")
+        lines.append(text)
+    elif req.series_bible.strip():
+        lines.append("Keep exactly the same characters, illustration style and palette as described in the "
+                     "style bible, so the card is recognizable as part of the series.")
+    return lines
 
 
 def build_prompt(req: GenerationRequest) -> str:
@@ -91,7 +132,10 @@ def build_prompt(req: GenerationRequest) -> str:
         "Child-friendly, cheerful, no scary or violent content.",
     ]
     refs = req.references()
-    if len(refs) == 1:
+    anchors = len(req.anchors())
+    if req.has_series:
+        lines += series_prompt_lines(req, len(refs) - anchors)
+    elif len(refs) == 1:
         lines.append("Use the attached original cover as reference for characters, mood and colors, "
                      "but recompose it as a new illustration for the card format, without its text.")
     elif refs:
@@ -211,9 +255,19 @@ def build_back_prompt(req: GenerationRequest, wish: str = "", with_tracklist: bo
         if len(work.episodes) > 1:
             hint = f"a scene from the second episode ({work.episodes[1]})"
         lines.append(f"Show {hint} - a companion to the front, not a copy of it.")
+    lines.append(f"Style: {STYLE_PRESETS.get(req.style, req.style)}; exactly the same illustration style, "
+                 "colour palette and character designs as the attached front side.")
+    if req.has_series:
+        anchors = len(req.anchors())
+        if req.series_bible.strip():
+            label = f" for the series \"{req.series_name}\"" if req.series_name else ""
+            lines.append(f"Series style bible{label} (German, binding for characters, style and colors):\n"
+                         f"{req.series_bible.strip()}")
+        if anchors:
+            lines.append(f"After the front side, {anchors} further attached image(s) are the series reference "
+                         "images (character sheet or earlier covers of the same series): use exactly the same "
+                         "characters, illustration style and palette as the reference images.")
     lines += [
-        f"Style: {STYLE_PRESETS.get(req.style, req.style)}; exactly the same illustration style, colour palette "
-        "and character designs as the attached front side.",
         "Composition: calmer and less detailed than the front; "
         + ("keep a large, even, low-contrast area in the upper two thirds where a text panel with the "
            "track list will be placed later; " if with_tracklist else "full-bleed artwork; ")
@@ -228,11 +282,13 @@ def generate_back_art(client, model: str, req: GenerationRequest, front_bytes: b
                       with_tracklist: bool = True, image_size: str = "2K") -> Image.Image:
     """Rueckseiten-Motiv vom Bildmodell, mit der Vorderseite als Referenzbild"""
     prompt = build_back_prompt(req, wish, with_tracklist)
+    # Vorderseite zuerst, danach die Anker der Serie (zusammen hoechstens MAX_REFERENCE_IMAGES)
+    images = [front_bytes] + [a for a in req.anchors() if a != front_bytes][:MAX_REFERENCE_IMAGES - 1]
     interaction = client.interactions.create(
         model=model,
-        input=[{"type": "text", "text": prompt},
-               {"type": "image", "data": base64.b64encode(front_bytes).decode("ascii"),
-                "mime_type": _sniff_mime(front_bytes)}],
+        input=[{"type": "text", "text": prompt}] + [
+            {"type": "image", "data": base64.b64encode(data).decode("ascii"), "mime_type": _sniff_mime(data)}
+            for data in images],
         response_format={"type": "image", "aspect_ratio": "2:3" if req.orientation == ORIENTATION_PORTRAIT else "3:2",
                          "image_size": image_size},
     )
