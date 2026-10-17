@@ -58,6 +58,8 @@ class OnlineCover:
     preview_url: str
     full_url: str
     page_url: str = ""
+    back_preview_url: str = ""  # Rueckseite, falls die Quelle eine liefert (Cover Art Archive)
+    back_full_url: str = ""
 
     @property
     def label(self) -> str:
@@ -165,9 +167,14 @@ def search_spotify(title: str, artist: str = "", limit: int = 6, market: str = "
 def search_musicbrainz(title: str, artist: str = "", limit: int = 6) -> List[OnlineCover]:
     result = []
     for group in musicbrainz.search_release_groups(title, artist)[:4]:
-        for image in musicbrainz.list_cover_art(group)[:1]:
+        images = musicbrainz.list_cover_art(group)
+        fronts = [i for i in images if i.front] or images[:1]
+        backs = [i for i in images if "Back" in i.types]
+        for image in fronts[:1]:
+            back = backs[0] if backs else None
             result.append(OnlineCover(SOURCE_MUSICBRAINZ, group.title, group.artist, image.url_500, image.url_1200,
-                                      f"https://musicbrainz.org/release-group/{group.id}"))
+                                      f"https://musicbrainz.org/release-group/{group.id}",
+                                      back.url_500 if back else "", back.url_1200 if back else ""))
         if len(result) >= limit:
             break
     return result
@@ -241,6 +248,7 @@ SEARCHERS = {
 def search_all(title: str, artist: str, sources: Iterable[str], page_urls: Iterable[str] = (),
                direct_urls: Iterable[str] = (), on_found: Optional[Callable[[OnlineCover, bytes], None]] = None,
                on_status: Optional[Callable[[str], None]] = None,
+               on_back: Optional[Callable[[OnlineCover, bytes], None]] = None,
                cancelled: Callable[[], bool] = lambda: False, max_total: int = 24) -> int:
     """Durchsucht die gewaehlten Quellen nacheinander, laedt die Vorschaubilder
     und meldet jedes neue (inhaltlich verschiedene) Bild ueber on_found."""
@@ -272,4 +280,8 @@ def search_all(title: str, artist: str, sources: Iterable[str], page_urls: Itera
             found += 1
             if on_found:
                 on_found(candidate, data)
+            if on_back and candidate.back_preview_url:
+                back = download_image(candidate.back_preview_url)
+                if back:
+                    on_back(candidate, back)
     return found

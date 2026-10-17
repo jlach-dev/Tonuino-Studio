@@ -303,3 +303,79 @@ def render_card(art: Image.Image, text: CardText, orientation: str,
         draw.text((x1 - box_w + pad, y0 + box_h / 2), label, font=badge_font, fill=(40, 40, 40, 255), anchor="lm")
 
     return card.convert("RGB")
+
+
+BACK_MODE_NONE = ""
+BACK_MODE_IMAGE = "image"  # Original-Rueckseite (bzw. gewaehltes Bild) ohne Text
+BACK_MODE_TRACKLIST = "tracklist"  # Bild als Hintergrund, Trackliste per Code
+
+
+def _fit_list_font(draw, lines: List[str], font_path: Optional[str], max_width: int, max_height: int,
+                   start_size: int, min_size: int):
+    """Groesste Schriftgroesse, mit der alle Zeilen (ohne Umbruch) in die Box passen"""
+    size = start_size
+    while True:
+        font = _load_font(font_path, size)
+        line_height = round(size * 1.3)
+        if (len(lines) * line_height <= max_height
+                and all(draw.textlength(line, font=font) <= max_width for line in lines)) or size <= min_size:
+            return font, line_height
+        size -= 1
+
+
+def render_back_card(art: Image.Image, orientation: str, heading: str = "", lines: Optional[List[str]] = None,
+                     spec: Optional[CardSpec] = None, with_bleed: bool = True, dpi: int = DPI) -> Image.Image:
+    """Rueckseite: das Bild randabfallend; mit lines kommt ein halbtransparentes
+    Feld (so hoch wie der Inhalt) mit Ueberschrift und Trackliste darueber.
+    Die Schrift passt sich an, zu lange Zeilen werden gekuerzt (max. ~25 Zeilen)."""
+    spec = spec or CardSpec()
+    size = spec.size_px(orientation, with_bleed, dpi)
+    card = fit_art(art, size).convert("RGBA")
+    lines = [line.strip() for line in (lines or []) if line.strip()][:25]
+    heading = heading.strip()
+    if not lines and not heading:
+        return card.convert("RGB")
+
+    bleed = mm_to_px(spec.bleed_mm, dpi) if with_bleed else 0
+    safe = bleed + mm_to_px(spec.safe_mm, dpi)
+    width, height = size
+    pad = mm_to_px(2.0, dpi)
+    max_width = width - 2 * safe - 2 * pad
+    draw = ImageDraw.Draw(card)
+    font_path = find_title_font()
+
+    # 1. Textblock bemessen
+    head_font = head_height = None
+    if heading:
+        head_font, head_height = _fit_list_font(draw, [heading], font_path, max_width, height,
+                                                start_size=mm_to_px(3.4, dpi), min_size=mm_to_px(2.2, dpi))
+        heading = _truncate(draw, heading, head_font, max_width) \
+            if draw.textlength(heading, font=head_font) > max_width else heading
+        head_height = round(head_height * 1.15)
+    available = height - 2 * safe - 2 * pad - (head_height or 0)
+    font = line_height = None
+    if lines:
+        font, line_height = _fit_list_font(draw, lines, font_path, max_width, available,
+                                           start_size=mm_to_px(2.6, dpi), min_size=mm_to_px(1.4, dpi))
+        lines = lines[:max(1, available // line_height)]
+    content_height = (head_height or 0) + (len(lines) * line_height if lines else 0)
+
+    # 2. Feld nur so hoch wie der Inhalt
+    panel = (safe, safe, width - safe, min(height - safe, safe + 2 * pad + content_height))
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(overlay).rounded_rectangle(panel, radius=mm_to_px(2.5, dpi), fill=(0, 0, 0, 165))
+    card.alpha_composite(overlay)
+
+    # 3. Text
+    draw = ImageDraw.Draw(card)
+    x, y = panel[0] + pad, panel[1] + pad
+    if heading:
+        draw.text((x, y), heading, font=head_font, fill=(255, 255, 255, 255))
+        y += head_height
+    for line in lines:
+        text = line
+        if draw.textlength(text, font=font) > max_width:
+            text = _truncate(draw, text, font, max_width)
+        draw.text((x, y), text, font=font, fill=(235, 235, 235, 255))
+        y += line_height
+    return card.convert("RGB")

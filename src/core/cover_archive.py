@@ -93,6 +93,7 @@ class CoverEntry:
     model: str = ""
     style: str = ""
     roles: List[str] = field(default_factory=list)
+    back_file: str = ""  # zugehoerige Rueckseite (optional)
     width: int = 0
     height: int = 0
     created: str = ""
@@ -210,11 +211,42 @@ class CoverArchive:
         self._save_covers(album_id, self.covers(album_id) + [entry])
         return entry
 
+    def back_path(self, album_id: str, entry: CoverEntry) -> Optional[Path]:
+        return self._album_dir(album_id) / "covers" / entry.back_file if entry.back_file else None
+
+    def set_back(self, album_id: str, cover_id: str, data: Optional[bytes]) -> Optional[CoverEntry]:
+        """Haengt eine Rueckseite an ein Cover (None entfernt sie)"""
+        entries = self.covers(album_id)
+        for entry in entries:
+            if entry.id != cover_id:
+                continue
+            old = self.back_path(album_id, entry)
+            if old is not None:
+                old.unlink(missing_ok=True)
+            if data:
+                entry.back_file = f"{entry.id}_back{_sniff_extension(data)}"
+                self.back_path(album_id, entry).write_bytes(bytes(data))
+            else:
+                entry.back_file = ""
+            self._save_covers(album_id, entries)
+            return entry
+        return None
+
+    def load_back_bytes(self, album_id: str, entry: CoverEntry) -> Optional[bytes]:
+        path = self.back_path(album_id, entry)
+        try:
+            return path.read_bytes() if path is not None else None
+        except OSError:
+            return None
+
     def delete_cover(self, album_id: str, cover_id: str):
         entries = self.covers(album_id)
         for entry in entries:
             if entry.id == cover_id:
                 self.cover_path(album_id, entry).unlink(missing_ok=True)
+                back = self.back_path(album_id, entry)
+                if back is not None:
+                    back.unlink(missing_ok=True)
         self._save_covers(album_id, [e for e in entries if e.id != cover_id])
 
     def set_role(self, album_id: str, cover_id: str, role: str, exclusive: bool = True):

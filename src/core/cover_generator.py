@@ -155,3 +155,31 @@ def generate_art(source: str, req: GenerationRequest, client=None, model: str = 
     if client is None:
         raise ValueError("Kein Gemini-API-Key hinterlegt")
     return generate_ai_art(client, model, req)
+
+
+EXTEND_PROMPT = (
+    "Extend (outpaint) the attached image to a {shape} format. Keep the original image completely unchanged "
+    "and centered at its full size; only continue the background, colors and textures naturally beyond its "
+    "edges so the result is one seamless picture. Do not add new text, letters, logos, characters or objects."
+)
+
+
+def extend_to_card(client, model: str, image_bytes: bytes, orientation: str, image_size: str = "2K") -> Image.Image:
+    """Original-Cover/-Rueckseite per Bildmodell auf das Kartenformat erweitern
+    (statt zu beschneiden oder Ambient Blur). Ein API-Aufruf, ohne Recherche."""
+    portrait = orientation == ORIENTATION_PORTRAIT
+    prompt = EXTEND_PROMPT.format(shape="tall portrait 2:3" if portrait else "wide landscape 3:2")
+    interaction = client.interactions.create(
+        model=model,
+        input=[{"type": "text", "text": prompt},
+               {"type": "image", "data": base64.b64encode(image_bytes).decode("ascii"),
+                "mime_type": _sniff_mime(image_bytes)}],
+        response_format={"type": "image", "aspect_ratio": "2:3" if portrait else "3:2", "image_size": image_size},
+    )
+    image = getattr(interaction, "output_image", None)
+    if image is None or not getattr(image, "data", None):
+        raise RuntimeError("Das Modell hat kein Bild geliefert")
+    data = image.data if isinstance(image.data, bytes) else base64.b64decode(image.data)
+    with Image.open(io.BytesIO(data)) as img:
+        img.load()
+        return img.convert("RGB")

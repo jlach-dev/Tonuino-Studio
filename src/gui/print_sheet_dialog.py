@@ -7,7 +7,7 @@ from typing import List
 from PIL import Image
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtWidgets import (
-    QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+    QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSpinBox, QVBoxLayout,
 )
 
@@ -62,6 +62,11 @@ class PrintSheetDialog(QDialog):
         self.copies_spin = QSpinBox()
         self.copies_spin.setRange(1, 10)
         form.addRow("Exemplare je Karte:", self.copies_spin)
+
+        self.backs_check = QCheckBox("Rückseiten mitdrucken (als weitere Etiketten nach den Vorderseiten)")
+        self.backs_check.setChecked(any(card_store.has_back(f.path) for f in self.folders))
+        self.backs_check.setEnabled(self.backs_check.isChecked())
+        form.addRow("", self.backs_check)
 
         self.start_spin = QSpinBox()
         self.start_spin.setToolTip("Für angebrochene Bögen: erstes freies Etikett (zeilenweise von links oben)")
@@ -125,6 +130,7 @@ class PrintSheetDialog(QDialog):
         Rohmotiv (card_art_raw.png) - faellt sonst auf card.png zurueck."""
         spec = self._template().card_spec()
         items = []
+        backs = []
         for row in range(self.folder_list.count()):
             item = self.folder_list.item(row)
             if item.checkState() != Qt.CheckState.Checked:
@@ -138,7 +144,12 @@ class PrintSheetDialog(QDialog):
                 with Image.open(folder.card_path) as img:
                     image = img.convert("RGB")
             items.extend([SheetItem(image, meta.orientation)] * self.copies_spin.value())
-        return items
+            if self.backs_check.isChecked():
+                back_raw = card_store.load_back_raw(folder.path)
+                if back_raw is not None:
+                    back = card_store.render_back_from_meta(back_raw, meta, spec)
+                    backs.extend([SheetItem(back, meta.orientation)] * self.copies_spin.value())
+        return items + backs
 
     def _export(self, test_page: bool):
         template = self._template()

@@ -27,12 +27,15 @@ from PyQt6.QtWidgets import (
 
 from core import ai_settings, album_identity, card_store, cover_sources
 from core.card_text import derive_card_text, describe_work
-from core.card_layout import ORIENTATION_PORTRAIT, album_cover_jpeg, prepare_card_art
+from core.card_layout import (
+    BACK_MODE_IMAGE, BACK_MODE_NONE, BACK_MODE_TRACKLIST, ORIENTATION_PORTRAIT, album_cover_jpeg, prepare_card_art,
+)
 from core.cover_archive import (
     KIND_AI, KIND_FILE, KIND_LOCAL, KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive, CoverEntry, sha1,
 )
 from core.cover_generator import (
     DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, MAX_REFERENCE_IMAGES, SOURCE_AI, STYLE_PRESETS, GenerationRequest,
+    extend_to_card,
 )
 from core.cover_research import CoverBrief, FolderInfo, gather_folder_info, suggest_search_title
 from core.sd_card import Folder
@@ -118,7 +121,22 @@ class Candidate:
     is_sd_card_art: bool = False  # das aktuelle Kartenmotiv von der SD-Karte (card_art_raw.png)
     is_album_cover: bool = False  # das aktuell eingebettete Album-Cover
     reference: bool = False  # Vorlage fuer die KI
+    back_data: Optional[bytes] = None  # zugehoerige Rueckseite (Cover Art Archive, Datei, Archiv, SD)
     _image: Optional[Image.Image] = None
+    _back_image: Optional[Image.Image] = None
+
+    @property
+    def has_back(self) -> bool:
+        return self.back_data is not None
+
+    def back_image(self) -> Optional[Image.Image]:
+        if self.back_data is None:
+            return None
+        if self._back_image is None:
+            with Image.open(io.BytesIO(self.back_data)) as img:
+                img.load()
+                self._back_image = img.convert("RGB")
+        return self._back_image
 
     @property
     def kept(self) -> bool:
@@ -141,6 +159,7 @@ def _pil_bytes(image: Image.Image) -> bytes:
 class OnlineCoverSearchWorker(QThread):
     """Durchsucht die gewaehlten Quellen und meldet jedes gefundene Bild"""
     found = pyqtSignal(object, bytes)  # OnlineCover, Bilddaten
+    back_found = pyqtSignal(object, bytes)  # OnlineCover, Rueckseite
     status = pyqtSignal(str)
     completed = pyqtSignal(int)
 
@@ -160,7 +179,8 @@ class OnlineCoverSearchWorker(QThread):
         try:
             count = cover_sources.search_all(
                 self.title, self.artist, self.sources, self.page_urls, self.direct_urls,
-                on_found=self.found.emit, on_status=self.status.emit, cancelled=lambda: self._cancelled)
+                on_found=self.found.emit, on_status=self.status.emit, cancelled=lambda: self._cancelled,
+                on_back=self.back_found.emit)
             self.status.emit(f"{count} Cover gefunden" if count else "Keine Cover gefunden – Suchbegriff anpassen?")
         except Exception as e:
             log.exception("Cover-Suche fehlgeschlagen")
@@ -226,6 +246,18 @@ class CoverManagerDialog(QDialog):
         self.preview.setMinimumSize(380, 300)
         self.preview.setStyleSheet("border: 1px dashed palette(mid); border-radius: 8px;")
         left.addWidget(self.preview, 1)
+
+        side_row = QHBoxLayout()
+        self.side_bar = QTabBar()
+        self.side_bar.setDrawBase(False)
+        self.side_bar.setObjectName("galleryFilter")
+        self.side_bar.addTab("Vorderseite")
+        self.side_bar.addTab("Rückseite")
+        self.side_bar.currentChanged.connect(self._render_preview)
+        side_row.addStretch(1)
+        side_row.addWidget(self.side_bar)
+        side_row.addStretch(1)
+        left.addLayout(side_row)
 
         self.selection_label = QLabel()
         self.selection_label.setWordWrap(True)
@@ -296,7 +328,7 @@ class CoverManagerDialog(QDialog):
         left.addLayout(mark_bar)
 
         hint = QLabel("Klick = groß anzeigen · Haken = markieren · ★ im Archiv · ○ nicht gespeichert "
-                      "(verschwindet beim Schließen) · ◆ KI-Vorlage · ♪ Album-Cover · ▭ Kartencover")
+                      "(verschwindet beim Schließen) · ◆ KI-Vorlage · ♪ Album-Cover · ▭ Kartencover · ⧉ mit Rückseite")
         hint.setObjectName("folderMeta")
         hint.setWordWrap(True)
         left.addWidget(hint)
@@ -419,12 +451,65 @@ class CoverManagerDialog(QDialog):
         self.number_check.toggled.connect(self._render_preview)
         form.addRow("", self.number_check)
 
+        back_title = QLabel("Rückseite")
+        back_title.setObjectName("sectionTitle")
+        form.addRow(back_title)
+        self.back_mode_combo = QComboBox()
+        self.back_mode_combo.addItem("Keine", BACK_MODE_NONE)
+        self.back_mode_combo.addItem("Original-Rückseite / gewähltes Bild", BACK_MODE_IMAGE)
+        self.back_mode_combo.addItem("Trackliste auf Bild", BACK_MODE_TRACKLIST)
+        self.back_mode_combo.currentIndexChanged.connect(self._on_back_mode_changed)
+        form.addRow("Rückseite:", self.back_mode_combo)
+        self.back_source_label = QLabel()
+        self.back_source_label.setObjectName("folderMeta")
+        self.back_source_label.setWordWrap(True)
+        form.addRow("", self.back_source_label)
+        back_buttons = QHBoxLayout()
+        self.btn_back_pick = QPushButton("Angeklicktes Bild als Rückseite")
+        self.btn_back_pick.setObjectName("ghostButton")
+        self.btn_back_pick.setToolTip("Das in der Galerie angeklickte Bild als Rückseiten-Motiv verwenden")
+        self.btn_back_pick.clicked.connect(self._pick_back_source)
+        self.btn_back_file = QPushButton("Rückseite aus Datei …")
+        self.btn_back_file.setObjectName("ghostButton")
+        self.btn_back_file.clicked.connect(self._add_back_file)
+        self.btn_back_reset = QPushButton("Zurücksetzen")
+        self.btn_back_reset.setObjectName("ghostButton")
+        self.btn_back_reset.setToolTip("Wieder die Rückseite des Vorderseiten-Covers verwenden")
+        self.btn_back_reset.clicked.connect(lambda: self._set_back_source(None))
+        for button in (self.btn_back_pick, self.btn_back_file, self.btn_back_reset):
+            back_buttons.addWidget(button)
+        back_buttons.addStretch(1)
+        form.addRow("", back_buttons)
+        self.back_extend_check = QCheckBox("Rand per KI ergänzen statt Ambient Blur (1 Bildaufruf)")
+        self.back_extend_check.setToolTip("Quadratische Rückseiten werden vom Bildmodell auf das Kartenformat "
+                                          "erweitert; die Vorschau zeigt bis zum Speichern den Ambient Blur")
+        form.addRow("", self.back_extend_check)
+        self.back_heading_edit = QLineEdit()
+        self.back_heading_edit.setPlaceholderText("Überschrift, z.B. Reihe · Titel")
+        self.back_heading_edit.textChanged.connect(self._render_preview)
+        form.addRow("Überschrift:", self.back_heading_edit)
+        self.back_lines_edit = QPlainTextEdit()
+        self.back_lines_edit.setPlaceholderText("Eine Zeile je Track")
+        self.back_lines_edit.setFixedHeight(90)
+        self.back_lines_edit.textChanged.connect(self._render_preview)
+        form.addRow("Trackliste:", self.back_lines_edit)
+        self.btn_back_from_tags = QPushButton("Trackliste aus Tags")
+        self.btn_back_from_tags.setObjectName("ghostButton")
+        self.btn_back_from_tags.clicked.connect(self._fill_back_from_tags)
+        form.addRow("", self.btn_back_from_tags)
+        self.back_source: Optional[Candidate] = None
+
         meta = self._card_meta
         self.title_edit.setPlainText(meta.title if meta else self.folder_name)
         if meta:
             self.series_edit.setText(meta.series)
             _select_data(self.orientation_combo, meta.orientation)
             self.number_check.setChecked(meta.show_number)
+            _select_data(self.back_mode_combo, meta.back_mode)
+            self.back_extend_check.setChecked(meta.back_extended)
+            self.back_heading_edit.setText(meta.back_heading)
+            self.back_lines_edit.setPlainText("\n".join(meta.back_lines))
+        self._on_back_mode_changed()
         return tab
 
     def _ai_tab(self) -> QWidget:
@@ -544,6 +629,8 @@ class CoverManagerDialog(QDialog):
                 marks += "♪"
             if ROLE_CARD_COVER in candidate.entry.roles:
                 marks += "▭"
+        if candidate.has_back:
+            marks += "⧉"
         short = candidate.online.source if candidate.online is not None else candidate.label
         return (f"{marks} {short}" if marks else short)[:28]
 
@@ -551,6 +638,8 @@ class CoverManagerDialog(QDialog):
     def _item_tooltip(candidate: Candidate) -> str:
         width, height = candidate.image().size
         text = f"{candidate.label}\n{width} × {height} px"
+        if candidate.has_back:
+            text += "\nmit Rückseite"
         if candidate.online is not None and candidate.online.page_url:
             text += f"\n{candidate.online.page_url}"
         return text
@@ -605,8 +694,11 @@ class CoverManagerDialog(QDialog):
         raw_path = card_store.card_paths(self.folder.path)[1]
         if raw_path.exists():
             try:
+                back_raw = card_store.back_paths(self.folder.path)[1]
                 self._add_candidate(Candidate(SECTION_CURRENT, "Kartenmotiv (SD)", raw_path.read_bytes(),
-                                              KIND_LOCAL, is_sd_card_art=True), select=True)
+                                              KIND_LOCAL, is_sd_card_art=True,
+                                              back_data=back_raw.read_bytes() if back_raw.exists() else None),
+                                    select=True)
             except OSError:
                 pass
 
@@ -618,13 +710,15 @@ class CoverManagerDialog(QDialog):
                 data = self.archive.load_bytes(self.album_id, entry)
             except OSError:
                 continue
-            self._add_candidate(Candidate(SECTION_ARCHIVE, entry.label, data, entry.kind, entry=entry))
+            self._add_candidate(Candidate(SECTION_ARCHIVE, entry.label, data, entry.kind, entry=entry,
+                                          back_data=self.archive.load_back_bytes(self.album_id, entry)))
 
     def _on_item_selected(self, item: Optional[QListWidgetItem], _previous=None):
         if item is None:
             return
         self.selected = item.data(Qt.ItemDataRole.UserRole)
         self.selection_label.setText(self._item_tooltip(self.selected).replace("\n", " · "))
+        self._update_back_controls()
         self._render_preview()
         self._update_buttons()
 
@@ -729,6 +823,7 @@ class CoverManagerDialog(QDialog):
             title, self.search_artist_edit.text().strip(), sources, list(self.brief.sources),
             list(self.brief.cover_urls))
         self._search_worker.found.connect(self._on_online_found)
+        self._search_worker.back_found.connect(self._on_online_back_found)
         self._search_worker.status.connect(self.search_status.setText)
         self._search_worker.finished.connect(self._update_buttons)
         self._search_worker.start()
@@ -761,6 +856,29 @@ class CoverManagerDialog(QDialog):
     def _on_online_found(self, cover: cover_sources.OnlineCover, data: bytes):
         self._add_candidate(Candidate(SECTION_ONLINE, cover.label, data, KIND_ONLINE, online=cover),
                             select=self.selected is None)
+
+    def _on_online_back_found(self, cover: cover_sources.OnlineCover, data: bytes):
+        for candidate in self.candidates:
+            if candidate.online is cover:
+                candidate.back_data = data
+                candidate._back_image = None
+                break
+        self._refresh_item_texts()
+        if self.selected is not None and self.selected.online is cover:
+            self._update_back_controls()
+            self._render_preview()
+
+    def _full_resolution_back(self, candidate: Candidate) -> Optional[bytes]:
+        online = candidate.online
+        if candidate.back_data is None:
+            return None
+        if online is None or not online.back_full_url or online.back_full_url == online.back_preview_url:
+            return candidate.back_data
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            return cover_sources.download_image(online.back_full_url) or candidate.back_data
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _full_resolution(self, candidate: Candidate) -> bytes:
         """Online-Bilder fuer Archiv/Verwendung in voller Groesse nachladen"""
@@ -871,6 +989,10 @@ class CoverManagerDialog(QDialog):
         else:
             entry = self.archive.add_cover(self.album_id, candidate.data, candidate.kind, source=candidate.label)
         candidate.entry = entry
+        if candidate.back_data is not None and not entry.back_file:
+            updated = self.archive.set_back(self.album_id, entry.id, self._full_resolution_back(candidate))
+            if updated is not None:
+                entry.back_file = updated.back_file
         if candidate.section in (SECTION_NEW, SECTION_ONLINE):
             candidate.section = SECTION_ARCHIVE
             self._apply_filter()
@@ -997,6 +1119,7 @@ class CoverManagerDialog(QDialog):
         if entry:
             self.archive.set_role(self.album_id, entry.id, ROLE_CARD_COVER)
             self._sync_roles()
+        back_note = self._save_back(candidate, orientation)
         self.card_changed = True
         self._card_meta = card_store.load_meta(self.folder.path)
         if current is not None and current is not candidate:
@@ -1004,7 +1127,142 @@ class CoverManagerDialog(QDialog):
             self._add_candidate(Candidate(SECTION_CURRENT, "Kartenmotiv (SD)",
                                           card_store.card_paths(self.folder.path)[1].read_bytes(),
                                           KIND_LOCAL, is_sd_card_art=True))
-        self._flash("✓ Kartencover auf der SD-Karte gespeichert (card.png).")
+        self._flash("✓ Kartencover auf der SD-Karte gespeichert (card.png)." + back_note)
+
+    # --- Rueckseite ---------------------------------------------------------------------------
+
+    def _on_back_mode_changed(self, *_):
+        mode = self.back_mode_combo.currentData()
+        is_list = mode == BACK_MODE_TRACKLIST
+        for widget in (self.back_heading_edit, self.back_lines_edit, self.btn_back_from_tags):
+            widget.setVisible(is_list)
+        self.back_extend_check.setVisible(mode == BACK_MODE_IMAGE)
+        self.back_extend_check.setEnabled(self.client is not None)
+        for widget in (self.btn_back_pick, self.btn_back_file, self.btn_back_reset, self.back_source_label):
+            widget.setVisible(mode != BACK_MODE_NONE)
+        if is_list and not self.back_lines_edit.toPlainText().strip():
+            self._fill_back_from_tags()
+        self._update_back_controls()
+        self.side_bar.setCurrentIndex(1 if mode != BACK_MODE_NONE else 0)
+        self._render_preview()
+
+    def _fill_back_from_tags(self):
+        heading = " · ".join(p for p in (self.series_edit.text().strip(),
+                                         self.title_edit.toPlainText().strip().replace("\n", " / ")) if p)
+        self.back_heading_edit.setText(heading)
+        titles = self.info.titles or [t.display_name for t in self.folder.tracks]
+        self.back_lines_edit.setPlainText("\n".join(
+            f"{i:02d}. {t.split(' | ')[0]}" for i, t in enumerate(titles, start=1)))
+
+    def _set_back_source(self, candidate: Optional[Candidate]):
+        self.back_source = candidate
+        self._update_back_controls()
+        self.side_bar.setCurrentIndex(1)
+        self._render_preview()
+
+    def _pick_back_source(self):
+        if self.selected is not None:
+            self._set_back_source(self.selected)
+
+    def _add_back_file(self):
+        """Datei vom PC als Rueckseite des angeklickten Covers"""
+        if self.selected is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Rückseite auswählen", "", "Bilder (*.jpg *.jpeg *.png *.webp)")
+        if not path:
+            return
+        try:
+            data = Path(path).read_bytes()
+            Image.open(io.BytesIO(data)).verify()
+        except Exception as e:
+            QMessageBox.warning(self, "Bild nicht lesbar", str(e))
+            return
+        self.selected.back_data = data
+        self.selected._back_image = None
+        if self.selected.entry is not None and self.archive is not None:
+            self.archive.set_back(self.album_id, self.selected.entry.id, data)
+        self.back_source = None
+        self._refresh_item_texts()
+        self._update_back_controls()
+        self.side_bar.setCurrentIndex(1)
+        self._render_preview()
+
+    def _back_source_image(self, front: Optional[Candidate]) -> Optional[Image.Image]:
+        """Bildquelle fuer die Rueckseite: explizit gewaehltes Bild, sonst die
+        Rueckseite des Vorderseiten-Covers, bei Trackliste sonst dessen Vorderseite"""
+        if self.back_source is not None:
+            return self.back_source.image()
+        if front is None:
+            return None
+        if front.has_back:
+            return front.back_image()
+        if self.back_mode_combo.currentData() == BACK_MODE_TRACKLIST:
+            return front.image()
+        return None
+
+    def _update_back_controls(self):
+        mode = self.back_mode_combo.currentData()
+        front = self.selected
+        if self.back_source is not None:
+            text = f"Rückseiten-Motiv: {self.back_source.label}"
+        elif front is not None and front.has_back:
+            text = "Rückseiten-Motiv: Rückseite des angeklickten Covers"
+        elif mode == BACK_MODE_TRACKLIST and front is not None:
+            text = "Rückseiten-Motiv: Vorderseite des angeklickten Covers (keine eigene Rückseite vorhanden)"
+        elif mode == BACK_MODE_IMAGE:
+            text = "Keine Rückseite vorhanden – anderes Bild wählen oder „Rückseite aus Datei …“"
+        else:
+            text = ""
+        self.back_source_label.setText(text)
+        self.btn_back_reset.setEnabled(self.back_source is not None)
+        self.btn_back_pick.setEnabled(front is not None)
+        self.btn_back_file.setEnabled(front is not None)
+        has_back = mode != BACK_MODE_NONE and self._back_source_image(front) is not None
+        self.side_bar.setTabEnabled(1, has_back or mode != BACK_MODE_NONE)
+
+    def _back_meta(self, meta: card_store.CardMeta, extended: bool) -> card_store.CardMeta:
+        meta.back_mode = self.back_mode_combo.currentData()
+        meta.back_heading = self.back_heading_edit.text().strip()
+        meta.back_lines = [l for l in self.back_lines_edit.toPlainText().splitlines() if l.strip()]
+        meta.back_extended = extended
+        meta.back_archive_cover_id = (self.back_source.entry.id if self.back_source is not None
+                                      and self.back_source.entry is not None else "")
+        return meta
+
+    def _save_back(self, front: Candidate, orientation: str) -> str:
+        """Schreibt (oder entfernt) die Rueckseite passend zur Einstellung; gibt einen Hinweis zurueck"""
+        mode = self.back_mode_combo.currentData()
+        meta = card_store.load_meta(self.folder.path)
+        if meta is None:
+            return ""
+        if mode == BACK_MODE_NONE:
+            card_store.delete_back(self.folder.path, meta)
+            return ""
+        source = self._back_source_image(front)
+        if source is None:
+            card_store.delete_back(self.folder.path, meta)
+            return " Keine Rückseite gespeichert (kein Rückseiten-Bild vorhanden)."
+        extended = False
+        if (mode == BACK_MODE_IMAGE and self.back_extend_check.isChecked() and self.client is not None
+                and source.size != prepare_card_art(source, orientation).size):
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                source = extend_to_card(self.client, image_model(), _pil_bytes(source), orientation)
+                extended = True
+            except Exception as e:
+                QMessageBox.warning(self, "Rand nicht ergänzt", f"KI-Erweiterung fehlgeschlagen, es wird der "
+                                                                 f"Ambient Blur verwendet:\n{e}")
+            finally:
+                QApplication.restoreOverrideCursor()
+        art = prepare_card_art(source, orientation)
+        try:
+            card_store.save_back(self.folder.path, art, self._back_meta(meta, extended))
+        except OSError as e:
+            return f" Rückseite nicht gespeichert: {e}"
+        if front.is_sd_card_art:
+            front.back_data, front._back_image = _pil_bytes(art), None
+            self._refresh_item_texts()
+        return " Rückseite gespeichert (card_back.png)."
 
     def _card_art_archived(self) -> bool:
         """Liegt das aktuelle SD-Kartenmotiv schon im Archiv?"""
@@ -1042,8 +1300,18 @@ class CoverManagerDialog(QDialog):
         if self.selected is None:
             return
         try:
-            art = prepare_card_art(self.selected.image(), self.orientation_combo.currentData())
-            card = card_store.render_from_meta(art, self._card_meta_now(None), self.folder.index)
+            orientation = self.orientation_combo.currentData()
+            if self.side_bar.currentIndex() == 1:
+                source = self._back_source_image(self.selected)
+                if source is None or self.back_mode_combo.currentData() == BACK_MODE_NONE:
+                    self.preview.clear()
+                    self.preview.setText("Keine Rückseite – im Tab „Karte“ unter „Rückseite“ einstellen")
+                    return
+                meta = self._back_meta(self._card_meta_now(None), False)
+                card = card_store.render_back_from_meta(prepare_card_art(source, orientation), meta)
+            else:
+                art = prepare_card_art(self.selected.image(), orientation)
+                card = card_store.render_from_meta(art, self._card_meta_now(None), self.folder.index)
         except Exception as e:
             self.preview.setText(f"Vorschau nicht möglich: {e}")
             return
