@@ -1,10 +1,12 @@
 """
 Cover-Manager: alle Cover eines Albums an einem Ort
 
-Links eine Galerie (Aktuell, MusicBrainz, Archiv, Neu), rechts Kartenvorschau,
-Kartenoptionen und KI-Erzeugung. Jedes Bild kann als Vorlage fuer die KI
-markiert, als Album-Cover (quadratisch, in die MP3s) oder als Kartencover
-(85,6 x 54 mm, auf die SD-Karte) gesetzt und im Archiv behalten werden.
+Links grosse Kartenvorschau, darunter Aktionen und eine kompakte Galerie
+(Filter: Alle / Aktuell / Online / Archiv / Neu). Rechts Tabs fuer
+Cover-Suche (Deezer, iTunes, MusicBrainz, Recherche-Quellen), Kartenoptionen
+und KI-Erzeugung. Jedes Bild kann als Vorlage fuer die KI markiert, als
+Album-Cover (quadratisch, in die MP3s) oder als Kartencover (85,6 x 54 mm,
+auf die SD-Karte) gesetzt und im Archiv behalten werden.
 """
 
 import io
@@ -19,20 +21,19 @@ from PyQt6.QtCore import Qt, QSettings, QSize, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
+    QTabBar, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from core import ai_settings, album_identity, card_store, musicbrainz
+from core import ai_settings, album_identity, card_store, cover_sources
 from core.card_layout import ORIENTATION_PORTRAIT, album_cover_jpeg, prepare_card_art
 from core.cover_archive import (
-    KIND_AI, KIND_FILE, KIND_LOCAL, KIND_MUSICBRAINZ, ROLE_ALBUM_COVER, ROLE_CARD_COVER,
-    CoverArchive, CoverEntry,
+    KIND_AI, KIND_FILE, KIND_LOCAL, KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive, CoverEntry,
 )
 from core.cover_generator import (
     DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, MAX_REFERENCE_IMAGES, SOURCE_AI, STYLE_PRESETS, GenerationRequest,
 )
-from core.cover_research import CoverBrief, FolderInfo
+from core.cover_research import CoverBrief, FolderInfo, suggest_search_title
 from core.sd_card import Folder
 from gui.card_cover_dialog import (
     ORIENTATIONS, _select_data, gemini_client, image_model, pil_to_pixmap, text_model,
@@ -43,11 +44,21 @@ from gui.workers import CoverGenerateWorker, CoverResearchWorker
 log = logging.getLogger(__name__)
 
 SETTINGS_DATA_DIR = "library/data_dir"
+SETTINGS_SOURCES = "covers/search_sources"
 
 SECTION_CURRENT = "current"
-SECTION_MB = "mb"
+SECTION_ONLINE = "online"
 SECTION_ARCHIVE = "archive"
 SECTION_NEW = "new"
+
+# Filter der Galerie (Reihenfolge = Tabs)
+FILTERS = [
+    ("Alle", None),
+    ("Aktuell", SECTION_CURRENT),
+    ("Online", SECTION_ONLINE),
+    ("Archiv", SECTION_ARCHIVE),
+    ("Neu", SECTION_NEW),
+]
 
 
 # --- Datenordner ----------------------------------------------------------------------------
@@ -69,7 +80,7 @@ def get_archive(parent=None, ask: bool = True) -> Optional[CoverArchive]:
         box = QMessageBox(parent)
         box.setIcon(QMessageBox.Icon.Question)
         box.setWindowTitle("Datenordner der Bibliothek")
-        box.setText("Cover-Varianten, MusicBrainz-Zuordnungen und Serienprofile werden in einem "
+        box.setText("Cover-Varianten, Album-Zuordnungen und Serienprofile werden in einem "
                     f"zentralen Datenordner gespeichert:\n\n{suggestion}")
         btn_ok = box.addButton("Übernehmen", QMessageBox.ButtonRole.AcceptRole)
         btn_other = box.addButton("Anderen Ordner wählen …", QMessageBox.ButtonRole.ActionRole)
@@ -97,10 +108,10 @@ class Candidate:
     """Ein Bild in der Galerie"""
     section: str
     label: str
-    data: bytes  # Anzeige-/Vorlagenqualitaet (MusicBrainz: 500 px)
+    data: bytes  # Anzeige-/Vorlagenqualitaet
     kind: str
     entry: Optional[CoverEntry] = None  # im Archiv vorhanden
-    mb_image: Optional[musicbrainz.CoverArtImage] = None
+    online: Optional[cover_sources.OnlineCover] = None
     meta: Dict[str, str] = field(default_factory=dict)  # prompt/model/style fuer KI-Varianten
     is_sd_card_art: bool = False  # das aktuelle Kartenmotiv von der SD-Karte (card_art_raw.png)
     _image: Optional[Image.Image] = None
@@ -123,86 +134,66 @@ def _pil_bytes(image: Image.Image) -> bytes:
     return buffer.getvalue()
 
 
-class MbCoverSearchWorker(QThread):
-    """Sucht Release-Groups und laedt deren Cover (500 px) nacheinander"""
-    found = pyqtSignal(object, bytes)  # CoverArtImage, Bilddaten
+class OnlineCoverSearchWorker(QThread):
+    """Durchsucht die gewaehlten Quellen und meldet jedes gefundene Bild"""
+    found = pyqtSignal(object, bytes)  # OnlineCover, Bilddaten
     status = pyqtSignal(str)
     completed = pyqtSignal(int)
 
-    MAX_GROUPS = 6
-    MAX_PER_GROUP = 2
-    MAX_TOTAL = 12
-
-    def __init__(self, album: str, artist: str):
+    def __init__(self, title: str, artist: str, sources: List[str], page_urls: List[str], direct_urls: List[str]):
         super().__init__()
-        self.album = album
+        self.title = title
         self.artist = artist
+        self.sources = sources
+        self.page_urls = page_urls
+        self.direct_urls = direct_urls
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
     def run(self):
-        count = 0
         try:
-            self.status.emit("Suche bei MusicBrainz …")
-            groups = musicbrainz.search_release_groups(self.album, self.artist)
-            if not groups:
-                self.status.emit("MusicBrainz: nichts gefunden – Suchbegriff anpassen?")
-            for group in groups[:self.MAX_GROUPS]:
-                if self._cancelled or count >= self.MAX_TOTAL:
-                    break
-                for image in musicbrainz.list_cover_art(group)[:self.MAX_PER_GROUP]:
-                    if self._cancelled or count >= self.MAX_TOTAL:
-                        break
-                    try:
-                        self.found.emit(image, musicbrainz.fetch_image(image.url_500))
-                        count += 1
-                    except Exception as e:
-                        log.warning("Cover %s nicht ladbar: %s", image.url_500, e)
-            if groups:
-                self.status.emit(f"MusicBrainz: {count} Cover aus {len(groups)} Treffer(n)")
+            count = cover_sources.search_all(
+                self.title, self.artist, self.sources, self.page_urls, self.direct_urls,
+                on_found=self.found.emit, on_status=self.status.emit, cancelled=lambda: self._cancelled)
+            self.status.emit(f"{count} Cover gefunden" if count else "Keine Cover gefunden – Suchbegriff anpassen?")
         except Exception as e:
-            log.exception("MusicBrainz-Suche fehlgeschlagen")
-            self.status.emit(f"MusicBrainz-Suche fehlgeschlagen: {e}")
+            log.exception("Cover-Suche fehlgeschlagen")
+            self.status.emit(f"Cover-Suche fehlgeschlagen: {e}")
+            count = 0
         self.completed.emit(count)
 
 
 # --- Dialog ----------------------------------------------------------------------------------
 
 class CoverManagerDialog(QDialog):
-    PREVIEW_HEIGHT = 300
-    THUMB = 110
-
-    SECTION_TITLES = {
-        SECTION_CURRENT: "Aktuell",
-        SECTION_MB: "MusicBrainz / Cover Art Archive",
-        SECTION_ARCHIVE: "Archiv (behaltene Cover)",
-        SECTION_NEW: "Neu erzeugt (noch nicht behalten)",
-    }
+    THUMB = 96
 
     def __init__(self, folder: Folder, folder_name: str, metadata_manager, archive: Optional[CoverArchive],
                  parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Cover-Manager – Ordner {folder.index:02d}")
-        self.resize(1250, 800)
+        self.resize(1180, 760)
         self.folder = folder
-        self.folder_name = folder_name
+        # "Ordner NN" ist nur der Anzeigename des Managers, kein Titel
+        self.folder_name = "" if folder_name.startswith("Ordner ") else folder_name
         self.metadata_manager = metadata_manager
         self.archive = archive
         self.client = gemini_client()
 
-        self.info = FolderInfo(album=folder_name if not folder_name.startswith("Ordner ") else "")
+        self.info = FolderInfo(album=self.folder_name)
         self.brief = CoverBrief()
-        self.candidates: Dict[str, List[Candidate]] = {s: [] for s in self.SECTION_TITLES}
+        self.candidates: List[Candidate] = []
         self.selected: Optional[Candidate] = None
         self.album_id: Optional[str] = None
         self._album_tagged = False
+        self._search_started = False
 
         self.album_cover_changed = False
         self.card_changed = False
 
-        self._mb_worker: Optional[MbCoverSearchWorker] = None
+        self._search_worker: Optional[OnlineCoverSearchWorker] = None
         self._research_worker: Optional[CoverResearchWorker] = None
         self._generate_worker: Optional[CoverGenerateWorker] = None
 
@@ -217,124 +208,151 @@ class CoverManagerDialog(QDialog):
     # --- Aufbau -----------------------------------------------------------------------------
 
     def _setup_ui(self):
-        outer = QVBoxLayout(self)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        outer.addWidget(splitter, 1)
+        layout = QHBoxLayout(self)
+        layout.setSpacing(20)
 
-        # Galerie
-        gallery = QWidget()
-        gallery_layout = QVBoxLayout(gallery)
-        gallery_layout.setContentsMargins(0, 0, 8, 0)
+        # links: Vorschau, Aktionen, Galerie
+        left = QVBoxLayout()
+        self.preview = QLabel("Bild in der Galerie auswählen")
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setMinimumSize(380, 300)
+        self.preview.setStyleSheet("border: 1px dashed palette(mid); border-radius: 8px;")
+        left.addWidget(self.preview, 1)
 
-        search_row = QHBoxLayout()
-        self.mb_album_edit = QLineEdit()
-        self.mb_album_edit.setPlaceholderText("Album / Hörspiel")
-        self.mb_artist_edit = QLineEdit()
-        self.mb_artist_edit.setPlaceholderText("Interpret (optional)")
-        self.btn_mb_search = QPushButton("Bei MusicBrainz suchen")
-        self.btn_mb_search.setObjectName("ghostButton")
-        self.btn_mb_search.clicked.connect(self._start_mb_search)
-        self.mb_album_edit.returnPressed.connect(self._start_mb_search)
-        search_row.addWidget(self.mb_album_edit, 2)
-        search_row.addWidget(self.mb_artist_edit, 1)
-        search_row.addWidget(self.btn_mb_search)
-        gallery_layout.addLayout(search_row)
-
-        self.mb_status = QLabel()
-        gallery_layout.addWidget(self.mb_status)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        sections = QWidget()
-        sections_layout = QVBoxLayout(sections)
-        self.lists: Dict[str, QListWidget] = {}
-        self.section_labels: Dict[str, QLabel] = {}
-        for section, title in self.SECTION_TITLES.items():
-            label = QLabel(title)
-            label.setObjectName("sectionTitle")
-            sections_layout.addWidget(label)
-            lst = QListWidget()
-            lst.setViewMode(QListWidget.ViewMode.IconMode)
-            lst.setIconSize(QSize(self.THUMB, self.THUMB))
-            lst.setGridSize(QSize(self.THUMB + 24, self.THUMB + 44))
-            lst.setResizeMode(QListWidget.ResizeMode.Adjust)
-            lst.setMovement(QListWidget.Movement.Static)
-            lst.setWordWrap(True)
-            lst.setMinimumHeight(self.THUMB + 54)
-            lst.setMaximumHeight(2 * (self.THUMB + 44) + 12)  # max. zwei Reihen, dann scrollen
-            lst.currentItemChanged.connect(lambda cur, _prev, s=section: self._on_item_selected(s, cur))
-            lst.itemChanged.connect(self._on_item_changed)
-            sections_layout.addWidget(lst)
-            self.lists[section] = lst
-            self.section_labels[section] = label
-        sections_layout.addStretch(1)
-        scroll.setWidget(sections)
-        gallery_layout.addWidget(scroll, 1)
-
-        hint = QLabel("☑ = als Vorlage für die KI verwenden · ♪ = Album-Cover · ▭ = Kartencover")
-        hint.setWordWrap(True)
-        gallery_layout.addWidget(hint)
+        self.selection_label = QLabel()
+        self.selection_label.setWordWrap(True)
+        left.addWidget(self.selection_label)
 
         actions = QHBoxLayout()
-        self.btn_album_cover = QPushButton("Als Album-Cover")
-        self.btn_album_cover.setToolTip("Quadratisch zuschneiden und in alle Tracks des Ordners schreiben")
-        self.btn_album_cover.clicked.connect(self._set_album_cover)
         self.btn_card_cover = QPushButton("Als Kartencover")
         self.btn_card_cover.setObjectName("primaryButton")
         self.btn_card_cover.setToolTip("Mit Titel als card.png auf die SD-Karte speichern")
         self.btn_card_cover.clicked.connect(self._set_card_cover)
+        self.btn_album_cover = QPushButton("Als Album-Cover")
+        self.btn_album_cover.setToolTip("Quadratisch zuschneiden und in alle Tracks des Ordners schreiben")
+        self.btn_album_cover.clicked.connect(self._set_album_cover)
         self.btn_keep = QPushButton("Behalten")
+        self.btn_keep.setObjectName("ghostButton")
         self.btn_keep.setToolTip("Im Archiv (Datenordner der Bibliothek) speichern")
         self.btn_keep.clicked.connect(lambda: self._keep(self.selected))
-        self.btn_delete = QPushButton("Aus Archiv löschen")
+        self.btn_delete = QPushButton("Löschen")
         self.btn_delete.setObjectName("softDangerButton")
+        self.btn_delete.setToolTip("Aus dem Archiv löschen")
         self.btn_delete.clicked.connect(self._delete_selected)
-        self.btn_file = QPushButton("Datei vom PC …")
-        self.btn_file.setObjectName("ghostButton")
-        self.btn_file.clicked.connect(self._add_file)
-        for button in (self.btn_album_cover, self.btn_card_cover, self.btn_keep, self.btn_delete):
+        for button in (self.btn_card_cover, self.btn_album_cover, self.btn_keep, self.btn_delete):
             actions.addWidget(button)
         actions.addStretch(1)
-        actions.addWidget(self.btn_file)
-        gallery_layout.addLayout(actions)
-        splitter.addWidget(gallery)
+        left.addLayout(actions)
 
-        # rechte Seite: Vorschau + Tabs
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(8, 0, 0, 0)
-        self.preview = QLabel("Bild in der Galerie auswählen")
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumHeight(self.PREVIEW_HEIGHT)
-        self.preview.setStyleSheet("border: 1px dashed palette(mid); border-radius: 8px;")
-        right_layout.addWidget(self.preview, 1)
-        self.selection_label = QLabel()
-        self.selection_label.setWordWrap(True)
-        right_layout.addWidget(self.selection_label)
+        gallery_header = QHBoxLayout()
+        self.filter_bar = QTabBar()
+        self.filter_bar.setDrawBase(False)
+        self.filter_bar.setObjectName("galleryFilter")
+        for label, _ in FILTERS:
+            self.filter_bar.addTab(label)
+        self.filter_bar.currentChanged.connect(self._apply_filter)
+        gallery_header.addWidget(self.filter_bar)
+        gallery_header.addStretch(1)
+        self.refs_label = QLabel()
+        self.refs_label.setToolTip("Mit dem Häkchen markierte Bilder gehen als Vorlage an die KI")
+        gallery_header.addWidget(self.refs_label)
+        left.addLayout(gallery_header)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._card_tab(), "Karte")
-        tabs.addTab(self._ai_tab(), "KI erzeugen")
-        right_layout.addWidget(tabs)
+        self.gallery = QListWidget()
+        self.gallery.setViewMode(QListWidget.ViewMode.IconMode)
+        self.gallery.setIconSize(QSize(self.THUMB, self.THUMB))
+        self.gallery.setGridSize(QSize(self.THUMB + 22, self.THUMB + 40))
+        self.gallery.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.gallery.setMovement(QListWidget.Movement.Static)
+        self.gallery.setWordWrap(True)
+        self.gallery.setFixedHeight(2 * (self.THUMB + 40) + 14)
+        self.gallery.currentItemChanged.connect(self._on_item_selected)
+        self.gallery.itemChanged.connect(lambda _item: self._update_refs_label())
+        left.addWidget(self.gallery)
+
+        hint = QLabel("☑ Vorlage für die KI · ♪ Album-Cover · ▭ Kartencover · ★ im Archiv")
+        hint.setObjectName("folderMeta")
+        left.addWidget(hint)
+        layout.addLayout(left, 3)
+
+        # rechts: Tabs
+        right = QVBoxLayout()
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._search_tab(), "Cover suchen")
+        self.tabs.addTab(self._card_tab(), "Karte")
+        self.tabs.addTab(self._ai_tab(), "KI erzeugen")
+        right.addWidget(self.tabs, 1)
 
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
-        right_layout.addWidget(self.status_label)
+        right.addWidget(self.status_label)
 
         close_row = QHBoxLayout()
         close_row.addStretch(1)
         btn_close = QPushButton("Schließen")
         btn_close.clicked.connect(self.reject)
         close_row.addWidget(btn_close)
-        right_layout.addLayout(close_row)
-        splitter.addWidget(right)
-        splitter.setSizes([700, 520])
+        right.addLayout(close_row)
+        layout.addLayout(right, 2)
 
         if self.archive is None:
             self.status_label.setText("Kein Datenordner gewählt – Cover können nicht archiviert werden.")
         elif self.client is None:
-            self.status_label.setText("Kein Gemini-API-Key hinterlegt (Kartencover → KI-Einstellungen) – "
-                                      "Original-Cover lassen sich trotzdem als Album- oder Kartencover nutzen.")
+            self.status_label.setText("Kein Gemini-API-Key hinterlegt (Kartencover → KI & Online-Dienste) – "
+                                      "gefundene Cover lassen sich trotzdem als Album- oder Kartencover nutzen.")
+
+    def _search_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        form = QFormLayout()
+        self.search_title_edit = QLineEdit()
+        self.search_title_edit.setPlaceholderText("Album- bzw. Folgentitel")
+        self.search_title_edit.returnPressed.connect(self._start_search)
+        form.addRow("Titel:", self.search_title_edit)
+        self.search_artist_edit = QLineEdit()
+        self.search_artist_edit.setPlaceholderText("Interpret / Hörspielreihe (optional)")
+        self.search_artist_edit.returnPressed.connect(self._start_search)
+        form.addRow("Interpret:", self.search_artist_edit)
+        layout.addLayout(form)
+
+        saved = QSettings().value(SETTINGS_SOURCES, list(cover_sources.ALL_SOURCES), type=list)
+        sources_row = QHBoxLayout()
+        self.source_checks: Dict[str, QCheckBox] = {}
+        for source in cover_sources.ALL_SOURCES:
+            check = QCheckBox("Recherche-Quellen" if source == cover_sources.SOURCE_WEB else source)
+            check.setChecked(source in saved)
+            check.setToolTip("Bilder von den Seiten, die die Recherche gefunden hat"
+                             if source == cover_sources.SOURCE_WEB else f"Album-Cover bei {source} suchen")
+            if source == cover_sources.SOURCE_SPOTIFY and not ai_settings.get_spotify_credentials():
+                check.setChecked(False)
+                check.setEnabled(False)
+                check.setToolTip("Spotify-Zugangsdaten unter Kartencover → KI & Online-Dienste hinterlegen")
+            self.source_checks[source] = check
+            sources_row.addWidget(check)
+        sources_row.addStretch(1)
+        layout.addLayout(sources_row)
+
+        button_row = QHBoxLayout()
+        self.btn_search = QPushButton("Cover suchen")
+        self.btn_search.setObjectName("primaryButton")
+        self.btn_search.clicked.connect(self._start_search)
+        button_row.addWidget(self.btn_search)
+        self.btn_file = QPushButton("Datei vom PC …")
+        self.btn_file.setObjectName("ghostButton")
+        self.btn_file.clicked.connect(self._add_file)
+        button_row.addWidget(self.btn_file)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+
+        self.search_status = QLabel()
+        self.search_status.setWordWrap(True)
+        layout.addWidget(self.search_status)
+        note = QLabel("Gefundene Cover sind urheberrechtlich geschützt – nur für eigene Karten verwenden.")
+        note.setObjectName("folderMeta")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        layout.addStretch(1)
+        return tab
 
     def _card_tab(self) -> QWidget:
         tab = QWidget()
@@ -355,7 +373,7 @@ class CoverManagerDialog(QDialog):
         form.addRow("", self.number_check)
 
         meta = self._card_meta
-        self.title_edit.setText(meta.title if meta else self.info.album or self.folder_name)
+        self.title_edit.setText(meta.title if meta else self.folder_name)
         if meta:
             _select_data(self.orientation_combo, meta.orientation)
             self.number_check.setChecked(meta.show_number)
@@ -383,8 +401,7 @@ class CoverManagerDialog(QDialog):
         layout.addLayout(header)
         self.research_edit = QPlainTextEdit()
         self.research_edit.setPlaceholderText("Recherche läuft …")
-        self.research_edit.setMaximumHeight(130)
-        layout.addWidget(self.research_edit)
+        layout.addWidget(self.research_edit, 1)
         self.sources_label = QLabel()
         self.sources_label.setOpenExternalLinks(True)
         self.sources_label.setTextFormat(Qt.TextFormat.RichText)
@@ -392,13 +409,12 @@ class CoverManagerDialog(QDialog):
         layout.addWidget(self.sources_label)
 
         row = QHBoxLayout()
-        self.refs_label = QLabel()
-        row.addWidget(self.refs_label, 1)
         row.addWidget(QLabel("Varianten:"))
         self.count_spin = QSpinBox()
         self.count_spin.setRange(1, 4)
         self.count_spin.setValue(3)
         row.addWidget(self.count_spin)
+        row.addStretch(1)
         self.btn_generate = QPushButton("Motive erzeugen")
         self.btn_generate.setObjectName("primaryButton")
         self.btn_generate.clicked.connect(self._start_generation)
@@ -415,9 +431,9 @@ class CoverManagerDialog(QDialog):
         """Album-ID aus card.json bzw. ID-Tag der Tracks; sonst Treffer im
         Archiv ueber den Titel; sonst neu (wird erst beim ersten Speichern
         dauerhaft angelegt)."""
-        album_id = (self._card_meta.album_id if self._card_meta else "") or \
-            album_identity.read_album_id(self._track_paths())
-        self._album_tagged = bool(album_id) and album_identity.read_album_id(self._track_paths()) == album_id
+        tagged_id = album_identity.read_album_id(self._track_paths())
+        album_id = (self._card_meta.album_id if self._card_meta else "") or tagged_id
+        self._album_tagged = bool(album_id) and tagged_id == album_id
         if not album_id and self.archive is not None and self.info.album:
             record = self.archive.find_album(self.info.album)
             album_id = record.id if record else None
@@ -427,8 +443,8 @@ class CoverManagerDialog(QDialog):
         """Album im Archiv anlegen und die SD-Tracks mit der Album-ID taggen"""
         if self.archive is None:
             return
-        self.archive.ensure_album(self.album_id, self.info.album or self.folder_name, self.info.artist,
-                                  path=self.folder.path)
+        title = self.info.album or self.brief.album_title or self.search_title_edit.text().strip()
+        self.archive.ensure_album(self.album_id, title, self.info.artist, path=self.folder.path)
         if not self._album_tagged and self.folder.tracks:
             self._release_player()
             album_identity.write_album_id(self._track_paths(), self.album_id)
@@ -442,54 +458,80 @@ class CoverManagerDialog(QDialog):
     # --- Galerie ------------------------------------------------------------------------------
 
     def _add_candidate(self, candidate: Candidate, select: bool = False):
-        self.candidates[candidate.section].append(candidate)
-        lst = self.lists[candidate.section]
+        self.candidates.append(candidate)
         thumb = candidate.image().copy()
         thumb.thumbnail((self.THUMB * 2, self.THUMB * 2))
         item = QListWidgetItem(QIcon(pil_to_pixmap(thumb)), self._item_text(candidate))
         item.setData(Qt.ItemDataRole.UserRole, candidate)
+        item.setToolTip(self._item_tooltip(candidate))
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        lst.blockSignals(True)
+        self.gallery.blockSignals(True)
         item.setCheckState(Qt.CheckState.Unchecked)
-        lst.addItem(item)
-        lst.blockSignals(False)
-        self._update_section_visibility()
+        self.gallery.addItem(item)
+        self.gallery.blockSignals(False)
+        self._apply_filter()
         if select:
-            lst.setCurrentItem(item)
-            lst.scrollToItem(item)
+            if self._current_filter() not in (None, candidate.section):
+                self.filter_bar.setCurrentIndex(0)
+            self.gallery.setCurrentItem(item)
+            self.gallery.scrollToItem(item)
 
     @staticmethod
     def _item_text(candidate: Candidate) -> str:
         marks = ""
         if candidate.entry is not None:
+            marks += "★"
             if ROLE_ALBUM_COVER in candidate.entry.roles:
-                marks += "♪ "
+                marks += "♪"
             if ROLE_CARD_COVER in candidate.entry.roles:
-                marks += "▭ "
-        return (marks + candidate.label)[:60]
+                marks += "▭"
+            marks += " "
+        if candidate.online is not None:
+            short = candidate.online.source
+        else:
+            short = candidate.label
+        return (marks + short)[:28]
+
+    @staticmethod
+    def _item_tooltip(candidate: Candidate) -> str:
+        width, height = candidate.image().size
+        text = f"{candidate.label}\n{width} × {height} px"
+        if candidate.online is not None and candidate.online.page_url:
+            text += f"\n{candidate.online.page_url}"
+        return text
+
+    def _items(self):
+        for row in range(self.gallery.count()):
+            yield self.gallery.item(row)
 
     def _refresh_item_texts(self):
-        for lst in self.lists.values():
-            for row in range(lst.count()):
-                item = lst.item(row)
-                item.setText(self._item_text(item.data(Qt.ItemDataRole.UserRole)))
+        for item in self._items():
+            item.setText(self._item_text(item.data(Qt.ItemDataRole.UserRole)))
 
-    def _update_section_visibility(self):
-        for section, lst in self.lists.items():
-            visible = lst.count() > 0 or section == SECTION_MB
-            lst.setVisible(visible)
-            self.section_labels[section].setVisible(visible)
+    def _current_filter(self) -> Optional[str]:
+        index = self.filter_bar.currentIndex()
+        return FILTERS[index][1] if 0 <= index < len(FILTERS) else None
+
+    def _apply_filter(self, *_):
+        section = self._current_filter()
+        counts = {key: 0 for _, key in FILTERS}
+        for item in self._items():
+            candidate = item.data(Qt.ItemDataRole.UserRole)
+            counts[candidate.section] = counts.get(candidate.section, 0) + 1
+            item.setHidden(section is not None and candidate.section != section)
+        for index, (label, key) in enumerate(FILTERS):
+            count = self.gallery.count() if key is None else counts.get(key, 0)
+            self.filter_bar.setTabText(index, f"{label} ({count})" if count else label)
 
     def _remove_candidate(self, candidate: Candidate):
-        lst = self.lists[candidate.section]
-        for row in range(lst.count()):
-            if lst.item(row).data(Qt.ItemDataRole.UserRole) is candidate:
-                lst.takeItem(row)
+        for row in range(self.gallery.count()):
+            if self.gallery.item(row).data(Qt.ItemDataRole.UserRole) is candidate:
+                self.gallery.takeItem(row)
                 break
-        self.candidates[candidate.section].remove(candidate)
+        self.candidates.remove(candidate)
         if self.selected is candidate:
             self.selected = None
-        self._update_section_visibility()
+        self._apply_filter()
 
     def _load_current(self):
         cover = None
@@ -522,75 +564,64 @@ class CoverManagerDialog(QDialog):
                 continue
             self._add_candidate(Candidate(SECTION_ARCHIVE, entry.label, data, entry.kind, entry=entry))
 
-    def _on_item_selected(self, section: str, item: Optional[QListWidgetItem]):
+    def _on_item_selected(self, item: Optional[QListWidgetItem], _previous=None):
         if item is None:
             return
-        for other, lst in self.lists.items():
-            if other != section and lst.currentItem() is not None:
-                lst.blockSignals(True)
-                lst.setCurrentItem(None)
-                lst.clearSelection()
-                lst.blockSignals(False)
         self.selected = item.data(Qt.ItemDataRole.UserRole)
-        source = self.selected.label
-        if self.selected.mb_image is not None:
-            source += f" – {self.selected.mb_image.url_500}"
-        self.selection_label.setText(f"Auswahl: {source}")
+        self.selection_label.setText(self._item_tooltip(self.selected).replace("\n", " · "))
         self._render_preview()
         self._update_buttons()
 
-    def _on_item_changed(self, _item):
-        self._update_refs_label()
-
     def _checked_candidates(self) -> List[Candidate]:
-        result = []
-        for lst in self.lists.values():
-            for row in range(lst.count()):
-                item = lst.item(row)
-                if item.checkState() == Qt.CheckState.Checked:
-                    result.append(item.data(Qt.ItemDataRole.UserRole))
-        return result
+        return [item.data(Qt.ItemDataRole.UserRole) for item in self._items()
+                if item.checkState() == Qt.CheckState.Checked]
 
     def _update_refs_label(self):
         count = len(self._checked_candidates())
         text = f"Vorlagen: {count}/{MAX_REFERENCE_IMAGES}"
         if count > MAX_REFERENCE_IMAGES:
-            text += " – zu viele, nur die ersten werden verwendet"
+            text += " (zu viele)"
         self.refs_label.setText(text)
 
-    # --- MusicBrainz --------------------------------------------------------------------------
+    # --- Cover-Suche --------------------------------------------------------------------------
 
-    def _start_mb_search(self):
-        album = self.mb_album_edit.text().strip()
-        if not album:
-            self.mb_status.setText("Bitte einen Album- bzw. Hörspieltitel eingeben.")
+    def _selected_sources(self) -> List[str]:
+        return [s for s, check in self.source_checks.items() if check.isChecked() and check.isEnabled()]
+
+    def _start_search(self):
+        title = self.search_title_edit.text().strip()
+        if not title:
+            self.search_status.setText("Bitte einen Album- bzw. Folgentitel eingeben.")
             return
-        if self._mb_worker is not None and self._mb_worker.isRunning():
-            self._mb_worker.cancel()
-            self._mb_worker.wait(2000)
-        for candidate in list(self.candidates[SECTION_MB]):
+        sources = self._selected_sources()
+        QSettings().setValue(SETTINGS_SOURCES, sources)
+        if self._search_worker is not None and self._search_worker.isRunning():
+            self._search_worker.cancel()
+            self._search_worker.wait(3000)
+        for candidate in [c for c in self.candidates if c.section == SECTION_ONLINE]:
             self._remove_candidate(candidate)
-        self._mb_worker = MbCoverSearchWorker(album, self.mb_artist_edit.text().strip())
-        self._mb_worker.found.connect(self._on_mb_found)
-        self._mb_worker.status.connect(self.mb_status.setText)
-        self._mb_worker.finished.connect(self._update_buttons)
-        self._mb_worker.start()
+        self._search_started = True
+        self._search_worker = OnlineCoverSearchWorker(
+            title, self.search_artist_edit.text().strip(), sources, list(self.brief.sources),
+            list(self.brief.cover_urls))
+        self._search_worker.found.connect(self._on_online_found)
+        self._search_worker.status.connect(self.search_status.setText)
+        self._search_worker.finished.connect(self._update_buttons)
+        self._search_worker.start()
         self._update_buttons()
 
-    def _on_mb_found(self, image: musicbrainz.CoverArtImage, data: bytes):
-        label = image.release_group.label + ("" if image.front else " (Rückseite/Inlay)")
-        self._add_candidate(Candidate(SECTION_MB, label, data, KIND_MUSICBRAINZ, mb_image=image))
+    def _on_online_found(self, cover: cover_sources.OnlineCover, data: bytes):
+        self._add_candidate(Candidate(SECTION_ONLINE, cover.label, data, KIND_ONLINE, online=cover),
+                            select=self.selected is None)
 
     def _full_resolution(self, candidate: Candidate) -> bytes:
-        """MusicBrainz-Bilder fuer Archiv/Verwendung in 1200 px nachladen"""
-        if candidate.mb_image is None or candidate.mb_image.url_1200 == candidate.mb_image.url_500:
+        """Online-Bilder fuer Archiv/Verwendung in voller Groesse nachladen"""
+        online = candidate.online
+        if online is None or online.full_url == online.preview_url:
             return candidate.data
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            return musicbrainz.fetch_image(candidate.mb_image.url_1200)
-        except Exception as e:
-            log.warning("1200-px-Version nicht ladbar, nehme 500 px: %s", e)
-            return candidate.data
+            return cover_sources.download_image(online.full_url) or candidate.data
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -610,22 +641,25 @@ class CoverManagerDialog(QDialog):
 
     def _on_research_done(self, info: FolderInfo, brief: CoverBrief):
         self.info, self.brief = info, brief
-        if not self.mb_album_edit.text():
-            self.mb_album_edit.setText(info.album or self.folder_name)
-            self.mb_artist_edit.setText(info.artist)
-            self._start_mb_search()
-        if not self._card_meta and (not self.title_edit.text() or self.title_edit.text().startswith("Ordner ")):
-            self.title_edit.setText(info.album)
+        title = suggest_search_title(info, brief)
+        if not self.search_title_edit.text().strip():
+            self.search_title_edit.setText(title)
+        if not self.search_artist_edit.text().strip():
+            self.search_artist_edit.setText(info.artist or brief.series)
+        if not self._card_meta and not self.title_edit.text().strip():
+            self.title_edit.setText(info.album or brief.album_title or title)
         self.research_edit.setPlainText(brief.as_text())
         if brief.sources:
             links = " · ".join(f'<a href="{u}">{i}</a>' for i, u in enumerate(brief.sources, start=1))
             self.sources_label.setText(f"Quellen: {links}")
         self.status_label.setText("Recherche fertig." if self.client else
-                                  "Ohne API-Key nur Tags gelesen; Original-Cover über MusicBrainz.")
+                                  "Ohne API-Key nur Tags gelesen – Cover-Suche läuft trotzdem.")
+        if not self._search_started and self.search_title_edit.text().strip():
+            self._start_search()
 
     def _start_generation(self):
         if self.client is None:
-            QMessageBox.information(self, "Kein API-Key", "Bitte zuerst unter Kartencover → KI-Einstellungen "
+            QMessageBox.information(self, "Kein API-Key", "Bitte zuerst unter Kartencover → KI & Online-Dienste "
                                                           "einen Gemini-API-Key hinterlegen.")
             return
         refs = [c.data for c in self._checked_candidates()][:MAX_REFERENCE_IMAGES]
@@ -648,7 +682,7 @@ class CoverManagerDialog(QDialog):
         self._update_buttons()
 
     def _on_variant_ready(self, art: Image.Image):
-        number = len(self.candidates[SECTION_NEW]) + 1
+        number = sum(1 for c in self.candidates if c.section == SECTION_NEW) + 1
         candidate = Candidate(SECTION_NEW, f"KI · {self._generation_meta['style']} #{number}", _pil_bytes(art),
                               KIND_AI, meta=dict(self._generation_meta))
         candidate._image = art
@@ -663,20 +697,17 @@ class CoverManagerDialog(QDialog):
         if candidate.entry is not None:
             return candidate.entry
         self._persist_album()
-        if candidate.kind == KIND_MUSICBRAINZ and candidate.mb_image is not None:
-            data = self._full_resolution(candidate)
-            entry = self.archive.add_cover(self.album_id, data, KIND_MUSICBRAINZ, source=candidate.mb_image.url_1200)
+        if candidate.online is not None:
+            entry = self.archive.add_cover(self.album_id, self._full_resolution(candidate), KIND_ONLINE,
+                                           source=candidate.online.full_url, provider=candidate.online.source)
         elif candidate.kind == KIND_AI:
             entry = self.archive.add_cover(self.album_id, candidate.image(), KIND_AI, **candidate.meta)
         else:
             entry = self.archive.add_cover(self.album_id, candidate.data, candidate.kind, source=candidate.label)
         candidate.entry = entry
-        if candidate.section == SECTION_NEW:
-            # behaltene Varianten wandern optisch ins Archiv
-            self._remove_candidate(candidate)
+        if candidate.section in (SECTION_NEW, SECTION_ONLINE):
             candidate.section = SECTION_ARCHIVE
-            candidate.label = entry.label
-            self._add_candidate(candidate, select=True)
+            self._apply_filter()
         self._refresh_item_texts()
         self._update_buttons()
         return entry
@@ -740,10 +771,9 @@ class CoverManagerDialog(QDialog):
         if self.archive is None:
             return
         roles = {e.id: e.roles for e in self.archive.covers(self.album_id)}
-        for candidates in self.candidates.values():
-            for candidate in candidates:
-                if candidate.entry is not None and candidate.entry.id in roles:
-                    candidate.entry.roles = roles[candidate.entry.id]
+        for candidate in self.candidates:
+            if candidate.entry is not None and candidate.entry.id in roles:
+                candidate.entry.roles = roles[candidate.entry.id]
         self._refresh_item_texts()
 
     def _delete_selected(self):
@@ -756,6 +786,7 @@ class CoverManagerDialog(QDialog):
         self._remove_candidate(candidate)
         self.preview.clear()
         self.preview.setText("Bild in der Galerie auswählen")
+        self.selection_label.clear()
         self._update_buttons()
 
     def _add_file(self):
@@ -796,19 +827,19 @@ class CoverManagerDialog(QDialog):
         selected = self.selected is not None
         has_archive = self.archive is not None
         busy = any(w is not None and w.isRunning() for w in (self._research_worker, self._generate_worker))
+        searching = self._search_worker is not None and self._search_worker.isRunning()
         self.btn_album_cover.setEnabled(selected and bool(self.folder.tracks))
         self.btn_card_cover.setEnabled(selected)
         self.btn_keep.setEnabled(selected and has_archive and not self.selected.kept)
         self.btn_delete.setEnabled(selected and has_archive and self.selected.kept)
-        self.btn_file.setEnabled(True)
         self.btn_generate.setEnabled(not busy)
         self.btn_research.setEnabled(not busy)
-        mb_busy = self._mb_worker is not None and self._mb_worker.isRunning()
-        self.btn_mb_search.setEnabled(not mb_busy)
+        self.btn_search.setText("Suche läuft …" if searching else "Cover suchen")
+        self.btn_search.setEnabled(not searching)
         self._update_refs_label()
 
     def unsaved_variants(self) -> List[Candidate]:
-        return [c for c in self.candidates[SECTION_NEW] if not c.kept]
+        return [c for c in self.candidates if c.section == SECTION_NEW and not c.kept]
 
     def done(self, result):
         unsaved = self.unsaved_variants()
@@ -827,7 +858,7 @@ class CoverManagerDialog(QDialog):
                     self._keep(candidate)
             elif box.clickedButton() != btn_discard:
                 return
-        for worker in (self._mb_worker, self._research_worker, self._generate_worker):
+        for worker in (self._search_worker, self._research_worker, self._generate_worker):
             if worker is not None and worker.isRunning():
                 if hasattr(worker, "cancel"):
                     worker.cancel()

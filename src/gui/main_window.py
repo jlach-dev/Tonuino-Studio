@@ -239,7 +239,7 @@ class MainWindow(QMainWindow):
         self.action_print_sheet = cover_menu.addAction("Druckbogen (PDF) erstellen …")
         self.action_print_sheet.triggered.connect(self._open_print_sheet_dialog)
         cover_menu.addSeparator()
-        action_ai_settings = cover_menu.addAction("KI-Einstellungen (Gemini) …")
+        action_ai_settings = cover_menu.addAction("KI & Online-Dienste (Gemini, Spotify) …")
         action_ai_settings.triggered.connect(lambda: AiSettingsDialog(self).exec())
 
     def _create_sidebar(self) -> QFrame:
@@ -1292,7 +1292,7 @@ class MainWindow(QMainWindow):
         if client is None:
             QMessageBox.information(self, "Kein API-Key",
                                     "Für die automatische Erzeugung bitte zuerst unter "
-                                    "Kartencover → KI-Einstellungen einen Gemini-API-Key hinterlegen.")
+                                    "Kartencover → KI & Online-Dienste einen Gemini-API-Key hinterlegen.")
             return
         settings = QSettings()
         style = settings.value(SETTINGS_STYLE, DEFAULT_STYLE, type=str)

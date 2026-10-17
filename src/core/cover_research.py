@@ -41,6 +41,9 @@ class CoverBrief:
     reference_image: Optional[bytes] = None
     reference_source: str = ""  # "lokal", "Cover Art Archive"
     sources: List[str] = field(default_factory=list)
+    album_title: str = ""  # von der Recherche ermittelter Album-/Folgentitel
+    series: str = ""  # Hoerspielreihe, falls erkannt
+    cover_urls: List[str] = field(default_factory=list)  # gefundene Bild-URLs des Original-Covers
 
     def as_text(self) -> str:
         """Menschenlesbare Fassung fuer das Bearbeitungsfeld im Dialog"""
@@ -80,6 +83,38 @@ def gather_folder_info(folder: Folder, metadata_manager, max_titles: int = 25) -
     return info
 
 
+_TRACK_SUFFIX = re.compile(r"\s*(\(\d+\s*/\s*\d+\)|[-–:]\s*(teil|part|track|kapitel)\s*\d+.*|(teil|part)\s*\d+)\s*$",
+                           re.IGNORECASE)
+_TRACK_PREFIX = re.compile(r"^\s*\d{1,3}\s*[-.:)]\s*")
+
+
+def clean_track_title(title: str) -> str:
+    """'01 - Die kleine Hexe (1/2)' -> 'Die kleine Hexe' (fuer die Suche)"""
+    text = _TRACK_PREFIX.sub("", (title or "").split(" | ")[0])
+    # "Die kleine Hexe (1/2): Heia Walpurgisnacht" - ab der Teil-Angabe folgt nur das Kapitel
+    text = re.split(r"\s*\(\d+\s*/\s*\d+\)", text)[0]
+    previous = None
+    while previous != text:
+        previous = text
+        text = _TRACK_SUFFIX.sub("", text).strip()
+    return text.split(" | ")[0].strip()
+
+
+def suggest_search_title(info: FolderInfo, brief: Optional[CoverBrief] = None) -> str:
+    """Suchbegriff fuer die Cover-Suche - nie der vom Manager vergebene
+    Ordnername ("Ordner 01"): Album-Tag, sonst Recherche-Titel, sonst der
+    bereinigte erste Tracktitel."""
+    if info.album.strip():
+        return info.album.strip()
+    if brief is not None and brief.album_title.strip():
+        return brief.album_title.strip()
+    for title in info.titles:
+        cleaned = clean_track_title(title)
+        if cleaned:
+            return cleaned
+    return ""
+
+
 # --- MusicBrainz / Cover Art Archive (siehe core/musicbrainz.py) -----------------------
 
 # (album, artist) -> Cover-Bytes oder None: dieselbe Suche nicht wiederholen
@@ -113,6 +148,7 @@ RESEARCH_PROMPT = """Du hilfst, ein Cover für eine RFID-Karte einer Kinder-Musi
 Recherchiere kurz im Internet, worum es in diesem Album/Hörspiel geht.
 
 Album: {album}
+Ordner/Interpret-Hinweis: {hint}
 Interpret: {artist}
 Titel (Auszug): {titles}
 Hinweis des Nutzers: {extra}
@@ -123,7 +159,11 @@ Antworte NUR mit einem JSON-Objekt (Deutsch) mit diesen Feldern:
 "motifs": Liste mit 3-6 konkreten, kindgerechten Bildmotiven (Figuren, Orte, Gegenstände),
 "mood": Stimmung in wenigen Worten,
 "palette": Liste mit 2-4 passenden Farben,
-"visual_idea": eine Bildidee in einem Satz (ein klares Hauptmotiv, gut erkennbar auch in 5 cm Größe).
+"visual_idea": eine Bildidee in einem Satz (ein klares Hauptmotiv, gut erkennbar auch in 5 cm Größe),
+"album_title": der offizielle Titel des Albums bzw. der Hörspielfolge (z.B. "Folge 39: Fall 77: ..."),
+"series": Name der Hörspielreihe, falls es eine ist, sonst "",
+"cover_urls": Liste direkter Bild-URLs (.jpg/.png/.webp) des Original-Covers, die du auf Verlags-, Shop-
+oder Streaming-Seiten gefunden hast (nur echte, gefundene URLs, keine erfundenen; sonst leere Liste).
 Wenn du nichts Verlässliches findest, leite die Felder aus Titel und Titelliste ab."""
 
 
@@ -155,7 +195,8 @@ def make_client(api_key: str):
 
 def research_with_gemini(client, model: str, info: FolderInfo, extra: str = "") -> CoverBrief:
     prompt = RESEARCH_PROMPT.format(
-        album=info.album or "(unbekannt)",
+        album=info.album or "(unbekannt – aus Titeln und Interpret ableiten)",
+        hint=info.artist or "(keiner)",
         artist=info.artist or "(unbekannt)",
         titles="; ".join(info.titles[:15]) or "(keine)",
         extra=extra or "(keiner)",
@@ -170,6 +211,9 @@ def research_with_gemini(client, model: str, info: FolderInfo, extra: str = "") 
         mood=str(data.get("mood", "")),
         palette=[str(c) for c in data.get("palette", [])][:4],
         visual_idea=str(data.get("visual_idea", "")),
+        album_title=str(data.get("album_title", "") or ""),
+        series=str(data.get("series", "") or ""),
+        cover_urls=[str(u) for u in data.get("cover_urls", []) or [] if str(u).startswith("http")][:5],
     )
     try:
         _collect_urls(interaction.model_dump(), brief.sources)

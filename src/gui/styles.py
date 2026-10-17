@@ -286,6 +286,49 @@ QPushButton#ghostButton {
     padding: 6px 12px;
 }
 
+/* === Tabs (Cover-Manager) === */
+QTabWidget::pane {
+    background-color: @SURFACE_DEEP@;
+    border: 1px solid @SURFACE0@;
+    border-radius: 8px;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background-color: transparent;
+    color: @SUBTEXT0@;
+    padding: 6px 14px;
+    margin-right: 4px;
+    border: 1px solid transparent;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+}
+
+QTabBar::tab:hover {
+    color: @TEXT@;
+    background-color: @HOVER_MID@;
+}
+
+QTabBar::tab:selected {
+    color: @TEXT@;
+    background-color: @SURFACE_DEEP@;
+    border-color: @SURFACE0@;
+    border-bottom-color: @SURFACE_DEEP@;
+}
+
+/* Filterleiste der Galerie: Pillen statt Reiter */
+QTabBar#galleryFilter::tab {
+    border-radius: 12px;
+    padding: 4px 12px;
+    border: 1px solid @SURFACE1@;
+}
+
+QTabBar#galleryFilter::tab:selected {
+    background-color: @BLUE@;
+    border-color: @BLUE@;
+    color: @BASE@;
+}
+
 QPushButton#ghostButton:checked {
     font-weight: normal;
 }

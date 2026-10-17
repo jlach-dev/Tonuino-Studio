@@ -10,8 +10,8 @@ from PIL import Image
 from PyQt6.QtCore import QCoreApplication, QSettings
 from PyQt6.QtWidgets import QApplication
 
-from core import album_identity, card_store, musicbrainz
-from core.cover_archive import ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive
+from core import album_identity, card_store, cover_sources
+from core.cover_archive import KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive
 from core.metadata import MetadataManager
 from core.sd_card import SDCard
 
@@ -45,82 +45,102 @@ def png_bytes(size=(300, 300), color=(0, 120, 255)):
 
 
 @pytest.fixture
-def fake_mb(monkeypatch):
-    hit = musicbrainz.ReleaseGroupHit("rg1", "Die kleine Hexe", "Preußler", "2007", 100)
-    image = musicbrainz.CoverArtImage(hit, "1", "https://caa/1-500.jpg", "https://caa/1-1200.jpg", True)
-    monkeypatch.setattr(musicbrainz, "search_release_groups", lambda album, artist="": [hit])
-    monkeypatch.setattr(musicbrainz, "list_cover_art", lambda group: [image])
-    monkeypatch.setattr(musicbrainz, "fetch_image", lambda url: png_bytes(color=(200, 50, 50)))
+def fake_sources(monkeypatch):
+    """Deezer liefert ein Cover, iTunes dasselbe Bild (Duplikat) - ohne Netz"""
+    calls = []
+
+    def deezer(title, artist=""):
+        calls.append(("Deezer", title, artist))
+        return [cover_sources.OnlineCover("Deezer", "Folge 39", "Die Fuchsbande", "https://dz/500", "https://dz/1000")]
+
+    def itunes(title, artist=""):
+        return [cover_sources.OnlineCover("iTunes", "Folge 39", "Die Fuchsbande", "https://it/600", "https://it/1200")]
+
+    monkeypatch.setattr(cover_sources, "SEARCHERS", {"Deezer": deezer, "iTunes": itunes})
+    monkeypatch.setattr(cover_sources, "download_image",
+                        lambda url, min_edge=250: png_bytes(color=(200, 50, 50) if "dz" in url or "it" in url else (0, 0, 0)))
+    QSettings().setValue("covers/search_sources", ["Deezer", "iTunes"])
+    return calls
 
 
 def run_workers(app, dialog):
     for _ in range(3):
-        for worker in (dialog._research_worker, dialog._mb_worker, dialog._generate_worker):
+        for worker in (dialog._research_worker, dialog._search_worker, dialog._generate_worker):
             if worker is not None:
                 worker.wait(5000)
         app.processEvents()
 
 
-def test_cover_manager_mb_cover_as_card_and_album_cover(app, sd, tmp_path, monkeypatch, fake_mb):
-    from gui import cover_manager_dialog
+def section_count(dialog, section):
+    return sum(1 for c in dialog.candidates if c.section == section)
 
-    monkeypatch.setattr(cover_manager_dialog, "gemini_client", lambda: None)
+
+def test_cover_manager_online_cover_as_card_and_album_cover(app, sd, tmp_path, monkeypatch, fake_sources):
+    from gui import cover_manager_dialog as cm
+
+    monkeypatch.setattr(cm, "gemini_client", lambda: None)
     archive = CoverArchive(str(tmp_path / "data"))
     folder = sd.folders[1]
-    dialog = cover_manager_dialog.CoverManagerDialog(folder, "Die kleine Hexe", MetadataManager(), archive)
+    # "Ordner 01" ist nur der Anzeigename - darf nicht als Suchbegriff landen
+    dialog = cm.CoverManagerDialog(folder, "Ordner 01", MetadataManager(), archive)
     dialog._start_research()
     run_workers(app, dialog)
-    dialog.mb_album_edit.setText("Die kleine Hexe")
-    dialog._start_mb_search()
+    assert dialog.search_title_edit.text() != "Ordner 01"
+
+    dialog.search_title_edit.setText("Fall 77: Die verschleppte Schleppe")
+    dialog.search_artist_edit.setText("Die Fuchsbande")
+    dialog._start_search()
     run_workers(app, dialog)
 
-    mb_list = dialog.lists[cover_manager_dialog.SECTION_MB]
-    assert mb_list.count() == 1
-    mb_list.setCurrentRow(0)
-    assert dialog.selected.mb_image is not None
+    assert ("Deezer", "Fall 77: Die verschleppte Schleppe", "Die Fuchsbande") in fake_sources
+    assert section_count(dialog, cm.SECTION_ONLINE) == 1  # iTunes-Duplikat aussortiert
+    assert dialog.selected is not None and dialog.selected.online.source == "Deezer"
 
-    dialog.title_edit.setText("Die kleine Hexe")
+    dialog.title_edit.setText("Fall 77")
     dialog._set_card_cover()
     dialog._set_album_cover()
 
-    # Karte auf der SD-Karte, verknuepft mit dem Archiv
     meta = card_store.load_meta(folder.path)
-    assert meta.title == "Die kleine Hexe"
+    assert meta.title == "Fall 77"
     assert meta.album_id == dialog.album_id
-    # Tracks tragen die Album-ID, Cover ist eingebettet
     assert album_identity.read_album_id([folder.tracks[0].filepath]) == dialog.album_id
     assert MetadataManager().get_cover_bytes(folder.tracks[1].filepath)
-    # Archiv: ein MusicBrainz-Cover mit beiden Rollen
     covers = archive.covers(dialog.album_id)
     assert len(covers) == 1
+    assert covers[0].kind == KIND_ONLINE and covers[0].provider == "Deezer"
+    assert covers[0].source == "https://dz/1000"  # volle Aufloesung archiviert
     assert set(covers[0].roles) == {ROLE_CARD_COVER, ROLE_ALBUM_COVER}
+    assert section_count(dialog, cm.SECTION_ARCHIVE) == 1
     dialog.done(0)
 
     # zweites Oeffnen: Archiv-Cover und SD-Kartenmotiv sind wieder da
-    dialog2 = cover_manager_dialog.CoverManagerDialog(folder, "Die kleine Hexe", MetadataManager(), archive)
+    dialog2 = cm.CoverManagerDialog(folder, "Ordner 01", MetadataManager(), archive)
     assert dialog2.album_id == meta.album_id
-    assert dialog2.lists[cover_manager_dialog.SECTION_ARCHIVE].count() == 1
-    assert dialog2.lists[cover_manager_dialog.SECTION_CURRENT].count() == 2
+    assert section_count(dialog2, cm.SECTION_ARCHIVE) == 1
+    assert section_count(dialog2, cm.SECTION_CURRENT) == 2
+    dialog2.filter_bar.setCurrentIndex(3)  # Archiv
+    visible = [dialog2.gallery.item(i) for i in range(dialog2.gallery.count())
+               if not dialog2.gallery.item(i).isHidden()]
+    assert len(visible) == 1
     run_workers(app, dialog2)
     dialog2.done(0)
 
 
-def test_cover_manager_new_variants_need_keeping(app, sd, tmp_path, monkeypatch, fake_mb):
-    from gui import cover_manager_dialog
+def test_cover_manager_new_variants_need_keeping(app, sd, tmp_path, monkeypatch, fake_sources):
+    from gui import cover_manager_dialog as cm
 
-    monkeypatch.setattr(cover_manager_dialog, "gemini_client", lambda: None)
+    monkeypatch.setattr(cm, "gemini_client", lambda: None)
     archive = CoverArchive(str(tmp_path / "data"))
-    dialog = cover_manager_dialog.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), archive)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), archive)
     run_workers(app, dialog)
     dialog._generation_meta = {"style": "Aquarell", "model": "m", "prompt": ""}
     dialog._on_variant_ready(Image.new("RGB", (400, 600), "green"))
     dialog._on_variant_ready(Image.new("RGB", (400, 600), "blue"))
     assert len(dialog.unsaved_variants()) == 2
 
-    dialog._keep(dialog.candidates[cover_manager_dialog.SECTION_NEW][0])
+    dialog._keep([c for c in dialog.candidates if c.section == cm.SECTION_NEW][0])
     assert len(dialog.unsaved_variants()) == 1
     assert [e.style for e in archive.covers(dialog.album_id)] == ["Aquarell"]
-    # nur eine Variante behalten -> verwerfen beim Schliessen
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
 

@@ -69,7 +69,7 @@ class AiSettingsDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("KI-Einstellungen (Gemini)")
+        self.setWindowTitle("KI & Online-Dienste")
         self.setMinimumWidth(520)
         layout = QVBoxLayout(self)
 
@@ -97,7 +97,28 @@ class AiSettingsDialog(QDialog):
         form.addRow("Recherche-Modell:", self.text_model_edit)
         layout.addLayout(form)
 
-        self.remove_key_check = QCheckBox("Gespeicherten API-Key entfernen")
+        spotify_info = QLabel(
+            'Optional für die Cover-Suche: Client-ID und Secret einer eigenen App aus dem '
+            '<a href="https://developer.spotify.com/dashboard">Spotify Developer Dashboard</a>.')
+        spotify_info.setOpenExternalLinks(True)
+        spotify_info.setWordWrap(True)
+        layout.addWidget(spotify_info)
+        spotify_form = QFormLayout()
+        self.spotify_id_edit = QLineEdit()
+        self.spotify_secret_edit = QLineEdit()
+        self.spotify_secret_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        if ai_settings.spotify_credentials_from_env():
+            for edit in (self.spotify_id_edit, self.spotify_secret_edit):
+                edit.setPlaceholderText("aus Umgebungsvariable")
+                edit.setEnabled(False)
+        elif ai_settings.get_spotify_credentials():
+            self.spotify_id_edit.setPlaceholderText("gespeichert – zum Ändern neu eingeben")
+            self.spotify_secret_edit.setPlaceholderText("gespeichert – zum Ändern neu eingeben")
+        spotify_form.addRow("Spotify Client-ID:", self.spotify_id_edit)
+        spotify_form.addRow("Spotify Client-Secret:", self.spotify_secret_edit)
+        layout.addLayout(spotify_form)
+
+        self.remove_key_check = QCheckBox("Gespeicherte Zugangsdaten (Gemini und Spotify) entfernen")
         layout.addWidget(self.remove_key_check)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -116,8 +137,17 @@ class AiSettingsDialog(QDialog):
         try:
             if self.remove_key_check.isChecked():
                 ai_settings.set_api_key("")
-            elif self.key_edit.text().strip():
-                ai_settings.set_api_key(self.key_edit.text())
+                ai_settings.set_spotify_credentials("", "")
+            else:
+                if self.key_edit.text().strip():
+                    ai_settings.set_api_key(self.key_edit.text())
+                spotify_id = self.spotify_id_edit.text().strip()
+                spotify_secret = self.spotify_secret_edit.text().strip()
+                if spotify_id and spotify_secret:
+                    ai_settings.set_spotify_credentials(spotify_id, spotify_secret)
+                elif spotify_id or spotify_secret:
+                    QMessageBox.information(self, "Spotify", "Bitte Client-ID und Secret gemeinsam eingeben.")
+                    return
         except Exception as e:
             QMessageBox.warning(self, "Schlüsselbund", f"API-Key konnte nicht gespeichert werden: {e}")
             return

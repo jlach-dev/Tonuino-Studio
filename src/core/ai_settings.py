@@ -61,3 +61,45 @@ def set_api_key(key: str):
             keyring.delete_password(KEYRING_SERVICE, KEYRING_USER)
         except keyring.errors.PasswordDeleteError:
             pass
+
+
+# --- Spotify (Cover-Suche) -------------------------------------------------------------------
+# Client-Credentials einer eigenen Spotify-App (developer.spotify.com/dashboard);
+# ebenfalls im Schluesselbund bzw. als Umgebungsvariablen.
+
+SPOTIFY_ID_USER = "spotify_client_id"
+SPOTIFY_SECRET_USER = "spotify_client_secret"
+SPOTIFY_ENV = ("SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET")
+
+
+def get_spotify_credentials() -> Optional[tuple]:
+    """(client_id, client_secret) oder None"""
+    client_id = os.environ.get(SPOTIFY_ENV[0], "").strip()
+    secret = os.environ.get(SPOTIFY_ENV[1], "").strip()
+    if client_id and secret:
+        return client_id, secret
+    try:
+        import keyring
+        client_id = keyring.get_password(KEYRING_SERVICE, SPOTIFY_ID_USER) or ""
+        secret = keyring.get_password(KEYRING_SERVICE, SPOTIFY_SECRET_USER) or ""
+    except Exception:
+        log.exception("Spotify-Zugangsdaten konnten nicht gelesen werden")
+        return None
+    return (client_id, secret) if client_id and secret else None
+
+
+def spotify_credentials_from_env() -> bool:
+    return all(os.environ.get(name, "").strip() for name in SPOTIFY_ENV)
+
+
+def set_spotify_credentials(client_id: str, secret: str):
+    """Speichert die Zugangsdaten; beide leer = entfernen"""
+    import keyring
+    for user, value in ((SPOTIFY_ID_USER, client_id), (SPOTIFY_SECRET_USER, secret)):
+        if value.strip():
+            keyring.set_password(KEYRING_SERVICE, user, value.strip())
+        else:
+            try:
+                keyring.delete_password(KEYRING_SERVICE, user)
+            except keyring.errors.PasswordDeleteError:
+                pass

@@ -22,6 +22,7 @@ from PIL import Image
 
 KIND_AI = "ai"
 KIND_MUSICBRAINZ = "musicbrainz"
+KIND_ONLINE = "online"  # Deezer, iTunes, MusicBrainz, Webseite (Anbieter in CoverEntry.provider)
 KIND_LOCAL = "local"  # eingebettet / cover.jpg im Ordner
 KIND_FILE = "file"  # vom PC gewaehlt
 
@@ -32,6 +33,7 @@ ROLE_SERIES_ANCHOR = "series_anchor"
 KIND_LABELS = {
     KIND_AI: "KI",
     KIND_MUSICBRAINZ: "MusicBrainz",
+    KIND_ONLINE: "Online",
     KIND_LOCAL: "Lokal",
     KIND_FILE: "Datei",
 }
@@ -80,6 +82,7 @@ class CoverEntry:
     file: str
     kind: str
     source: str = ""  # URL bzw. Beschreibung der Herkunft
+    provider: str = ""  # bei Online-Covern: Deezer, iTunes, MusicBrainz, Webseite
     prompt: str = ""
     model: str = ""
     style: str = ""
@@ -94,7 +97,7 @@ class CoverEntry:
 
     @property
     def label(self) -> str:
-        text = KIND_LABELS.get(self.kind, self.kind)
+        text = self.provider or KIND_LABELS.get(self.kind, self.kind)
         if self.style:
             text += f" · {self.style}"
         return text
