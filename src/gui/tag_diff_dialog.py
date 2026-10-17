@@ -101,6 +101,8 @@ class TagDiffDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"Tags von MusicBrainz – Ordner {folder.index:02d}")
         self.resize(1100, 640)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint)
+        self.setSizeGripEnabled(True)
         self.folder = folder
         self.metadata_manager = metadata_manager
 

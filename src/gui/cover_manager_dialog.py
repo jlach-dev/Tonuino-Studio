@@ -220,13 +220,19 @@ class CoverManagerDialog(QDialog):
                  parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Cover-Manager – Ordner {folder.index:02d}")
+        # Wie das Hauptfenster: maximierbar (Dialoge haben den Knopf sonst nicht)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint
+                            | Qt.WindowType.WindowMinimizeButtonHint)
         self.setMinimumSize(980, 620)
         self.setSizeGripEnabled(True)
-        geometry = QSettings().value("cover_manager/geometry")
+        settings = QSettings()
+        geometry = settings.value("cover_manager/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
         else:
             self.resize(1180, 760)
+        if settings.value("cover_manager/maximized", False, type=bool):
+            self.setWindowState(Qt.WindowState.WindowMaximized)
         self.folder = folder
         # "Ordner NN" ist nur der Anzeigename des Managers, kein Titel
         self.folder_name = "" if folder_name.startswith("Ordner ") else folder_name
@@ -1662,7 +1668,9 @@ class CoverManagerDialog(QDialog):
             elif box.clickedButton() != btn_discard:
                 return
         settings = QSettings()
-        settings.setValue("cover_manager/geometry", self.saveGeometry())
+        settings.setValue("cover_manager/maximized", self.isMaximized())
+        if not self.isMaximized():
+            settings.setValue("cover_manager/geometry", self.saveGeometry())
         settings.setValue("cover_manager/splitter", self.main_splitter.saveState())
         settings.setValue("cover_manager/left_splitter", self.left_splitter.saveState())
         for worker in (self._search_worker, self._research_worker, self._generate_worker, self._extend_worker):
