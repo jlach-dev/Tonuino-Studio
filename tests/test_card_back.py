@@ -205,7 +205,13 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
     assert dialog._back_source_image(other).getpixel((0, 0)) == (0, 0, 200)
 
     # KI-Randergaenzung der Rueckseite: neue Version unter "Neu", Original unveraendert
+    class FakeSignal:
+        def connect(self, slot):
+            pass
+
     class FakeWorker:
+        done = failed = finished = FakeSignal()
+
         def __init__(self, client, model, data, orientation):
             self.data = data
 
