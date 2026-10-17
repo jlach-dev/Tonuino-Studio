@@ -75,6 +75,7 @@ class AlbumRecord:
     series_id: str = ""
     paths: List[str] = field(default_factory=list)  # bekannte Orte (SD-Ordner, Bibliothek)
     album_cover_sha1: str = ""  # SHA-1 des zuletzt eingebetteten Album-Covers (bereits archiviert)
+    fingerprint: str = ""  # Trackzahl + Laengen (core/library.py) - erkennt Kopien ohne ID-Tag
     created: str = ""
 
     @classmethod

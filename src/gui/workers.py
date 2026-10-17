@@ -542,3 +542,42 @@ class CharacterSheetWorker(QThread):
         except Exception as e:
             log.exception("Charakterblatt fehlgeschlagen")
             self.failed.emit(str(e))
+
+
+# --- Bibliothek (core/library.py) -----------------------------------------------------------------
+
+class LibraryScanWorker(QThread):
+    """Liest die Bibliothek-Ordner ein (inkrementell), gleicht sie mit dem
+    Cover-Archiv ab, speichert den Index und ermittelt, welche Alben schon
+    auf der SD-Karte liegen (Album-ID -> Ordnernummer)."""
+    progress = pyqtSignal(int, int, str)  # aktueller Index, Gesamtzahl, Albumname
+    completed = pyqtSignal(object, object)  # LibraryIndex, dict Album-ID -> Ordnernummer
+    failed = pyqtSignal(str)
+
+    def __init__(self, library, previous, archive=None, sd_folders=None, rescan: bool = True):
+        super().__init__()
+        self.library = library
+        self.previous = previous
+        self.archive = archive
+        self.sd_folders = list(sd_folders or [])
+        self.rescan = rescan
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        from core.library import sd_album_ids
+        try:
+            index = self.previous
+            if self.rescan and self.library is not None:
+                index = self.library.scan(self.previous, self.progress.emit, lambda: self._cancelled)
+                if self.archive is not None:
+                    index = self.library.match(index, self.archive)
+                if not self._cancelled:
+                    self.library.save(index)
+            sd_map = sd_album_ids(self.sd_folders) if self.sd_folders else {}
+            self.completed.emit(index, sd_map)
+        except Exception as e:
+            log.exception("Bibliothek einlesen fehlgeschlagen")
+            self.failed.emit(str(e))

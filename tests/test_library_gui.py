@@ -1,0 +1,174 @@
+import shutil
+import subprocess
+
+import pytest
+
+pytest.importorskip("PyQt6")
+
+from PyQt6.QtCore import QCoreApplication, QPointF, QSettings, Qt, QUrl, QMimeData
+from PyQt6.QtGui import QDropEvent
+from PyQt6.QtWidgets import QApplication
+
+from core import album_identity
+from core.cover_archive import CoverArchive
+from core.library import SETTINGS_SOURCES, Library
+from core.metadata import MetadataManager
+from gui.library_dnd import MIME_ALBUM, FolderListWidget, album_paths_from_mime, make_album_mime
+
+
+@pytest.fixture(scope="module")
+def app():
+    QCoreApplication.setOrganizationName("Tonuino-Manager-Tests")
+    QCoreApplication.setApplicationName("tests-library")
+    application = QApplication.instance() or QApplication([])
+    QSettings().clear()
+    yield application
+    QSettings().clear()
+
+
+def make_album(root, name, count=2, album="", artist=""):
+    import imageio_ffmpeg
+    folder = root / name
+    folder.mkdir(parents=True)
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-loglevel", "error", "-f", "lavfi", "-i",
+                    "anullsrc=r=22050:cl=mono", "-t", "0.3", "-q:a", "9", str(folder / "01.mp3")], check=True)
+    for i in range(2, count + 1):
+        shutil.copy(folder / "01.mp3", folder / f"{i:02d}.mp3")
+    for i in range(1, count + 1):
+        MetadataManager().write_metadata(str(folder / f"{i:02d}.mp3"), album=album or name,
+                                         artist=artist or "Interpret", title=f"Titel {i}")
+    return folder
+
+
+def test_mime_roundtrip_and_explorer_folders(tmp_path):
+    album = tmp_path / "Album"
+    album.mkdir()
+    (album / "01.mp3").write_bytes(b"x")
+    mime = make_album_mime([str(album)])
+    assert mime.hasFormat(MIME_ALBUM) and album_paths_from_mime(mime) == [str(album)]
+
+    explorer = QMimeData()
+    explorer.setUrls([QUrl.fromLocalFile(str(album)), QUrl.fromLocalFile(str(album / "01.mp3")),
+                      QUrl.fromLocalFile(str(tmp_path / "fehlt"))])
+    assert album_paths_from_mime(explorer) == [str(album)]
+    assert album_paths_from_mime(QMimeData()) == []
+
+
+def test_folder_list_drop_targets(app, tmp_path):
+    widget = FolderListWidget()
+    widget.resize(200, 300)
+    received = []
+    widget.albums_dropped.connect(lambda paths, identity: received.append((paths, identity)))
+    mime = make_album_mime([str(tmp_path)])
+
+    def drop(pos):
+        event = QDropEvent(QPointF(pos), Qt.DropAction.CopyAction, mime, Qt.MouseButton.LeftButton,
+                           Qt.KeyboardModifier.NoModifier)
+        widget.dropEvent(event)
+        return event.isAccepted()
+
+    assert not drop(widget.rect().center())  # ohne SD-Karte kein Drop
+    widget.drop_enabled = True
+    assert drop(widget.rect().center()) and received[-1] == ([str(tmp_path)], None)
+
+    from PyQt6.QtWidgets import QListWidgetItem
+    item = QListWidgetItem("01")
+    item.setData(Qt.ItemDataRole.UserRole, 1)
+    widget.addItem(item)
+    assert drop(widget.visualItemRect(item).center()) and received[-1] == ([str(tmp_path)], 1)
+
+
+def test_main_window_library_view_switch_badges_and_drop(app, tmp_path, monkeypatch):
+    from gui import main_window as mw
+    from gui.main_window import MainWindow
+
+    source = tmp_path / "Musik"
+    hexe = make_album(source, "Hexe", count=2, album="Die kleine Hexe", artist="Preußler")
+    make_album(source, "Neu", count=1, album="Neues Album")
+    data_dir = tmp_path / "data"
+    settings = QSettings()
+    settings.setValue("library/data_dir", str(data_dir))
+    settings.setValue(SETTINGS_SOURCES, [str(source)])
+    settings.setValue("library/write_id_tags", "no")
+    # SD-Karte mit einem Ordner, der das Hexe-Album schon traegt
+    sd_root = tmp_path / "sd"
+    sd01 = make_album(sd_root, "01", count=1, album="Die kleine Hexe")
+    (sd01 / "01.mp3").rename(sd01 / "001.mp3")
+    album_identity.write_album_id([str(sd01 / "001.mp3")], "id-hexe")
+    album_identity.write_album_id([str(p) for p in hexe.glob("*.mp3")], "id-hexe")
+    CoverArchive(str(data_dir)).ensure_album("id-hexe", "Die kleine Hexe", "Preußler", path=str(hexe))
+    Library(str(data_dir), [str(source)]).save(Library(str(data_dir), [str(source)]).scan())
+
+    window = MainWindow()
+    window.show()
+    app.processEvents()
+    assert window.stack.currentWidget() is window.welcome_widget
+    assert window.library_view.grid.count() == 2  # Index aus dem Cache, noch ohne Einlesen
+
+    # SD-Karte "oeffnen" wie _on_scan_finished nach dem Dialog
+    from core.sd_card import SDCard
+    window.sd_card = SDCard(str(sd_root))
+    window.sd_card.scan()
+    window._open_sd_dialog = type("D", (), {"close": lambda self: None})()
+    window._on_scan_finished(True)
+    assert window.folder_list.drop_enabled
+
+    # Umschalter: Bibliothek einlesen, Kacheln mit Abzeichen
+    window.view_switch.setCurrentIndex(1)
+    assert window.stack.currentWidget() is window.library_view
+    for _ in range(100):
+        worker = window._library_worker
+        if worker is not None and worker.isRunning():
+            worker.wait(200)
+        app.processEvents()
+        if not window._library_rescan_pending and (worker is None or not worker.isRunning())                 and window._library_index.scanned and window.library_view.btn_rescan.isEnabled():
+            break
+    view = window.library_view
+    assert view.grid.count() == 2
+    by_name = {a.name: a for a in view.index.albums}
+    assert [b[0] for b in view.badges_for(by_name["Die kleine Hexe"])] == ["auf SD als 01"]
+    assert [b[0] for b in view.badges_for(by_name["Neues Album"])] == ["neu"]
+    assert view.grid.mimeData([view.grid.item(0)]).hasFormat(MIME_ALBUM)
+
+    view.search_edit.setText("neues")
+    assert view.grid.count() == 1 and view.visible_albums()[0].name == "Neues Album"
+    view.search_edit.clear()
+
+    # zurueck zur SD-Ansicht: Ordner 01 zeigt die Verknuepfung samt Hinweis auf den fehlenden Track
+    window.view_switch.setCurrentIndex(0)
+    window._select_folder_in_list(1)
+    app.processEvents()
+    assert window.stack.currentWidget() is window.folder_widget
+    assert window.folder_library_hint.isVisibleTo(window)
+    assert window.folder_library_hint.text().startswith("aus Bibliothek: Die kleine Hexe")
+    assert "1 Track(s) mehr" in window.folder_library_hint.text()
+
+    # Drop auf freie Flaeche: neuer Ordner 02 mit dem neuen Album (ohne Rueckfrage, Entscheidung gespeichert)
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    window._on_albums_dropped([str(source / "Neu")], None)
+    for _ in range(50):
+        job = window._import_job
+        if job is None:
+            break
+        job["worker"].wait(500)
+        app.processEvents()
+    assert window._import_job is None
+    assert sorted(p.name for p in (sd_root / "02").glob("*.mp3")) == ["001.mp3"]
+    assert window.current_folder.index == 2 and window.folder_title.text() == "Neues Album"
+    new_id = album_identity.read_album_id([str(sd_root / "02" / "001.mp3")])
+    assert new_id and window._sd_album_map.get(new_id) == 2
+    assert album_identity.read_album_id([str(source / "Neu" / "01.mp3")]) is None  # Bibliothek unangetastet
+
+    # Drop auf Ordner 01 mit "Anhaengen"
+    monkeypatch.setattr(window, "_ask_replace_or_append", lambda *_: "append")
+    window._on_albums_dropped([str(hexe)], 1)
+    for _ in range(50):
+        job = window._import_job
+        if job is None:
+            break
+        job["worker"].wait(500)
+        app.processEvents()
+    assert sorted(p.name for p in (sd_root / "01").glob("*.mp3")) == ["001.mp3", "002.mp3", "003.mp3"]
+    assert window.current_folder.index == 1
+    window.close()
+    app.processEvents()
