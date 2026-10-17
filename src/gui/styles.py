@@ -286,6 +286,11 @@ QPushButton#ghostButton {
     padding: 6px 12px;
 }
 
+/* === Scrollbereiche (z.B. Karten-Tab im Cover-Manager) === */
+QScrollArea, QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
 /* === Splitter === */
 QSplitter::handle {
     background-color: @SURFACE0@;

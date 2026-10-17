@@ -22,7 +22,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
-    QSplitter, QTabBar, QTabWidget, QVBoxLayout, QWidget,
+    QScrollArea, QSplitter, QTabBar, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from core import ai_settings, album_identity, card_store, cover_sources
@@ -214,7 +214,7 @@ class CoverManagerDialog(QDialog):
                  parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Cover-Manager – Ordner {folder.index:02d}")
-        self.setMinimumSize(900, 600)
+        self.setMinimumSize(980, 620)
         self.setSizeGripEnabled(True)
         geometry = QSettings().value("cover_manager/geometry")
         if geometry is not None:
@@ -355,10 +355,12 @@ class CoverManagerDialog(QDialog):
         self.btn_discard.setObjectName("softDangerButton")
         self.btn_discard.setToolTip("Markierte Bilder entfernen – archivierte werden aus dem Archiv gelöscht")
         self.btn_discard.clicked.connect(self._discard_marked)
-        self.btn_unmark = QPushButton("Markierung aufheben")
+        self.btn_unmark = QPushButton("Keine")
+        self.btn_unmark.setToolTip("Markierung aufheben")
         self.btn_unmark.setObjectName("ghostButton")
         self.btn_unmark.clicked.connect(lambda: self._set_all_marks(False))
-        self.btn_mark_all = QPushButton("Alle sichtbaren markieren")
+        self.btn_mark_all = QPushButton("Alle")
+        self.btn_mark_all.setToolTip("Alle sichtbaren Bilder markieren")
         self.btn_mark_all.setObjectName("ghostButton")
         self.btn_mark_all.clicked.connect(lambda: self._set_all_marks(True))
         for button in (self.btn_keep, self.btn_reference, self.btn_discard):
@@ -398,9 +400,12 @@ class CoverManagerDialog(QDialog):
         btn_close.clicked.connect(self.reject)
         close_row.addWidget(btn_close)
         right.addLayout(close_row)
+        right_widget.setMinimumWidth(420)
+        self.left_splitter.setMinimumWidth(540)
         self.main_splitter.addWidget(right_widget)
         self.main_splitter.setStretchFactor(0, 3)
         self.main_splitter.setStretchFactor(1, 2)
+        self.main_splitter.setSizes([700, 480])
         settings = QSettings()
         for splitter, key in ((self.main_splitter, "cover_manager/splitter"),
                               (self.left_splitter, "cover_manager/left_splitter")):
@@ -474,8 +479,14 @@ class CoverManagerDialog(QDialog):
         return tab
 
     def _card_tab(self) -> QWidget:
-        tab = QWidget()
-        tab_layout = QVBoxLayout(tab)
+        # Inhalt in einem Scrollbereich, damit der Tab auch bei kleinem Fenster bedienbar bleibt
+        tab = QScrollArea()
+        tab.setWidgetResizable(True)
+        tab.setFrameShape(QScrollArea.Shape.NoFrame)
+        tab.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        inner = QWidget()
+        tab.setWidget(inner)
+        tab_layout = QVBoxLayout(inner)
         form = QFormLayout()
         tab_layout.addLayout(form)
         tab_layout.addStretch(1)
