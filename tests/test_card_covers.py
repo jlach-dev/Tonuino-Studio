@@ -99,7 +99,7 @@ def test_card_text_from_tags_series_and_double_episodes():
     assert derive_card_text(FolderInfo(
         albums=["Bibi Blocksberg - Folge 1: Hexen gibt es doch", "Bibi Blocksberg - Folge 2: Der Superbesen"],
         artist="Bibi Blocksberg")) == ("Bibi Blocksberg", "Folge 1: Hexen gibt es doch\nFolge 2: Der Superbesen")
-    assert derive_card_text(FolderInfo(albums=["AC/DC Live"], artist="AC/DC")) == ("AC/DC", "Live")
+    assert derive_card_text(FolderInfo(albums=["AC/DC Live"], artist="AC/DC")) == ("AC/DC", "AC/DC Live")
     # Podcast-Download: Album-Tag ist nur der Feed, Reihe und Folgen stehen im Tracktitel
     feed = FolderInfo(album="MausHörspiel lang", artist="Otfried Preußler", titles=[
         "Die kleine Hexe (1/2): Heia Walpurgisnacht | MausHörspiel lang (07.12.2024)",
@@ -136,3 +136,23 @@ def test_describe_work_basis_and_title():
     assert "MusicBrainz" in verified.basis
 
     assert describe_work(FolderInfo()).title == ""
+
+
+def test_card_text_keeps_series_word_and_ignores_single_track_albums():
+    from core.card_text import derive_card_text, main_albums
+    from core.cover_research import FolderInfo
+
+    # "Eule" ist Reihe UND erstes Wort des Titels - darf nicht abgeschnitten werden
+    info = FolderInfo(artist="Eule",
+                      albums=["Eule findet den Beat (Musik-Hörspiel)", "Eule findet den Beat - Auf Europatour",
+                              "Eule findet den Beat - mit Gefühl - Die Songs"],
+                      album_counts={"Eule findet den Beat (Musik-Hörspiel)": 13,
+                                    "Eule findet den Beat - Auf Europatour": 1,
+                                    "Eule findet den Beat - mit Gefühl - Die Songs": 1})
+    assert main_albums(info) == ["Eule findet den Beat (Musik-Hörspiel)"]
+    assert derive_card_text(info) == ("Eule", "Eule findet den Beat (Musik-Hörspiel)")
+
+    # zwei Folgen mit je mehreren Tracks bleiben zwei Zeilen
+    two = FolderInfo(artist="Bibi Blocksberg", albums=["Bibi Blocksberg - Folge 1: A", "Bibi Blocksberg - Folge 2: B"],
+                     album_counts={"Bibi Blocksberg - Folge 1: A": 4, "Bibi Blocksberg - Folge 2: B": 5})
+    assert derive_card_text(two) == ("Bibi Blocksberg", "Folge 1: A\nFolge 2: B")

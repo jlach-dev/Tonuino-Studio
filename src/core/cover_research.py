@@ -28,6 +28,7 @@ class FolderInfo:
     titles: List[str] = field(default_factory=list)
     cover_bytes: Optional[bytes] = None
     albums: List[str] = field(default_factory=list)  # alle verschiedenen Album-Tags (mehrere Folgen je Karte)
+    album_counts: dict = field(default_factory=dict)  # Album-Tag -> Anzahl Tracks damit
     album_artist: str = ""
     tags_verified: bool = False  # MusicBrainz-IDs in den Tags (siehe core/album_identity.py)
 
@@ -74,8 +75,10 @@ def gather_folder_info(folder: Folder, metadata_manager, max_titles: int = 25) -
         info.album = info.album or metadata.album
         info.artist = info.artist or metadata.album_artist or metadata.artist
         info.album_artist = info.album_artist or metadata.album_artist
-        if metadata.album and metadata.album not in info.albums:
-            info.albums.append(metadata.album)
+        if metadata.album:
+            if metadata.album not in info.albums:
+                info.albums.append(metadata.album)
+            info.album_counts[metadata.album] = info.album_counts.get(metadata.album, 0) + 1
         if metadata.title:
             info.titles.append(metadata.title)
         if info.cover_bytes is None and cover:

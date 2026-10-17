@@ -26,12 +26,39 @@ _EPISODE_NO = re.compile(r"^\s*((?:folge|episode|teil|band|vol\.?|nr\.?)\s*\d+)\
 _SPLIT = re.compile(r"\s*/\s*")
 
 
+_SEPARATOR = re.compile(r"^\s*[-–:·|]\s*")
+
+
 def _strip_series(text: str, series: str) -> str:
-    """'Die Fuchsbande - Folge 39' -> 'Folge 39' (Reihe steht separat)"""
+    """'Die Fuchsbande - Folge 39' -> 'Folge 39' (Reihe steht separat). Nur
+    wenn nach der Reihe ein Trennzeichen folgt - 'Eule findet den Beat' bei
+    Reihe 'Eule' bleibt unveraendert."""
     if series and text.lower().startswith(series.lower()):
-        rest = text[len(series):].lstrip(" -–:·|")
-        return rest or text
+        rest = text[len(series):]
+        if _SEPARATOR.match(rest):
+            return _SEPARATOR.sub("", rest, count=1) or text
     return text
+
+
+def main_albums(info: FolderInfo, max_albums: int = MAX_EPISODES) -> List[str]:
+    """Die Album-Tags, die den Ordner wirklich ausmachen. Einzelne Tracks aus
+    anderen Alben (Bonus-Songs, Singles) duerfen keine eigene Titelzeile
+    bekommen: ein Tag zaehlt nur, wenn er mindestens 20 % der Tracks (mind. 2)
+    traegt - oder wenn es ohnehin nur Einzeltracks gibt (z.B. ein Track je
+    Folge). Ohne Zaehlung (Tests) gelten alle Tags."""
+    albums = [a.strip() for a in info.albums if a.strip()]
+    if not albums:
+        return [info.album.strip()] if info.album.strip() else []
+    counts = info.album_counts
+    if not counts:
+        return albums[:max_albums]
+    total = sum(counts.get(a, 0) for a in albums)
+    threshold = max(2, round(total * 0.2))
+    main = [a for a in albums if counts.get(a, 0) >= threshold]
+    if not main:
+        # nur Einzeltracks: die ersten (in Trackreihenfolge) nehmen
+        main = albums
+    return main[:max_albums]
 
 
 def _split_episodes(album: str) -> List[str]:
@@ -91,7 +118,7 @@ def derive_card_text(info: FolderInfo, brief: Optional[CoverBrief] = None) -> Tu
         return episodes[0].series, "\n".join(titles[:MAX_EPISODES])
 
     series = (info.album_artist or info.artist or (brief.series if brief else "")).strip()
-    albums = [a.strip() for a in info.albums if a.strip()] or ([info.album.strip()] if info.album.strip() else [])
+    albums = main_albums(info)
 
     if len(albums) > 1:
         episodes = [_strip_series(a, series) for a in albums]
