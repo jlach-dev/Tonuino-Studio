@@ -1,0 +1,573 @@
+"""
+Bibliothek: die Hoerspiele und Musik des Nutzers auf PC und NAS
+
+Die Musik bleibt, wo sie ist. Die App liest mehrere Quellordner (QSettings
+"library/sources") ein und merkt sich das Ergebnis in
+<data_dir>/library_index.json, damit die Bibliothek auch dann angezeigt
+wird, wenn ein NAS gerade nicht erreichbar ist (Alben dort gelten als
+"offline"). Ein Album ist ein Ordner mit Audiodateien; Unterordner wie
+"CD1"/"CD2" werden zu einem Album zusammengefasst.
+
+Wiedererkannt werden Alben ueber die App-Album-ID (Tag TONUINO_ALBUM_ID,
+siehe core/album_identity.py) - auch nach Umbenennen oder Verschieben. In
+die Bibliotheksdateien wird die ID erst geschrieben, wenn der Nutzer das
+einmalig erlaubt hat (QSettings "library/write_id_tags"); WAV wird dabei
+uebersprungen.
+"""
+
+import base64
+import hashlib
+import io
+import json
+import logging
+import os
+import re
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Tuple
+
+log = logging.getLogger(__name__)
+
+AUDIO_EXTENSIONS = (".mp3", ".flac", ".m4a", ".ogg", ".wav", ".opus")
+INDEX_FILE = "library_index.json"
+THUMBS_DIR = "library_thumbs"
+THUMB_SIZE = 240
+
+SETTINGS_SOURCES = "library/sources"
+SETTINGS_WRITE_ID_TAGS = "library/write_id_tags"  # "yes" / "no" / "" (noch nicht gefragt)
+
+# Zustand eines Bibliotheksalbums gegenueber dem Cover-Archiv
+STATE_LINKED = "linked"  # Album-ID bekannt, Pfad im Archiv eingetragen
+STATE_MOVED = "moved"  # Album-ID bekannt, aber unter neuem Pfad (Archiv wurde aktualisiert)
+STATE_NEW = "new"  # noch nicht im Archiv
+STATE_ORPHANED = "orphaned"  # Archiv-Eintrag, dessen Bibliotheksordner verschwunden ist
+STATE_OFFLINE = "offline"  # Quelle (z.B. NAS) gerade nicht erreichbar
+
+STATE_LABELS = {
+    STATE_LINKED: "verknüpft",
+    STATE_MOVED: "verschoben",
+    STATE_NEW: "neu",
+    STATE_ORPHANED: "verwaist",
+    STATE_OFFLINE: "offline",
+}
+
+_DISC_FOLDER = re.compile(r"^(cd|disc|disk|teil|part)\s*[-_ ]?\s*(\d+)$", re.IGNORECASE)
+_NUMBER = re.compile(r"(\d+)")
+
+ALBUM_ID_KEY = "TONUINO_ALBUM_ID"
+MB_ALBUM_ID_KEY = "MusicBrainz Album Id"
+MB_RELEASE_GROUP_KEY = "MusicBrainz Release Group Id"
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _natural_key(name: str):
+    return [int(part) if part.isdigit() else part.lower() for part in _NUMBER.split(name)]
+
+
+def norm_path(path: str) -> str:
+    """Vergleichbare Schreibweise eines Pfads (Windows: Gross-/Kleinschreibung egal)"""
+    text = os.path.normpath(str(path)).replace("\\", "/")
+    return text.lower() if os.name == "nt" else text
+
+
+def is_audio_file(name: str) -> bool:
+    return name.lower().endswith(AUDIO_EXTENSIONS) and not name.startswith("._")
+
+
+# --- Datenmodell -------------------------------------------------------------------------------
+
+@dataclass
+class LibraryAlbum:
+    path: str
+    source: str = ""  # Quellordner, zu dem das Album gehoert
+    title: str = ""
+    artist: str = ""
+    tracks: List[str] = field(default_factory=list)  # Audiodateien in Abspielreihenfolge
+    duration: float = 0.0  # Sekunden, alle Tracks
+    album_id: str = ""  # TONUINO_ALBUM_ID aus den Tags
+    mb_release_id: str = ""
+    mb_release_group_id: str = ""
+    fingerprint: str = ""  # Trackzahl + gerundete Laengen (erkennt Kopien ohne ID-Tag)
+    thumb: str = ""  # Dateiname des Vorschaubilds in <data_dir>/library_thumbs
+    has_cover: bool = False
+    signature: str = ""  # Dateianzahl + juengste Aenderung (fuer das inkrementelle Einlesen)
+    state: str = STATE_NEW
+    offline: bool = False
+    scanned: str = ""
+
+    @property
+    def track_count(self) -> int:
+        return len(self.tracks)
+
+    @property
+    def name(self) -> str:
+        return self.title or Path(self.path).name
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LibraryAlbum":
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
+class LibraryIndex:
+    albums: List[LibraryAlbum] = field(default_factory=list)
+    scanned: str = ""
+    orphaned: List[dict] = field(default_factory=list)  # Archiv-Eintraege ohne Bibliotheksordner (id, title, artist)
+
+    def by_path(self) -> Dict[str, LibraryAlbum]:
+        return {norm_path(a.path): a for a in self.albums}
+
+    def by_id(self) -> Dict[str, LibraryAlbum]:
+        return {a.album_id: a for a in self.albums if a.album_id}
+
+    def find(self, path: str) -> Optional[LibraryAlbum]:
+        return self.by_path().get(norm_path(path))
+
+    def to_dict(self) -> dict:
+        return {"version": 1, "scanned": self.scanned, "orphaned": self.orphaned,
+                "albums": [asdict(a) for a in self.albums]}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LibraryIndex":
+        return cls(albums=[LibraryAlbum.from_dict(a) for a in data.get("albums", [])],
+                   scanned=data.get("scanned", ""), orphaned=list(data.get("orphaned", [])))
+
+
+# --- Tags lesen (alle Formate ueber mutagen.File) ------------------------------------------------
+
+@dataclass
+class TrackTags:
+    title: str = ""
+    artist: str = ""
+    album: str = ""
+    album_artist: str = ""
+    duration: float = 0.0
+    cover: Optional[bytes] = None
+    album_id: str = ""
+    mb_release_id: str = ""
+    mb_release_group_id: str = ""
+
+
+def _first(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", "replace")
+    return str(value).strip()
+
+
+def _open_any(path: str):
+    import mutagen
+    try:
+        return mutagen.File(path)
+    except Exception as e:
+        log.debug("Datei nicht lesbar (%s): %s", path, e)
+        return None
+
+
+def read_track_tags(path: str) -> TrackTags:
+    """Titel, Interpret, Album, Dauer, Cover und IDs - MP3, FLAC, M4A, OGG/Opus, WAV"""
+    tags = TrackTags()
+    audio = _open_any(path)
+    if audio is None:
+        return tags
+    tags.duration = float(getattr(audio.info, "length", 0.0) or 0.0)
+    raw = audio.tags
+    if raw is None:
+        return tags
+    try:
+        from mutagen.id3 import ID3
+        from mutagen.mp4 import MP4Tags
+    except ImportError:  # pragma: no cover
+        return tags
+
+    if isinstance(raw, ID3):
+        def frame(key):
+            item = raw.get(key)
+            return _first(item.text) if item is not None and getattr(item, "text", None) else ""
+
+        def txxx(desc):
+            return frame(f"TXXX:{desc}")
+
+        tags.title, tags.artist = frame("TIT2"), frame("TPE1")
+        tags.album, tags.album_artist = frame("TALB"), frame("TPE2")
+        tags.album_id = txxx(ALBUM_ID_KEY)
+        tags.mb_release_id, tags.mb_release_group_id = txxx(MB_ALBUM_ID_KEY), txxx(MB_RELEASE_GROUP_KEY)
+        for key in raw.keys():
+            if key.startswith("APIC"):
+                tags.cover = raw[key].data
+                break
+    elif isinstance(raw, MP4Tags):
+        def atom(key):
+            return _first(raw.get(key))
+
+        tags.title, tags.artist = atom("\xa9nam"), atom("\xa9ART")
+        tags.album, tags.album_artist = atom("\xa9alb"), atom("aART")
+        tags.album_id = atom(f"----:com.apple.iTunes:{ALBUM_ID_KEY}")
+        tags.mb_release_id = atom(f"----:com.apple.iTunes:{MB_ALBUM_ID_KEY}")
+        tags.mb_release_group_id = atom(f"----:com.apple.iTunes:{MB_RELEASE_GROUP_KEY}")
+        covers = raw.get("covr")
+        if covers:
+            tags.cover = bytes(covers[0])
+    else:  # Vorbis-Kommentare (FLAC, OGG, Opus)
+        def comment(key):
+            return _first(raw.get(key) or raw.get(key.lower()) or raw.get(key.upper()))
+
+        tags.title, tags.artist = comment("title"), comment("artist")
+        tags.album, tags.album_artist = comment("album"), comment("albumartist")
+        tags.album_id = comment(ALBUM_ID_KEY)
+        tags.mb_release_id = comment("musicbrainz_albumid")
+        tags.mb_release_group_id = comment("musicbrainz_releasegroupid")
+        pictures = getattr(audio, "pictures", None)
+        if pictures:
+            tags.cover = pictures[0].data
+        else:
+            encoded = raw.get("metadata_block_picture")
+            if encoded:
+                try:
+                    from mutagen.flac import Picture
+                    tags.cover = Picture(base64.b64decode(_first(encoded))).data
+                except Exception:
+                    pass
+    return tags
+
+
+def write_album_id_any(path: str, album_id: str) -> bool:
+    """Schreibt die App-Album-ID in eine Bibliotheksdatei (MP3, FLAC, M4A, OGG/Opus);
+    WAV wird bewusst nicht angefasst. True, wenn geschrieben wurde."""
+    if path.lower().endswith(".wav"):
+        return False
+    audio = _open_any(path)
+    if audio is None:
+        return False
+    try:
+        from mutagen.id3 import ID3, TXXX
+        from mutagen.mp4 import MP4Tags
+        if audio.tags is None:
+            audio.add_tags()
+        raw = audio.tags
+        if isinstance(raw, ID3):
+            raw.setall(f"TXXX:{ALBUM_ID_KEY}", [TXXX(encoding=3, desc=ALBUM_ID_KEY, text=[album_id])])
+        elif isinstance(raw, MP4Tags):
+            raw[f"----:com.apple.iTunes:{ALBUM_ID_KEY}"] = [album_id.encode("utf-8")]
+        else:
+            raw[ALBUM_ID_KEY] = [album_id]
+        audio.save()
+        return True
+    except Exception as e:
+        log.warning("Album-ID konnte nicht geschrieben werden (%s): %s", path, e)
+        return False
+
+
+def write_album_id_to_album(album: "LibraryAlbum", album_id: str) -> int:
+    written = sum(1 for path in album.tracks if write_album_id_any(path, album_id))
+    if written:
+        album.album_id = album_id
+    return written
+
+
+# --- Alben finden -----------------------------------------------------------------------------
+
+def _audio_files(directory: str) -> List[str]:
+    try:
+        names = [e.name for e in os.scandir(directory) if e.is_file() and is_audio_file(e.name)]
+    except OSError:
+        return []
+    return [os.path.join(directory, n) for n in sorted(names, key=_natural_key)]
+
+
+def _disc_folders(directory: str, subdirs: List[str]) -> List[str]:
+    """Unterordner CD1/CD2/..., wenn alle Unterordner so heissen und Audio enthalten"""
+    if not subdirs:
+        return []
+    discs = []
+    for name in subdirs:
+        match = _DISC_FOLDER.match(name)
+        if not match or not _audio_files(os.path.join(directory, name)):
+            return []
+        discs.append((int(match.group(2)), name))
+    return [name for _, name in sorted(discs)]
+
+
+def album_track_files(album_path: str) -> List[str]:
+    """Audiodateien eines Albumordners (inkl. zusammengefasster CD-Unterordner)"""
+    files = _audio_files(album_path)
+    if files:
+        return files
+    try:
+        subdirs = [e.name for e in os.scandir(album_path) if e.is_dir() and not e.name.startswith(".")]
+    except OSError:
+        return []
+    for name in _disc_folders(album_path, subdirs):
+        files.extend(_audio_files(os.path.join(album_path, name)))
+    return files
+
+
+def find_album_folders(source: str) -> List[Tuple[str, List[str]]]:
+    """(Albumpfad, Audiodateien) fuer alle Alben unter einem Quellordner"""
+    result = []
+    for dirpath, dirnames, filenames in os.walk(source):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d.lower() != "@eadir")
+        files = [os.path.join(dirpath, n) for n in sorted(filenames, key=_natural_key) if is_audio_file(n)]
+        if files:
+            result.append((dirpath, files))
+            continue
+        discs = _disc_folders(dirpath, dirnames)
+        if discs:
+            merged = []
+            for name in discs:
+                merged.extend(_audio_files(os.path.join(dirpath, name)))
+            result.append((dirpath, merged))
+            dirnames[:] = []  # CD-Ordner nicht noch einmal als eigene Alben
+    return result
+
+
+def folder_signature(files: List[str]) -> str:
+    newest = 0.0
+    for path in files:
+        try:
+            newest = max(newest, os.stat(path).st_mtime)
+        except OSError:
+            pass
+    return f"{len(files)}:{newest:.0f}"
+
+
+def fingerprint(durations: List[float]) -> str:
+    """Trackzahl + auf ganze Sekunden gerundete Laengen - erkennt dieselbe
+    Aufnahme auch als konvertierte Kopie (z.B. auf der SD-Karte)"""
+    text = f"{len(durations)}:" + ",".join(str(int(round(d))) for d in durations)
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+def is_offline(source: str) -> bool:
+    try:
+        return not os.path.isdir(source)
+    except OSError:
+        return True
+
+
+def _thumb_name(album_path: str) -> str:
+    return hashlib.sha1(norm_path(album_path).encode("utf-8")).hexdigest()[:16] + ".jpg"
+
+
+def _folder_cover(album_path: str) -> Optional[bytes]:
+    for name in ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg"):
+        candidate = Path(album_path) / name
+        if candidate.is_file():
+            try:
+                return candidate.read_bytes()
+            except OSError:
+                return None
+    return None
+
+
+def read_album(album_path: str, source: str = "", files: Optional[List[str]] = None,
+               thumbs_dir: Optional[Path] = None, max_tag_reads: int = 500) -> LibraryAlbum:
+    """Liest ein Album komplett ein (Tags aller Tracks, Cover des ersten Tracks)"""
+    files = album_track_files(album_path) if files is None else list(files)
+    album = LibraryAlbum(path=str(album_path), source=source, tracks=files, scanned=_now())
+    durations: List[float] = []
+    cover = None
+    for i, path in enumerate(files):
+        if i >= max_tag_reads:
+            break
+        tags = read_track_tags(path)
+        durations.append(tags.duration)
+        album.title = album.title or tags.album
+        album.artist = album.artist or tags.album_artist or tags.artist
+        album.album_id = album.album_id or tags.album_id
+        album.mb_release_id = album.mb_release_id or tags.mb_release_id
+        album.mb_release_group_id = album.mb_release_group_id or tags.mb_release_group_id
+        if cover is None and tags.cover:
+            cover = tags.cover
+    album.duration = sum(durations)
+    album.fingerprint = fingerprint(durations)
+    album.signature = folder_signature(files)
+    if cover is None:
+        cover = _folder_cover(album_path)
+    album.has_cover = cover is not None
+    if cover is not None and thumbs_dir is not None:
+        album.thumb = save_thumbnail(cover, thumbs_dir / _thumb_name(album_path))
+    return album
+
+
+def save_thumbnail(data: bytes, target: Path) -> str:
+    """Kleines JPEG fuer die Kachelansicht; leerer String, wenn das Bild nicht lesbar ist"""
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as img:
+            img = img.convert("RGB")
+            img.thumbnail((THUMB_SIZE, THUMB_SIZE))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            img.save(target, "JPEG", quality=85)
+        return target.name
+    except Exception as e:
+        log.debug("Vorschaubild nicht erzeugt (%s): %s", target, e)
+        return ""
+
+
+# --- Bibliothek -------------------------------------------------------------------------------
+
+class Library:
+    """Einlesen, Zwischenspeichern und Abgleich der Bibliothek"""
+
+    def __init__(self, data_dir: str, sources: List[str]):
+        self.data_dir = Path(data_dir)
+        self.sources = [s for s in sources if s]
+
+    @property
+    def index_path(self) -> Path:
+        return self.data_dir / INDEX_FILE
+
+    @property
+    def thumbs_dir(self) -> Path:
+        return self.data_dir / THUMBS_DIR
+
+    def thumb_path(self, album: LibraryAlbum) -> Optional[Path]:
+        if not album.thumb:
+            return None
+        path = self.thumbs_dir / album.thumb
+        return path if path.is_file() else None
+
+    # --- Cache ---
+
+    def load(self) -> LibraryIndex:
+        try:
+            return LibraryIndex.from_dict(json.loads(self.index_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError):
+            return LibraryIndex()
+
+    def save(self, index: LibraryIndex):
+        from core.cover_archive import _write_json_atomic
+        _write_json_atomic(self.index_path, index.to_dict())
+
+    # --- Scan ---
+
+    def scan(self, previous: Optional[LibraryIndex] = None,
+             progress: Optional[Callable[[int, int, str], None]] = None,
+             is_cancelled: Optional[Callable[[], bool]] = None) -> LibraryIndex:
+        """Liest alle Quellen ein. Unveraenderte Alben (gleiche Signatur) werden
+        aus dem letzten Index uebernommen; Alben nicht erreichbarer Quellen
+        bleiben als offline erhalten."""
+        previous = previous or LibraryIndex()
+        known = previous.by_path()
+        index = LibraryIndex(scanned=_now(), orphaned=list(previous.orphaned))
+        offline_sources = [s for s in self.sources if is_offline(s)]
+        found: List[Tuple[str, str, List[str]]] = []
+        for source in self.sources:
+            if source in offline_sources:
+                continue
+            for album_path, files in find_album_folders(source):
+                found.append((source, album_path, files))
+
+        total = len(found)
+        for i, (source, album_path, files) in enumerate(found, start=1):
+            if is_cancelled is not None and is_cancelled():
+                break
+            if progress is not None:
+                progress(i, total, Path(album_path).name)
+            cached = known.get(norm_path(album_path))
+            if cached is not None and cached.signature == folder_signature(files) and cached.tracks:
+                cached.offline, cached.source = False, source
+                index.albums.append(cached)
+                continue
+            album = read_album(album_path, source, files, self.thumbs_dir)
+            if cached is not None and not album.has_cover:
+                album.thumb = cached.thumb
+            index.albums.append(album)
+
+        for source in offline_sources:
+            for album in previous.albums:
+                if norm_path(album.source) == norm_path(source) or norm_path(album.path).startswith(
+                        norm_path(source) + "/"):
+                    album.offline = True
+                    album.state = STATE_OFFLINE
+                    index.albums.append(album)
+        index.albums.sort(key=lambda a: (a.artist.lower(), a.name.lower()))
+        return index
+
+    # --- Abgleich mit dem Archiv ---
+
+    def match(self, index: LibraryIndex, archive) -> LibraryIndex:
+        """Setzt den Zustand jedes Albums gegenueber dem Cover-Archiv und traegt
+        verschobene Alben unter ihrem neuen Pfad ein (alte Bibliothekspfade
+        ohne Ordner werden entfernt). Archiv-Eintraege, deren Bibliotheks-
+        ordner weg ist, landen in index.orphaned."""
+        records = {r.id: r for r in archive.all_albums()} if archive is not None else {}
+        by_fingerprint = {r.fingerprint: r for r in records.values() if getattr(r, "fingerprint", "")}
+        present = {norm_path(a.path) for a in index.albums}
+        for album in index.albums:
+            if album.offline:
+                album.state = STATE_OFFLINE
+                continue
+            record = records.get(album.album_id) if album.album_id else None
+            if record is None and album.fingerprint and not album.album_id:
+                record = by_fingerprint.get(album.fingerprint)
+            if record is None:
+                album.state = STATE_NEW
+                continue
+            known_paths = {norm_path(p) for p in record.paths}
+            if norm_path(album.path) in known_paths:
+                album.state = STATE_LINKED
+            else:
+                album.state = STATE_MOVED
+                record.paths = [p for p in record.paths
+                                if not (self._in_sources(p) and norm_path(p) not in present)]
+                record.paths.append(album.path)
+                if not record.title:
+                    record.title = album.title
+                if not record.artist:
+                    record.artist = album.artist
+                archive.save_album(record)
+            if not album.album_id and record is not None:
+                album.album_id = record.id  # ueber den Fingerabdruck erkannt, Tag fehlt noch
+        linked_ids = {a.album_id for a in index.albums if a.album_id}
+        index.orphaned = []
+        for record in records.values():
+            library_paths = [p for p in record.paths if self._in_sources(p)]
+            if library_paths and record.id not in linked_ids and not any(
+                    is_offline(self._source_of(p)) for p in library_paths):
+                index.orphaned.append({"id": record.id, "title": record.title, "artist": record.artist,
+                                       "paths": library_paths})
+        return index
+
+    def _source_of(self, path: str) -> str:
+        key = norm_path(path)
+        for source in self.sources:
+            s = norm_path(source)
+            if key == s or key.startswith(s + "/"):
+                return source
+        return ""
+
+    def _in_sources(self, path: str) -> bool:
+        return bool(self._source_of(path))
+
+
+def sd_album_ids(folders) -> Dict[str, int]:
+    """Album-ID -> Ordnernummer fuer die Ordner einer SD-Karte (card.json zuerst,
+    sonst der ID-Tag der ersten Tracks)"""
+    from core import album_identity, card_store
+    result: Dict[str, int] = {}
+    for folder in folders:
+        if folder.index is None:
+            continue
+        meta = card_store.load_meta(folder.path)
+        album_id = meta.album_id if meta is not None else ""
+        if not album_id and folder.tracks:
+            album_id = album_identity.read_album_id([t.filepath for t in folder.tracks]) or ""
+        if album_id and album_id not in result:
+            result[album_id] = folder.index
+    return result
+
+
+def format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{int(seconds)} Sek." if seconds >= 1 else ""
+    minutes = round(seconds / 60)
+    return f"{minutes // 60} Std. {minutes % 60} Min." if minutes >= 60 else f"{minutes} Min."

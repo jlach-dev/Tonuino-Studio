@@ -7,11 +7,11 @@ import sys
 from typing import Optional
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QListWidgetItem, QListWidget,
+    QPushButton, QLabel, QListWidgetItem,
     QStackedWidget, QFrame, QFileDialog, QMessageBox,
     QStatusBar, QSplitter,
     QAbstractItemView, QProgressDialog,
-    QMenuBar, QStyle, QStyleOptionViewItem, QInputDialog, QDialog, QApplication
+    QMenuBar, QStyle, QStyleOptionViewItem, QInputDialog, QDialog, QApplication, QTabBar
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint, QRect
 from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup, QKeySequence, QShortcut
@@ -27,13 +27,19 @@ from core.card_store import card_paths
 from core.card_text import derive_card_text
 from core.cover_research import gather_folder_info
 from core.cover_generator import DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, SOURCE_AI
+from core.library import SETTINGS_WRITE_ID_TAGS, Library, LibraryIndex
+from core import library_import
 from gui.common import resource_path, heading_font, confirm_action, icon_from_glyph, icon_with_hover
 from gui.track_list import HoverListWidget, reorder_with_selection
 from gui.workers import (
     SDCardScanner, TrackAddWorker, FolderNameWorker, TrackMetaWorker, PurgeWorker, CoverBatchWorker,
+    LibraryScanWorker,
 )
 from gui.card_cover_dialog import AiSettingsDialog, gemini_client, image_model, text_model
-from gui.cover_manager_dialog import CoverManagerDialog, get_archive
+from gui.cover_manager_dialog import CoverManagerDialog, SETTINGS_DATA_DIR, get_archive
+from gui.library_dnd import DropArea, FolderListWidget
+from gui.library_settings_dialog import LibrarySourcesDialog, library_sources
+from gui.library_view import LibraryView
 from gui.print_sheet_dialog import PrintSheetDialog
 from gui.tag_diff_dialog import TagDiffDialog
 from gui.audio_player import AudioPlayerBar, ElidedLabel, TrackInfo
@@ -93,12 +99,23 @@ class MainWindow(QMainWindow):
         self._track_meta_generation = 0
         self._track_meta_total = 0.0
 
+        # Bibliothek (core/library.py): Index aus dem Datenordner, Abgleich mit der SD-Karte
+        self._library: Optional[Library] = None
+        self._library_index = LibraryIndex()
+        self._library_worker: LibraryScanWorker = None
+        self._library_scanned = False
+        self._library_rescan_pending = False
+        self._sd_album_map = {}  # Album-ID -> Ordnernummer auf der SD-Karte
+        self._import_queue = []  # (Albumpfad, Ordner, Modus) - Drops werden nacheinander abgearbeitet
+        self._import_job = None  # laufender Import: dict mit album, folder, mode, worker, dialog, errors
+
         self.update_controller = UpdateController(self)
 
         self._setup_ui()
         self._setup_statusbar()
         self._check_dependencies()
         self._restore_window_state()
+        self._init_library()
 
         # Vollbild per F11 (Esc beendet es), Maximieren per Doppelklick auf die Titelleiste
         QShortcut(QKeySequence("F11"), self, activated=self.toggle_full_screen)
@@ -288,6 +305,13 @@ class MainWindow(QMainWindow):
         )
         reader_group.addAction(action_reader_tonuino)
 
+        menu.addSeparator()
+        action_library_sources = menu.addAction("Bibliothek-Ordner …")
+        action_library_sources.setToolTip("Ordner mit Hörspielen und Musik (PC, NAS), die die Bibliothek zeigt")
+        action_library_sources.triggered.connect(self._edit_library_sources)
+        self.action_library_rescan = menu.addAction("Bibliothek neu einlesen")
+        self.action_library_rescan.triggered.connect(lambda: self._start_library_scan(force=True))
+
         view_menu = menu_bar.addMenu("Ansicht")
         self.action_full_screen = view_menu.addAction("Vollbild")
         self.action_full_screen.setCheckable(True)
@@ -388,10 +412,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(btn_purge_card)
 
         layout.addWidget(QLabel("Ordner:"))
-        self.folder_list = QListWidget()
+        self.folder_list = FolderListWidget()
         self.folder_list.setObjectName("folderList")
+        self.folder_list.setToolTip("Alben aus der Bibliothek oder dem Explorer hierher ziehen: auf freie Fläche "
+                                    "= neuer Ordner, auf einen Ordner = ersetzen oder anhängen")
         self.folder_list.itemClicked.connect(self._on_folder_selected)
         self.folder_list.itemDoubleClicked.connect(self._on_folder_double_clicked)
+        self.folder_list.albums_dropped.connect(self._on_albums_dropped)
         layout.addWidget(self.folder_list)
         
         self.rfid_panel = RfidPanel(
@@ -415,6 +442,21 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(28, 24, 28, 20)
         layout.setSpacing(16)
 
+        # Umschalter SD-Karte | Bibliothek ueber dem Inhalt
+        switch_row = QHBoxLayout()
+        self.view_switch = QTabBar()
+        self.view_switch.setObjectName("viewSwitch")
+        self.view_switch.setDrawBase(False)
+        self.view_switch.setExpanding(False)
+        self.view_switch.addTab("SD-Karte")
+        self.view_switch.addTab("Bibliothek")
+        self.view_switch.setTabToolTip(1, "Hörspiele und Musik auf PC und NAS – Alben per Drag & Drop auf die "
+                                          "SD-Karte ziehen")
+        self.view_switch.currentChanged.connect(self._on_view_switched)
+        switch_row.addWidget(self.view_switch)
+        switch_row.addStretch(1)
+        layout.addLayout(switch_row)
+
         self.welcome_widget = QWidget()
         welcome_layout = QVBoxLayout(self.welcome_widget)
         welcome_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -430,7 +472,8 @@ class MainWindow(QMainWindow):
         welcome_layout.addWidget(self.welcome_info_label)
         self._update_welcome_text()
         
-        self.folder_widget = QWidget()
+        self.folder_widget = DropArea()
+        self.folder_widget.albums_dropped.connect(self._on_albums_dropped_on_current)
         folder_layout = QVBoxLayout(self.folder_widget)
         folder_layout.setContentsMargins(0, 0, 0, 0)
         folder_layout.setSpacing(18)
@@ -488,6 +531,12 @@ class MainWindow(QMainWindow):
         self.folder_meta = QLabel()
         self.folder_meta.setObjectName("folderMeta")
         info_col.addWidget(self.folder_meta)
+
+        # Verknuepfung zur Bibliothek ("aus Bibliothek: …", Hinweis bei mehr Tracks dort)
+        self.folder_library_hint = QLabel()
+        self.folder_library_hint.setObjectName("folderLibraryHint")
+        self.folder_library_hint.hide()
+        info_col.addWidget(self.folder_library_hint)
 
         info_col.addStretch(1)
 
@@ -578,10 +627,16 @@ class MainWindow(QMainWindow):
         self.track_list.itemClicked.connect(self._on_track_clicked)
         folder_layout.addWidget(self.track_list)
 
+        self.library_view = LibraryView()
+        self.library_view.rescan_requested.connect(lambda: self._start_library_scan(force=True))
+        self.library_view.sources_requested.connect(self._edit_library_sources)
+
         self.stack = QStackedWidget()
         self.stack.addWidget(self.welcome_widget)
         self.stack.addWidget(self.folder_widget)
-        
+        self.stack.addWidget(self.library_view)
+        self._sd_page = self.welcome_widget  # zuletzt gezeigte SD-Seite (Willkommen oder Ordner)
+
         layout.addWidget(self.stack)
 
         content_layout.addWidget(body, 1)
@@ -630,7 +685,7 @@ class MainWindow(QMainWindow):
         self.folder_list.clear()
         self.track_list.clear()
         self.cover_label.set_cover(None)
-        self.stack.setCurrentWidget(self.welcome_widget)
+        self._show_welcome()
         self._update_folder_action_buttons()
 
         self.sd_card = SDCard(path)
@@ -664,7 +719,9 @@ class MainWindow(QMainWindow):
             )
             self.btn_new_folder.setEnabled(True)
             self.btn_purge_card.setEnabled(True)
+            self._set_drop_enabled(True)
             self._populate_folder_list()
+            self._refresh_sd_album_map()
         else:
             self.status_bar.showMessage("Fehler beim Scannen der SD-Karte")
             QMessageBox.warning(
@@ -705,9 +762,12 @@ class MainWindow(QMainWindow):
         self.folder_list.clear()
         self._update_welcome_text()
         self.player_bar.stop_and_clear()
-        self.stack.setCurrentWidget(self.welcome_widget)
+        self._show_welcome()
         self.btn_new_folder.setEnabled(False)
         self.btn_purge_card.setEnabled(False)
+        self._set_drop_enabled(False)
+        self._sd_album_map = {}
+        self.library_view.set_sd_map({})
         self.rfid_panel.refresh()
         self._update_folder_action_buttons()
 
@@ -861,11 +921,20 @@ class MainWindow(QMainWindow):
                 return pixmap
         return None
 
+    def _show_sd_page(self, widget: QWidget):
+        """Willkommens- bzw. Ordnerseite anzeigen - und dabei zur SD-Ansicht wechseln"""
+        self._sd_page = widget
+        if self.view_switch.currentIndex() != 0:
+            self.view_switch.setCurrentIndex(0)  # loest _on_view_switched aus
+        else:
+            self.stack.setCurrentWidget(widget)
+
     def _show_folder(self, folder: Folder):
         """Zeigt einen Ordner an"""
-        self.stack.setCurrentWidget(self.folder_widget)
+        self._show_sd_page(self.folder_widget)
 
         self._update_folder_title(folder)
+        self._update_library_hint(folder)
         # Der Pfad steht nicht mehr als Zeile da, bleibt aber als Tooltip erreichbar
         for widget in (self.folder_title, self.folder_subtitle, self.folder_meta):
             widget.setToolTip(f"Pfad: {folder.path}")
@@ -1147,7 +1216,7 @@ class MainWindow(QMainWindow):
 
         self.current_folder = None
         self._folder_name_cache.clear()
-        self.stack.setCurrentWidget(self.welcome_widget)
+        self._show_welcome()
         self._populate_folder_list()
         self.rfid_panel.refresh()
         self._update_folder_action_buttons()
@@ -1180,7 +1249,7 @@ class MainWindow(QMainWindow):
             self.sd_card.delete_folder(folder.index)
             self._folder_name_cache.pop(folder.index, None)
             self.current_folder = None
-            self.stack.setCurrentWidget(self.welcome_widget)
+            self._show_welcome()
             self._populate_folder_list()
             self.rfid_panel.refresh()
             self._update_folder_action_buttons()
@@ -1900,6 +1969,309 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Fehler", f"Fehler beim Umsortieren: {e}")
 
+    # --- Bibliothek (core/library.py) --------------------------------------------------
+
+    def _show_welcome(self):
+        """Willkommensseite als SD-Seite merken; nur anzeigen, wenn die SD-Ansicht aktiv ist"""
+        self._sd_page = self.welcome_widget
+        if self.view_switch.currentIndex() == 0:
+            self.stack.setCurrentWidget(self.welcome_widget)
+
+    def _on_view_switched(self, index: int):
+        if index == 1:
+            self.stack.setCurrentWidget(self.library_view)
+            if not self._library_scanned:
+                self._start_library_scan()
+        else:
+            self.stack.setCurrentWidget(self._sd_page)
+
+    def _set_drop_enabled(self, enabled: bool):
+        self.folder_list.drop_enabled = enabled
+        self.folder_widget.drop_enabled = enabled
+
+    def _init_library(self):
+        """Index aus dem Datenordner laden (ohne Netz-/NAS-Zugriff), damit die
+        Bibliothek sofort steht; eingelesen wird beim ersten Wechsel in die Ansicht"""
+        data_dir = QSettings().value(SETTINGS_DATA_DIR, "", type=str)
+        if not data_dir:
+            self._library = None
+            self.library_view.set_library(None, LibraryIndex())
+            return
+        self._library = Library(data_dir, library_sources())
+        self._library_index = self._library.load()
+        self.library_view.set_library(self._library, self._library_index, get_archive(self, ask=False))
+
+    def _edit_library_sources(self):
+        if self._library is None and get_archive(self) is None:
+            return  # Datenordner wird dafuer gebraucht (Index, Vorschaubilder)
+        dialog = LibrarySourcesDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._init_library()
+            self._start_library_scan(force=True)
+
+    def _stop_library_worker(self):
+        worker = self._library_worker
+        if worker is not None:
+            worker.cancel()
+            worker.wait(5000)
+            self._library_worker = None
+
+    def _sd_folders(self) -> list:
+        return [f for _, f in sorted(self.sd_card.folders.items())] if self.sd_card else []
+
+    def _start_library_scan(self, force: bool = False):
+        """Bibliothek im Hintergrund einlesen (inkrementell) und mit dem Archiv abgleichen"""
+        if self._library is None:
+            if force:
+                self._init_library()
+            if self._library is None:
+                if force:
+                    self._edit_library_sources()
+                return
+        if self._library_worker is not None and self._library_worker.isRunning():
+            self._library_rescan_pending = True  # nach dem laufenden Abgleich nachholen
+            return
+        self._library_rescan_pending = False
+        self._library.sources = library_sources()
+        self._library_scanned = True
+        self.library_view.set_scanning(True)
+        self.action_library_rescan.setEnabled(False)
+        worker = LibraryScanWorker(self._library, self._library_index, get_archive(self, ask=False),
+                                   self._sd_folders(), rescan=True)
+        worker.progress.connect(self._on_library_scan_progress)
+        worker.completed.connect(self._on_library_scan_completed)
+        worker.failed.connect(self._on_library_scan_failed)
+        self._library_worker = worker
+        worker.start()
+
+    def _refresh_sd_album_map(self):
+        """Nur den Abgleich SD-Karte <-> Bibliothek erneuern (kein Einlesen der Quellen)"""
+        if self._library is None or not self.sd_card:
+            return
+        if self._library_worker is not None and self._library_worker.isRunning():
+            return
+        worker = LibraryScanWorker(self._library, self._library_index, None, self._sd_folders(), rescan=False)
+        worker.completed.connect(self._on_library_scan_completed)
+        worker.failed.connect(lambda _msg: None)
+        self._library_worker = worker
+        worker.start()
+
+    def _on_library_scan_progress(self, current: int, total: int, name: str):
+        self.library_view.hint_label.setText(f"Bibliothek wird eingelesen … ({current}/{total}) {name}")
+
+    def _on_library_scan_completed(self, index, sd_map: dict):
+        self._library_index = index
+        self._sd_album_map = dict(sd_map or {})
+        self.library_view.set_scanning(False)
+        self.action_library_rescan.setEnabled(True)
+        self.library_view.set_library(self._library, index, get_archive(self, ask=False))
+        self.library_view.set_sd_map(self._sd_album_map)
+        if self.current_folder is not None:
+            self._update_library_hint(self.current_folder)
+        if self._library_rescan_pending:
+            self._start_library_scan()
+
+    def _on_library_scan_failed(self, message: str):
+        self.library_view.set_scanning(False)
+        self.action_library_rescan.setEnabled(True)
+        self.library_view.hint_label.setText(f"Bibliothek konnte nicht eingelesen werden: {message}")
+
+    def _folder_album_id(self, folder: Folder) -> str:
+        """Album-ID eines SD-Ordners: card.json, sonst der ID-Tag der ersten Tracks"""
+        from core import album_identity, card_store
+        if folder.is_special:
+            return ""
+        meta = card_store.load_meta(folder.path)
+        if meta is not None and meta.album_id:
+            return meta.album_id
+        return album_identity.read_album_id([t.filepath for t in folder.tracks]) or ""
+
+    def _update_library_hint(self, folder: Folder):
+        """'aus Bibliothek: <Album>' im Ordnerkopf, plus Hinweis, wenn die
+        Bibliothek mehr Tracks hat als der SD-Ordner"""
+        album = None
+        if self._library is not None and not folder.is_special and folder.tracks:
+            album_id = self._folder_album_id(folder)
+            album = self._library_index.by_id().get(album_id) if album_id else None
+        if album is None:
+            self.folder_library_hint.hide()
+            return
+        text = f"aus Bibliothek: {album.name}"
+        warning = album.track_count > len(folder.tracks)
+        if warning:
+            text += f" · Bibliothek hat {album.track_count - len(folder.tracks)} Track(s) mehr"
+        self.folder_library_hint.setText(text)
+        self.folder_library_hint.setToolTip(album.path)
+        self.folder_library_hint.setProperty("warning", warning)
+        self.folder_library_hint.style().unpolish(self.folder_library_hint)
+        self.folder_library_hint.style().polish(self.folder_library_hint)
+        self.folder_library_hint.show()
+
+    # --- Drag & Drop: Alben auf die SD-Karte -------------------------------------------
+
+    def _on_albums_dropped_on_current(self, paths: list):
+        folder = self.current_folder
+        identity = folder.index if folder is not None and not folder.is_special else None
+        self._on_albums_dropped(paths, identity)
+
+    def _on_albums_dropped(self, paths: list, identity):
+        """Alben (Pfade) auf die Ordnerliste bzw. einen Ordner gezogen. Ohne Ziel
+        bekommt jedes Album einen neuen Ordner; auf einem Ordner mit Tracks wird
+        gefragt: Ersetzen / Anhaengen / Abbrechen."""
+        if not self.sd_card or not paths:
+            return
+        if isinstance(identity, str):
+            QMessageBox.information(self, "Systemordner", "In die Tonuino-Systemordner (mp3/advert) können "
+                                                          "keine Alben gelegt werden.")
+            return
+        target = self.sd_card.folders.get(identity) if isinstance(identity, int) else None
+        mode = library_import.MODE_APPEND
+        if target is not None and target.tracks:
+            mode = self._ask_replace_or_append(target, len(paths))
+            if mode is None:
+                return
+        for i, path in enumerate(paths):
+            # mehrere Alben auf einen Ordner: nur das erste ersetzt, die weiteren haengen an
+            self._import_queue.append((path, target, mode if i == 0 else library_import.MODE_APPEND))
+        self._start_next_import()
+
+    def _ask_replace_or_append(self, target: Folder, count: int) -> Optional[str]:
+        """Ersetzen / Anhaengen / Abbrechen (None) fuer einen Ordner, der schon Tracks hat"""
+        name = self._resolve_folder_name(target)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(f"Ordner {target.index:02d}")
+        box.setText(f"Der Ordner „{name}“ enthält bereits {target.track_count} Track(s).\n\n"
+                    f"Sollen die vorhandenen Tracks durch die {count} gezogene(n) Album/Alben ersetzt werden, "
+                    "oder sollen sie angehängt werden?")
+        btn_replace = box.addButton("Ersetzen", QMessageBox.ButtonRole.DestructiveRole)
+        btn_append = box.addButton("Anhängen", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Abbrechen", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(btn_append)
+        box.exec()
+        if box.clickedButton() == btn_replace:
+            return library_import.MODE_REPLACE
+        if box.clickedButton() == btn_append:
+            return library_import.MODE_APPEND
+        return None
+
+    def _ask_write_id_tags(self) -> bool:
+        """Einmalige Rueckfrage, ob die Album-ID auch in die Bibliotheksdateien darf"""
+        settings = QSettings()
+        decision = settings.value(SETTINGS_WRITE_ID_TAGS, "", type=str)
+        if decision in ("yes", "no"):
+            return decision == "yes"
+        allowed = confirm_action(
+            self, "Album-ID in die Bibliothek schreiben?",
+            "Damit ein Album nach Umbenennen oder Verschieben wiedererkannt wird, schreibt der Manager eine "
+            "Album-ID als Tag (TXXX:TONUINO_ALBUM_ID) in die Audiodateien.\n\n"
+            "Auf die SD-Karte kommt sie immer. Darf sie auch in die Originaldateien deiner Bibliothek "
+            "geschrieben werden? (MP3, FLAC, M4A, OGG – WAV wird übersprungen. Die Musik selbst bleibt "
+            "unverändert.)\n\nDiese Entscheidung gilt künftig für alle Importe und lässt sich unter "
+            "Einstellungen → Bibliothek-Ordner zurücksetzen.", default_no=False)
+        settings.setValue(SETTINGS_WRITE_ID_TAGS, "yes" if allowed else "no")
+        return allowed
+
+    def _start_next_import(self):
+        if self._import_job is not None or not self._import_queue or not self.sd_card:
+            return
+        path, folder, mode = self._import_queue.pop(0)
+        try:
+            album = library_import.library_album_for(path, self._library_index)
+        except OSError as e:
+            QMessageBox.warning(self, "Album nicht lesbar", f"{path}\n\n{e}")
+            self._start_next_import()
+            return
+        if not album.tracks:
+            QMessageBox.information(self, "Keine Audiodateien", f"Im Ordner „{path}“ wurden keine Audiodateien "
+                                                                 "gefunden.")
+            self._start_next_import()
+            return
+        write_tags = True if album.album_id else self._ask_write_id_tags()
+        if folder is None:
+            free = next((i for i in range(1, 100) if i not in self.sd_card.folders), None)
+            if free is None:
+                QMessageBox.warning(self, "Fehler", "Maximale Anzahl von 99 Ordnern erreicht!")
+                self._import_queue.clear()
+                return
+            try:
+                folder = self.sd_card.create_folder(free)
+            except Exception as e:
+                QMessageBox.warning(self, "Fehler", str(e))
+                self._import_queue.clear()
+                return
+            self._populate_folder_list()
+        self._release_files()
+        if mode == library_import.MODE_REPLACE:
+            try:
+                library_import.clear_folder_tracks(self.sd_card, folder)
+            except OSError as e:
+                QMessageBox.warning(self, "Fehler", f"Vorhandene Tracks konnten nicht entfernt werden: {e}")
+                self._start_next_import()
+                return
+        free_slots = MAX_TRACKS_PER_FOLDER - folder.track_count
+        files = list(album.tracks)
+        if len(files) > free_slots:
+            QMessageBox.warning(self, "Zu viele Tracks",
+                                f"Ein TonUINO-Ordner kann maximal {MAX_TRACKS_PER_FOLDER} Tracks enthalten. "
+                                f"Es werden nur die ersten {max(free_slots, 0)} der {len(files)} Tracks kopiert.")
+            files = files[:max(free_slots, 0)]
+
+        dialog = QProgressDialog(f"„{album.name}“ wird kopiert …", "Abbrechen", 0, len(files), self)
+        dialog.setWindowTitle(f"Album in Ordner {folder.index:02d}")
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setValue(0)
+        worker = TrackAddWorker(folder, files, self.audio_converter, self.metadata_manager)
+        job = {"album": album, "folder": folder, "mode": mode, "worker": worker, "dialog": dialog,
+               "errors": [], "write_tags": write_tags}
+        self._import_job = job
+        worker.progress.connect(lambda cur, total, name: self._on_import_progress(dialog, cur, total, name))
+        worker.track_added.connect(lambda track: folder.tracks.append(track))
+        worker.error.connect(lambda name, msg: job["errors"].append(f"{name}: {msg}"))
+        worker.completed.connect(self._on_import_copied)
+        dialog.canceled.connect(worker.cancel)
+        worker.start()
+
+    @staticmethod
+    def _on_import_progress(dialog: QProgressDialog, current: int, total: int, name: str):
+        dialog.setLabelText(f"({current}/{total}) {name}")
+        dialog.setValue(current)
+
+    def _on_import_copied(self, added: int):
+        job, self._import_job = self._import_job, None
+        if job is None:
+            return
+        job["dialog"].close()
+        folder, album = job["folder"], job["album"]
+        if self.sd_card is None:
+            return  # Karte wurde waehrend des Kopierens entfernt
+        folder.tracks.sort(key=lambda t: t.index)
+        result = library_import.ImportResult(added=added, errors=list(job["errors"]))
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._release_files()
+            orientation = QSettings().value(SETTINGS_ORIENTATION, ORIENTATION_PORTRAIT, type=str)
+            result = library_import.finish_import(self.sd_card, folder, album, get_archive(self, ask=False),
+                                                  self.metadata_manager, job["write_tags"], orientation, result)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if result.album_id:
+            self._sd_album_map[result.album_id] = folder.index
+        self._folder_name_cache.pop(folder.index, None)
+        if album.title:
+            self._folder_name_cache[folder.index] = album.title
+        self._populate_folder_list()
+        self._select_folder_in_list(folder.index)
+        self.status_bar.showMessage(f"Ordner {folder.index:02d}: {result.summary}")
+        if result.errors:
+            QMessageBox.warning(self, "Import mit Fehlern", "\n".join(result.errors))
+        if self._import_queue:
+            self._start_next_import()
+        elif self._library is not None:
+            self.library_view.set_library(self._library, self._library_index, get_archive(self, ask=False))
+            self.library_view.set_sd_map(self._sd_album_map)
+
     def closeEvent(self, event):
         """Wird beim Schliessen aufgerufen"""
         self._save_window_state()
@@ -1923,6 +2295,11 @@ class MainWindow(QMainWindow):
 
         self._stop_folder_name_worker()
         self._stop_track_meta_worker()
+        self._stop_library_worker()
+        job = self._import_job
+        if job is not None and job["worker"].isRunning():
+            job["worker"].cancel()
+            job["worker"].wait(3000)
 
         # Scan und Bereinigung sind nicht abbrechbar - kurz auslaufen lassen
         if self._cover_batch_worker is not None and self._cover_batch_worker.isRunning():

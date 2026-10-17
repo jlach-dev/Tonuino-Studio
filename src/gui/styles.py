@@ -879,6 +879,105 @@ QLabel#statusCaption {
     font-size: 8pt;
     color: @SUBTEXT0@;
 }
+
+/* === Bibliothek (gui/library_view.py) === */
+QListWidget#libraryGrid {
+    background: transparent;
+    border: none;
+    padding: 0px;
+    outline: none;
+}
+
+QListWidget#libraryGrid::item {
+    padding: 0px;
+    margin: 0px;
+    border-radius: 12px;
+}
+
+QListWidget#libraryGrid::item:selected {
+    background-color: @SURFACE0@;
+}
+
+QListWidget#libraryGrid::item:hover {
+    background-color: @SURFACE_DEEP@;
+}
+
+QFrame#libraryTile {
+    background-color: @SURFACE_DEEP@;
+    border: 1px solid @SURFACE0@;
+    border-radius: 12px;
+}
+
+QFrame#libraryTile[offline="true"] {
+    border-style: dashed;
+}
+
+QLabel#libraryTileCover {
+    background-color: @MANTLE@;
+    border-radius: 8px;
+}
+
+QLabel#libraryTileTitle {
+    font-size: 10pt;
+    font-weight: bold;
+    color: @TEXT@;
+}
+
+QLabel#libraryTileArtist {
+    font-size: 9pt;
+    color: @SUBTEXT0@;
+}
+
+QLabel#libraryBadgeSd, QLabel#libraryBadgeCard, QLabel#libraryBadgeNew, QLabel#libraryBadgeOffline {
+    font-size: 8pt;
+    font-weight: bold;
+    border-radius: 7px;
+    padding: 1px 6px;
+}
+
+QLabel#libraryBadgeSd {
+    background-color: @SURFACE0@;
+    color: @BLUE@;
+}
+
+QLabel#libraryBadgeCard {
+    background-color: @SURFACE0@;
+    color: @GREEN@;
+}
+
+QLabel#libraryBadgeNew {
+    background-color: @SURFACE0@;
+    color: @YELLOW@;
+}
+
+QLabel#libraryBadgeOffline {
+    background-color: @SURFACE0@;
+    color: @OVERLAY1@;
+}
+
+/* Umschalter SD-Karte | Bibliothek ueber dem Inhalt (Pillen wie der Galerie-Filter) */
+QTabBar#viewSwitch::tab {
+    border-radius: 14px;
+    padding: 5px 16px;
+    border: 1px solid @SURFACE1@;
+    font-weight: bold;
+}
+
+QTabBar#viewSwitch::tab:selected {
+    background-color: @BLUE@;
+    border-color: @BLUE@;
+    color: @BASE@;
+}
+
+/* Ordnerkopf: Verknuepfung zur Bibliothek */
+QLabel#folderLibraryHint {
+    font-size: 9pt;
+    color: @GREEN@;
+}
+
+QLabel#folderLibraryHint[warning="true"] {
+    color: @YELLOW@;
+}
 """.replace("__FONT_FAMILY__", _FONT_FAMILY)
 
 MAIN_STYLESHEET = theme.apply(_TEMPLATE)
