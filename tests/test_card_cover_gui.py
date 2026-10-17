@@ -231,3 +231,31 @@ def test_replacing_album_cover_archives_previous_and_refreshes(app, sd, tmp_path
     assert asked == ["Album-Cover"]
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
+
+
+def test_tag_lookup_repeats_research_and_updates_basis(app, sd, tmp_path, monkeypatch, fake_sources):
+    from gui import cover_manager_dialog as cm
+
+    monkeypatch.setattr(cm, "gemini_client", lambda: None)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+    run_workers(app, dialog)
+
+    class FakeTagDialog:
+        written = 2
+        applied_album = "Die kleine Hexe"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return cm.QDialog.DialogCode.Accepted
+
+    research_calls = []
+    monkeypatch.setattr(cm, "TagDiffDialog", FakeTagDialog)
+    monkeypatch.setattr(dialog, "_start_research", lambda: research_calls.append(True))
+    dialog._open_tag_lookup()
+
+    assert research_calls == [True]
+    assert dialog.tags_written == 2
+    assert dialog.basis_label.text().startswith("Grundlage:")
+    dialog.done(0)

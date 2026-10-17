@@ -93,3 +93,40 @@ def test_research_without_client_uses_online_cover(monkeypatch):
     brief = cover_research.research(FolderInfo(album="X"))
     assert brief.reference_image == b"online"
     assert brief.reference_source == "Cover Art Archive"
+
+
+FEED_INFO = FolderInfo(album="MausHörspiel lang", artist="Otfried Preußler", titles=[
+    "Die kleine Hexe (1/2): Heia Walpurgisnacht | MausHörspiel lang (07.12.2024)",
+    "Die kleine Hexe (2/2): Der größte Streich | MausHörspiel lang (07.12.2024)"])
+
+
+def test_research_prompt_uses_series_and_episodes_not_feed():
+    response = SimpleNamespace(output_text='{"summary": "x"}', model_dump=lambda: {})
+    client = fake_client(response)
+    cover_research.research_with_gemini(client, "m", FEED_INFO)
+    prompt = client.interactions.calls[0]["input"]
+    assert "Hörspielreihe / Werk: Die kleine Hexe" in prompt
+    assert "1. Heia Walpurgisnacht; 2. Der größte Streich" in prompt
+    assert "Album-Tag der Dateien: MausHörspiel lang" in prompt
+    assert "NICHT der Werktitel" in prompt
+
+
+def test_research_prompt_marks_verified_tags():
+    response = SimpleNamespace(output_text='{"summary": "x"}', model_dump=lambda: {})
+    client = fake_client(response)
+    info = FolderInfo(album="Die kleine Hexe", artist="Otfried Preußler", titles=["Heia"], tags_verified=True)
+    cover_research.research_with_gemini(client, "m", info)
+    assert "mit MusicBrainz abgeglichen" in client.interactions.calls[0]["input"]
+
+
+def test_image_prompt_uses_series_and_episodes():
+    prompt = build_prompt(GenerationRequest(info=FEED_INFO, brief=CoverBrief(), use_reference=False))
+    assert "Audio play / series: Die kleine Hexe by Otfried Preußler" in prompt
+    assert "Episodes on this card: 1. Heia Walpurgisnacht; 2. Der größte Streich" in prompt
+    assert "hints at both episodes" in prompt
+    assert "MausHörspiel" not in prompt
+    # normales Album: Album-Tag bleibt als Werktitel
+    plain = build_prompt(GenerationRequest(info=FolderInfo(album="Live", artist="AC/DC", titles=["Thunderstruck"]),
+                                           brief=CoverBrief(), use_reference=False))
+    assert "Audio play / series: AC/DC" in plain
+    assert "Episode: Live" in plain

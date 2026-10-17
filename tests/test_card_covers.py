@@ -117,3 +117,22 @@ def test_multi_episode_text_fits_card():
                     5, "Die Fuchsbande · Folge 39")
     for orientation in (ORIENTATION_PORTRAIT, ORIENTATION_LANDSCAPE):
         assert render_card(art, text, orientation).size == CardSpec().size_px(orientation)
+
+
+def test_describe_work_basis_and_title():
+    from core.card_text import describe_work
+    from core.cover_research import FolderInfo
+
+    feed = describe_work(FolderInfo(album="MausHörspiel lang", artist="Otfried Preußler", titles=[
+        "Die kleine Hexe (1/2): Heia Walpurgisnacht | MausHörspiel lang",
+        "Die kleine Hexe (2/2): Der größte Streich | MausHörspiel lang"]))
+    assert feed.title == "Die kleine Hexe · 1. Heia Walpurgisnacht, 2. Der größte Streich"
+    assert feed.from_track_titles and "Feed" in feed.basis
+
+    verified = describe_work(FolderInfo(album="Folge 39: Fall 77: Die verschleppte Schleppe",
+                                        artist="Die Fuchsbande", tags_verified=True))
+    assert verified.series == "Die Fuchsbande · Folge 39"
+    assert verified.episodes == ["Fall 77: Die verschleppte Schleppe"]
+    assert "MusicBrainz" in verified.basis
+
+    assert describe_work(FolderInfo()).title == ""

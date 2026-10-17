@@ -15,6 +15,7 @@ Beispiele:
 """
 
 import re
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 from core.cover_research import CoverBrief, FolderInfo, clean_track_title, parse_episode_titles
@@ -40,6 +41,44 @@ def _split_episodes(album: str) -> List[str]:
     if len(parts) > 1 and all(len(p) >= 8 for p in parts):
         return parts
     return [album.strip()]
+
+
+@dataclass
+class WorkDescription:
+    """Das Beste, was lokal ueber das Werk bekannt ist - Grundlage fuer
+    Recherche- und Bild-Prompt sowie die Anzeige im Cover-Manager"""
+    series: str = ""
+    episodes: List[str] = field(default_factory=list)
+    artist: str = ""
+    album_tag: str = ""
+    from_track_titles: bool = False  # Reihe/Folgen aus den Tracktiteln (Album-Tag = Feed)
+    tags_verified: bool = False  # Tags tragen MusicBrainz-IDs (per Tag-Abgleich bestaetigt)
+
+    @property
+    def title(self) -> str:
+        """Eine Zeile: Reihe · Folge 1, Folge 2"""
+        parts = [p for p in (self.series, ", ".join(self.episodes)) if p]
+        return " · ".join(parts)
+
+    @property
+    def basis(self) -> str:
+        if self.from_track_titles:
+            return "aus den Tracktiteln (Album-Tag ist nur der Feed)"
+        if self.tags_verified:
+            return "aus den Tags, per MusicBrainz bestätigt"
+        return "aus den Tags (Album, Interpret)"
+
+
+def describe_work(info: FolderInfo, brief: Optional[CoverBrief] = None) -> WorkDescription:
+    series, title = derive_card_text(info, brief)
+    return WorkDescription(
+        series=series,
+        episodes=[line for line in title.splitlines() if line.strip()],
+        artist=(info.album_artist or info.artist).strip(),
+        album_tag=info.album.strip(),
+        from_track_titles=bool(parse_episode_titles(info.titles)),
+        tags_verified=info.tags_verified,
+    )
 
 
 def derive_card_text(info: FolderInfo, brief: Optional[CoverBrief] = None) -> Tuple[str, str]:

@@ -65,17 +65,26 @@ def build_prompt(req: GenerationRequest) -> str:
     style = STYLE_PRESETS.get(req.style, req.style)
     shape = "tall portrait (2:3)" if req.orientation == ORIENTATION_PORTRAIT else "wide landscape (3:2)"
     content = req.brief_text.strip() or req.brief.as_text()
+    from core.card_text import describe_work
+    work = describe_work(req.info, req.brief)
     lines = [
         f"Create cover artwork for a children's RFID music card (credit-card size, {shape} format).",
-        f"Album / audio play: {req.info.album or 'unknown'}" + (f" by {req.info.artist}" if req.info.artist else ""),
     ]
+    subject = work.series or work.album_tag or "unknown"
+    lines.append(f"Audio play / series: {subject}" + (f" by {work.artist}" if work.artist else ""))
+    if work.episodes:
+        label = "Episodes on this card" if len(work.episodes) > 1 else "Episode"
+        lines.append(f"{label}: " + "; ".join(work.episodes))
+    if work.album_tag and not work.from_track_titles and work.album_tag != subject:
+        lines.append(f"Album tag: {work.album_tag}")
     if content:
         lines.append(f"Background information (German):\n{content}")
     if req.extra.strip():
         lines.append(f"Additional wish (German): {req.extra.strip()}")
     lines += [
         f"Style: {style}.",
-        "Composition: one clear, instantly recognizable main subject, readable at 5 cm size; "
+        ("Composition: one clear main scene that hints at both episodes; " if len(work.episodes) > 1 else
+         "Composition: one clear, instantly recognizable main subject, readable at 5 cm size; ") +
         "full-bleed artwork reaching all edges; keep the lower third calm and simple "
         "because a title will be placed there later; no frame, no border.",
         "IMPORTANT: absolutely no text, letters, numbers, logos or watermarks in the image.",

@@ -29,6 +29,7 @@ class FolderInfo:
     cover_bytes: Optional[bytes] = None
     albums: List[str] = field(default_factory=list)  # alle verschiedenen Album-Tags (mehrere Folgen je Karte)
     album_artist: str = ""
+    tags_verified: bool = False  # MusicBrainz-IDs in den Tags (siehe core/album_identity.py)
 
 
 @dataclass
@@ -85,6 +86,9 @@ def gather_folder_info(folder: Folder, metadata_manager, max_titles: int = 25) -
                 info.cover_bytes = f.read()
         except OSError:
             pass
+    if folder.tracks:
+        from core.album_identity import read_mb_ids
+        info.tags_verified = bool(read_mb_ids(folder.tracks[0].filepath)["release_id"])
     return info
 
 
@@ -193,13 +197,16 @@ def lookup_online_cover(info: FolderInfo) -> Optional[bytes]:
 # --- Gemini mit Google-Suche ------------------------------------------------------------
 
 RESEARCH_PROMPT = """Du hilfst, ein Cover für eine RFID-Karte einer Kinder-Musikbox (TonUINO) zu gestalten.
-Recherchiere kurz im Internet, worum es in diesem Album/Hörspiel geht.
+Recherchiere kurz im Internet, worum es in diesem Hörspiel/Album geht.
 
-Album: {album}
-Ordner/Interpret-Hinweis: {hint}
-Interpret: {artist}
-Titel (Auszug): {titles}
+Hörspielreihe / Werk: {series}
+Folge(n) auf dieser Karte: {episodes}
+Interpret / Autor: {artist}
+Album-Tag der Dateien: {album_tag}
+Tracktitel (Auszug): {titles}
 Hinweis des Nutzers: {extra}
+
+{tag_note}
 
 Antworte NUR mit einem JSON-Objekt (Deutsch) mit diesen Feldern:
 "summary": Inhalt in 1-2 Sätzen,
@@ -242,12 +249,23 @@ def make_client(api_key: str):
 
 
 def research_with_gemini(client, model: str, info: FolderInfo, extra: str = "") -> CoverBrief:
+    from core.card_text import describe_work  # (card_text importiert dieses Modul)
+    work = describe_work(info)
+    if work.from_track_titles:
+        tag_note = ("Der Album-Tag ist nur der Name eines Podcast-/Radio-Feeds, NICHT der Werktitel - "
+                    "recherchiere ausschließlich zu Reihe und Folge(n).")
+    elif work.tags_verified:
+        tag_note = "Die Tags wurden mit MusicBrainz abgeglichen und sind verlässlich."
+    else:
+        tag_note = "Reihe/Folge wurden aus den Tags abgeleitet; prüfe sie gegen deine Suchergebnisse."
     prompt = RESEARCH_PROMPT.format(
-        album=info.album or "(unbekannt – aus Titeln und Interpret ableiten)",
-        hint=info.artist or "(keiner)",
-        artist=info.artist or "(unbekannt)",
+        series=work.series or work.album_tag or "(unbekannt – aus Titeln und Interpret ableiten)",
+        episodes="; ".join(work.episodes) or "(keine Angabe)",
+        artist=work.artist or "(unbekannt)",
+        album_tag=work.album_tag or "(keiner)",
         titles="; ".join(info.titles[:15]) or "(keine)",
         extra=extra or "(keiner)",
+        tag_note=tag_note,
     )
     interaction = client.interactions.create(model=model, input=prompt, tools=[{"type": "google_search"}])
     data = _extract_json(interaction.output_text)

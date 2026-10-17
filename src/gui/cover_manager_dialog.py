@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core import ai_settings, album_identity, card_store, cover_sources
-from core.card_text import derive_card_text
+from core.card_text import derive_card_text, describe_work
 from core.card_layout import ORIENTATION_PORTRAIT, album_cover_jpeg, prepare_card_art
 from core.cover_archive import (
     KIND_AI, KIND_FILE, KIND_LOCAL, KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive, CoverEntry, sha1,
@@ -440,6 +440,12 @@ class CoverManagerDialog(QDialog):
         form.addRow("Eigener Wunsch:", self.extra_edit)
         layout.addLayout(form)
 
+        self.basis_label = QLabel()
+        self.basis_label.setObjectName("folderMeta")
+        self.basis_label.setWordWrap(True)
+        self.basis_label.setToolTip("Worauf sich Recherche und Bild-Prompt stützen")
+        layout.addWidget(self.basis_label)
+
         header = QHBoxLayout()
         header.addWidget(QLabel("Recherche (bearbeitbar):"), 1)
         self.btn_research = QPushButton("Neu recherchieren")
@@ -747,8 +753,10 @@ class CoverManagerDialog(QDialog):
         self.search_title_edit.setText(suggest_search_title(self.info, self.brief))
         self.search_artist_edit.setText(self.info.artist or self.brief.series)
         self._fill_text_from_tags()
+        self._update_basis_label()
         self.search_status.setText(f"Tags in {dialog.written} Track(s) geschrieben – Suchfelder und Kartentext "
-                                   "wurden aus den neuen Tags übernommen.")
+                                   "wurden aus den neuen Tags übernommen; Recherche wird wiederholt.")
+        self._start_research()
 
     def _on_online_found(self, cover: cover_sources.OnlineCover, data: bytes):
         self._add_candidate(Candidate(SECTION_ONLINE, cover.label, data, KIND_ONLINE, online=cover),
@@ -779,8 +787,16 @@ class CoverManagerDialog(QDialog):
         self._research_worker.start()
         self._update_buttons()
 
+    def _update_basis_label(self):
+        work = describe_work(self.info, self.brief)
+        if work.title:
+            self.basis_label.setText(f"Grundlage: {work.title} – {work.basis}")
+        else:
+            self.basis_label.setText("Grundlage: keine Tags – Recherche nur aus dem Ordnernamen")
+
     def _on_research_done(self, info: FolderInfo, brief: CoverBrief):
         self.info, self.brief = info, brief
+        self._update_basis_label()
         title = suggest_search_title(info, brief)
         if not self.search_title_edit.text().strip():
             self.search_title_edit.setText(title)
