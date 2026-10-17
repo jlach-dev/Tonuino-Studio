@@ -42,6 +42,9 @@ from gui.library_settings_dialog import LibrarySourcesDialog, library_sources
 from gui.library_view import LibraryView
 from gui.print_sheet_dialog import PrintSheetDialog
 from gui.tag_diff_dialog import TagDiffDialog
+import logging
+
+log = logging.getLogger(__name__)
 from gui.audio_player import AudioPlayerBar, ElidedLabel, TrackInfo
 from gui.cover_edit import CoverEditWidget
 from gui.rfid_panel import RfidPanel
@@ -2155,8 +2158,32 @@ class MainWindow(QMainWindow):
             self._import_queue.append((album_dir, target, library_import.MODE_APPEND, files))
         self._start_next_import()
 
-    def _library_tags(self, album):
-        QMessageBox.information(self, "Tags nachtragen", "Kommt im nächsten Schritt.")
+    def _library_tags(self, album, paths: Optional[list] = None):
+        """Tags eines Bibliotheksalbums (oder nur der gewaehlten Dateien) aus dem Internet nachtragen"""
+        if album is None:
+            return
+        files = list(paths) if paths else list(album.tracks)
+        if not files:
+            return
+        self.player_bar.stop()
+        dialog = TagDiffDialog(files, self.metadata_manager, self, album.title or album.name, album.artist,
+                               label=album.name)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.written:
+            self.status_bar.showMessage(f"Tags in {dialog.written} Datei(en) von „{album.name}“ geschrieben")
+            self._refresh_library_album(album.path)
+
+    def _refresh_library_album(self, path: str):
+        """Nach Tag-Aenderungen: Album neu einlesen, Index speichern, Ansicht auffrischen"""
+        if self._library is None:
+            return
+        try:
+            self._library_index = self._library.refresh_album(path, self._library_index)
+        except Exception:
+            log.exception("Album konnte nicht neu eingelesen werden")
+            return
+        self.library_view.set_library(self._library, self._library_index, get_archive(self, ask=False))
+        if self.library_view.open_album_path == path:
+            self.library_view.open_album(path)
 
     def _library_recognize(self, album, paths):
         QMessageBox.information(self, "Stücke erkennen", "Kommt im nächsten Schritt.")

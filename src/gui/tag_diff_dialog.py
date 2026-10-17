@@ -97,9 +97,14 @@ class TagTracksWorker(QThread):
 class TagDiffDialog(QDialog):
     """Tags eines SD-Ordners aus MusicBrainz/Deezer/iTunes uebernehmen"""
 
-    def __init__(self, folder: Folder, metadata_manager, parent=None, title: str = "", artist: str = ""):
+    def __init__(self, folder, metadata_manager, parent=None, title: str = "", artist: str = "",
+                 label: str = ""):
+        """folder: SD-Ordner (Folder) oder Liste von Dateipfaden eines Bibliotheksalbums"""
         super().__init__(parent)
-        self.setWindowTitle(f"Tags von MusicBrainz – Ordner {folder.index:02d}")
+        if isinstance(folder, (list, tuple)):
+            self.setWindowTitle(f"Tags nachtragen – {label or 'Bibliotheksalbum'}")
+        else:
+            self.setWindowTitle(f"Tags von MusicBrainz – Ordner {folder.index:02d}")
         self.resize(1100, 640)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint)
         self.setSizeGripEnabled(True)
@@ -399,8 +404,9 @@ class TagDiffDialog(QDialog):
         if not selection or self.candidate is None:
             return
         cells = sum(len(fields) for fields in selection.values())
+        where = "die Audiodateien der Bibliothek" if isinstance(self.folder, (list, tuple)) else "die MP3-Dateien"
         if not confirm_action(self, "Tags übernehmen",
-                              f"{cells} Feld(er) in {len(selection)} Track(s) werden in die MP3-Dateien "
+                              f"{cells} Feld(er) in {len(selection)} Track(s) werden in {where} "
                               "geschrieben. Fortfahren?", default_no=False):
             return
         parent = self.parent()

@@ -269,9 +269,12 @@ class LibraryTrack:
 def read_album_tracks(album_or_path, cancelled: Callable[[], bool] = lambda: False) -> List[LibraryTrack]:
     """Tracks eines Albums mit Nummer, Titel, Interpret und Dauer - sortiert nach
     Tracknummer, sonst nach Dateiname"""
-    path = album_or_path if isinstance(album_or_path, str) else album_or_path.path
-    files = (album_or_path.tracks if not isinstance(album_or_path, str) and album_or_path.tracks
-             else album_track_files(path))
+    if isinstance(album_or_path, (list, tuple)):
+        files = list(album_or_path)
+    else:
+        path = album_or_path if isinstance(album_or_path, str) else album_or_path.path
+        files = (album_or_path.tracks if not isinstance(album_or_path, str) and album_or_path.tracks
+                 else album_track_files(path))
     tracks = []
     for index, file in enumerate(files, start=1):
         if cancelled():
@@ -286,31 +289,113 @@ def read_album_tracks(album_or_path, cancelled: Callable[[], bool] = lambda: Fal
     return tracks
 
 
-def write_album_id_any(path: str, album_id: str) -> bool:
-    """Schreibt die App-Album-ID in eine Bibliotheksdatei (MP3, FLAC, M4A, OGG/Opus);
-    WAV wird bewusst nicht angefasst. True, wenn geschrieben wurde."""
+# Standardfelder -> (ID3-Frame, MP4-Atom, Vorbis-Kommentar)
+_FIELD_MAP = {
+    "title": ("TIT2", "\xa9nam", "title"),
+    "artist": ("TPE1", "\xa9ART", "artist"),
+    "album": ("TALB", "\xa9alb", "album"),
+    "album_artist": ("TPE2", "aART", "albumartist"),
+    "year": ("TDRC", "\xa9day", "date"),
+    "genre": ("TCON", "\xa9gen", "genre"),
+}
+
+
+def _vorbis_key(desc: str) -> str:
+    """Picard-Schreibweise der freien Felder in Vorbis-Kommentaren:
+    "MusicBrainz Album Id" -> "musicbrainz_albumid"; alles andere unveraendert"""
+    if desc.lower().startswith("musicbrainz "):
+        return "musicbrainz_" + desc[len("musicbrainz "):].replace(" ", "").lower()
+    return desc
+
+
+def write_tags_any(path: str, fields: Dict[str, object], custom: Optional[Dict[str, str]] = None) -> bool:
+    """Schreibt Standardfelder (title, artist, album, album_artist, year, genre,
+    track_number, total_tracks) und freie Textfelder (custom: z.B. MusicBrainz-IDs,
+    Album-ID) in MP3, FLAC, M4A oder OGG/Opus. WAV wird bewusst nicht angefasst.
+    Leerer Wert entfernt das Feld. True, wenn geschrieben wurde."""
     if path.lower().endswith(".wav"):
         return False
     audio = _open_any(path)
     if audio is None:
         return False
     try:
-        from mutagen.id3 import ID3, TXXX
+        from mutagen.id3 import ID3, TXXX, TRCK
+        import mutagen.id3 as id3
         from mutagen.mp4 import MP4Tags
         if audio.tags is None:
             audio.add_tags()
         raw = audio.tags
+        track = fields.get("track_number")
+        total = fields.get("total_tracks") or 0
         if isinstance(raw, ID3):
-            raw.setall(f"TXXX:{ALBUM_ID_KEY}", [TXXX(encoding=3, desc=ALBUM_ID_KEY, text=[album_id])])
+            for name, (frame_name, _atom, _comment) in _FIELD_MAP.items():
+                if name not in fields:
+                    continue
+                value = str(fields[name] or "")
+                if value:
+                    raw.setall(frame_name, [getattr(id3, frame_name)(encoding=3, text=[value])])
+                else:
+                    raw.delall(frame_name)
+            if track is not None:
+                if track:
+                    raw.setall("TRCK", [TRCK(encoding=3, text=[f"{track}/{total}" if total else str(track)])])
+                else:
+                    raw.delall("TRCK")
+            for desc, value in (custom or {}).items():
+                raw.setall(f"TXXX:{desc}", [TXXX(encoding=3, desc=desc, text=[value])] if value else [])
         elif isinstance(raw, MP4Tags):
-            raw[f"----:com.apple.iTunes:{ALBUM_ID_KEY}"] = [album_id.encode("utf-8")]
-        else:
-            raw[ALBUM_ID_KEY] = [album_id]
+            for name, (_frame, atom, _comment) in _FIELD_MAP.items():
+                if name not in fields:
+                    continue
+                value = str(fields[name] or "")
+                if value:
+                    raw[atom] = [value]
+                elif atom in raw:
+                    del raw[atom]
+            if track is not None:
+                if track:
+                    raw["trkn"] = [(int(track), int(total))]
+                elif "trkn" in raw:
+                    del raw["trkn"]
+            for desc, value in (custom or {}).items():
+                key = f"----:com.apple.iTunes:{desc}"
+                if value:
+                    raw[key] = [value.encode("utf-8")]
+                elif key in raw:
+                    del raw[key]
+        else:  # Vorbis-Kommentare
+            for name, (_frame, _atom, comment) in _FIELD_MAP.items():
+                if name not in fields:
+                    continue
+                value = str(fields[name] or "")
+                if value:
+                    raw[comment] = [value]
+                elif comment in raw:
+                    del raw[comment]
+            if track is not None:
+                if track:
+                    raw["tracknumber"] = [str(track)]
+                    if total:
+                        raw["tracktotal"] = [str(total)]
+                elif "tracknumber" in raw:
+                    del raw["tracknumber"]
+            for desc, value in (custom or {}).items():
+                key = _vorbis_key(desc)
+                if value:
+                    raw[key] = [value]
+                elif key in raw:
+                    del raw[key]
         audio.save()
         return True
     except Exception as e:
-        log.warning("Album-ID konnte nicht geschrieben werden (%s): %s", path, e)
+        log.warning("Tags konnten nicht geschrieben werden (%s): %s", path, e)
         return False
+
+
+def write_album_id_any(path: str, album_id: str) -> bool:
+    """Schreibt die App-Album-ID in eine Bibliotheksdatei (MP3, FLAC, M4A, OGG/Opus);
+    WAV wird bewusst nicht angefasst. True, wenn geschrieben wurde."""
+    return write_tags_any(path, {}, {ALBUM_ID_KEY: album_id})
 
 
 def write_album_id_to_album(album: "LibraryAlbum", album_id: str) -> int:
@@ -538,6 +623,24 @@ class Library:
                     album.state = STATE_OFFLINE
                     index.albums.append(album)
         index.albums.sort(key=lambda a: (a.artist.lower(), a.name.lower()))
+        return index
+
+    def refresh_album(self, album_path: str, index: LibraryIndex, archive=None) -> LibraryIndex:
+        """Ein einzelnes Album neu einlesen (z.B. nach dem Nachtragen von Tags),
+        im Index ersetzen, abgleichen und den Index speichern"""
+        key = norm_path(album_path)
+        old = index.find(album_path)
+        source = (old.source if old is not None else self._source_of(album_path)) or ""
+        album = read_album(album_path, source, None, self.thumbs_dir)
+        if old is not None and not album.has_cover:
+            album.thumb = old.thumb
+        if old is not None:
+            album.state = old.state
+        index.albums = [a for a in index.albums if norm_path(a.path) != key] + [album]
+        index.albums.sort(key=lambda a: (a.artist.lower(), a.name.lower()))
+        if archive is not None:
+            self.match(index, archive)
+        self.save(index)
         return index
 
     # --- Abgleich mit dem Archiv ---

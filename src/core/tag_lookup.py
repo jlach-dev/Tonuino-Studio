@@ -20,6 +20,7 @@ import logging
 import re
 import urllib.parse
 from dataclasses import dataclass, field
+import os
 from typing import Callable, Dict, Iterable, List, Optional
 
 from core import album_identity, cover_sources, musicbrainz
@@ -133,7 +134,20 @@ class TrackDiff:
 # --- Lokale Tracks ---------------------------------------------------------------------------
 
 def read_local_tracks(folder, metadata_manager, cancelled: Callable[[], bool] = lambda: False) -> List[LocalTrack]:
+    """Tracks eines SD-Ordners (Folder) oder einer Liste von Dateipfaden
+    (Bibliotheksalbum, alle Formate) mit ihren aktuellen Tags"""
     result = []
+    if isinstance(folder, (list, tuple)):
+        from core.library import read_album_tracks, read_track_tags
+        for position, track in enumerate(read_album_tracks(list(folder), cancelled=cancelled), start=1):
+            if cancelled():
+                break
+            tags = read_track_tags(track.path)
+            meta = TrackMetadata(title=tags.title, artist=tags.artist, album=tags.album,
+                                 album_artist=tags.album_artist, track_number=tags.track_number,
+                                 duration=tags.duration)
+            result.append(LocalTrack(track.path, os.path.basename(track.path), track.number or position, meta))
+        return result
     for track in folder.tracks:
         if cancelled():
             break
@@ -453,11 +467,16 @@ def apply_diff(diffs: List[TrackDiff], selection: Dict[int, Iterable[str]], meta
         if FIELD_YEAR in fields and diff.new[FIELD_YEAR]:
             kwargs["year"] = diff.new[FIELD_YEAR]
         ok = True
-        if kwargs:
-            ok = metadata_manager.write_metadata(diff.local.filepath, **kwargs)
-        if FIELD_MB_IDS in fields and diff.mb_ids:
-            for desc, value in diff.mb_ids.items():
+        custom = dict(diff.mb_ids) if FIELD_MB_IDS in fields and diff.mb_ids else {}
+        if diff.local.filepath.lower().endswith(".mp3"):
+            if kwargs:
+                ok = metadata_manager.write_metadata(diff.local.filepath, **kwargs)
+            for desc, value in custom.items():
                 ok = album_identity.write_txxx(diff.local.filepath, desc, value) and ok
-        if ok and (kwargs or (FIELD_MB_IDS in fields and diff.mb_ids)):
+        elif kwargs or custom:
+            # Bibliotheksdateien in anderen Formaten (FLAC, M4A, OGG); WAV wird uebersprungen
+            from core.library import write_tags_any
+            ok = write_tags_any(diff.local.filepath, kwargs, custom)
+        if ok and (kwargs or custom):
             written += 1
     return written
