@@ -223,15 +223,29 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
 
     monkeypatch.setattr(cm, "CoverExtendWorker", lambda *a: FakeWorker(*a))
     monkeypatch.setattr(cm, "image_model", lambda: "m")
-    dialog._extend_side(back=True)
-    new = [c for c in dialog.candidates if c.section == cm.SECTION_NEW]
-    assert len(new) == 1 and new[0].back_image().size == (400, 600)
-    assert new[0].image().getpixel((0, 0)) == (0, 0, 200)  # Vorderseite der Quelle uebernommen
-    assert other.back_data is None  # Original unveraendert
-    assert dialog.selected is new[0] and dialog.side_bar.currentIndex() == 1
+    saved = []
+    monkeypatch.setattr(dialog, "_set_card_cover", lambda: saved.append(True))
 
-    dialog._extend_side(back=False)
+    # "Uebernehmen" fuehrt beide angehakten Randergaenzungen als Batch aus und speichert danach
+    dialog.front_extend_check.setChecked(True)
+    dialog.back_extend_check.setChecked(True)
+    assert "Vorderseite und Rückseite" in dialog.apply_note.text()
+    dialog._apply()
+
     new = [c for c in dialog.candidates if c.section == cm.SECTION_NEW]
-    assert len(new) == 2 and new[1].image().size == (400, 600) and new[1].kind == "ai"
+    assert len(new) == 2
+    front_version = next(c for c in new if c.kind == "ai")
+    back_version = next(c for c in new if c.kind != "ai")
+    assert front_version.image().size == (400, 600)
+    assert back_version.back_image().size == (400, 600)
+    assert back_version.image().getpixel((0, 0)) == (0, 0, 200)  # Vorderseite der Quelle uebernommen
+    assert other.back_data is None and with_back.data == png_bytes(color=(10, 10, 10))  # Originale unveraendert
+    assert dialog.front_source.candidate is front_version and dialog.back_source.candidate is back_version
+    assert saved == [True]
+    assert not dialog.front_extend_check.isChecked() and not dialog.back_extend_check.isChecked()
+
+    # ohne Haken speichert "Uebernehmen" direkt
+    dialog._apply()
+    assert saved == [True, True]
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)

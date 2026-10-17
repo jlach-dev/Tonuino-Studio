@@ -285,13 +285,18 @@ class CoverManagerDialog(QDialog):
 
         # Aktionen fuer das angeklickte (gross angezeigte) Bild - gleich gewichtet
         actions = QHBoxLayout()
-        self.btn_card_cover = QPushButton("Als Kartencover verwenden")
-        self.btn_card_cover.setToolTip("Mit Titel als card.png auf die SD-Karte speichern")
-        self.btn_card_cover.clicked.connect(self._set_card_cover)
+        self.btn_card_cover = QPushButton("Als Vorderseite")
+        self.btn_card_cover.setToolTip("Das gerade groß angezeigte Bild als Motiv der Vorderseite "
+                                       "(gespeichert wird im Tab „Karte“ mit „Übernehmen“)")
+        self.btn_card_cover.clicked.connect(lambda: self._pick_source(back=False))
+        self.btn_back_cover = QPushButton("Als Rückseite")
+        self.btn_back_cover.setToolTip("Das gerade groß angezeigte Bild als Motiv der Rückseite")
+        self.btn_back_cover.clicked.connect(lambda: self._pick_source(back=True))
         self.btn_album_cover = QPushButton("Als Album-Cover verwenden")
         self.btn_album_cover.setToolTip("Quadratisch zuschneiden und in alle Tracks des Ordners schreiben")
         self.btn_album_cover.clicked.connect(self._set_album_cover)
         actions.addWidget(self.btn_card_cover)
+        actions.addWidget(self.btn_back_cover)
         actions.addWidget(self.btn_album_cover)
         actions.addStretch(1)
         left.addLayout(actions)
@@ -445,6 +450,18 @@ class CoverManagerDialog(QDialog):
         form = QFormLayout()
         tab_layout.addLayout(form)
         tab_layout.addStretch(1)
+        apply_row = QHBoxLayout()
+        self.apply_note = QLabel()
+        self.apply_note.setObjectName("folderMeta")
+        self.apply_note.setWordWrap(True)
+        apply_row.addWidget(self.apply_note, 1)
+        self.btn_apply = QPushButton("Übernehmen")
+        self.btn_apply.setObjectName("primaryButton")
+        self.btn_apply.setToolTip("Alle Einstellungen übernehmen: Randergänzungen per KI ausführen, "
+                                  "Vorder- und Rückseite auf die SD-Karte speichern")
+        self.btn_apply.clicked.connect(self._apply)
+        apply_row.addWidget(self.btn_apply)
+        tab_layout.addLayout(apply_row)
         self.series_edit = QLineEdit()
         self.series_edit.setPlaceholderText("z.B. Die Fuchsbande · Folge 39")
         self.series_edit.textChanged.connect(self._render_preview)
@@ -486,15 +503,15 @@ class CoverManagerDialog(QDialog):
         self.btn_front_reset = QPushButton("Zurücksetzen")
         self.btn_front_reset.setObjectName("ghostButton")
         self.btn_front_reset.clicked.connect(lambda: self._set_front_source(None))
-        self.btn_front_extend = QPushButton("Rand per KI ergänzen")
-        self.btn_front_extend.setObjectName("ghostButton")
-        self.btn_front_extend.setToolTip("Das Vorderseiten-Motiv vom Bildmodell aufs Kartenformat erweitern "
-                                         "(1 Bildaufruf) – das Ergebnis erscheint als neue Version unter „Neu“")
-        self.btn_front_extend.clicked.connect(lambda: self._extend_side(back=False))
-        for button in (self.btn_front_pick, self.btn_front_reset, self.btn_front_extend):
+        for button in (self.btn_front_pick, self.btn_front_reset):
             front_buttons.addWidget(button)
         front_buttons.addStretch(1)
         form.addRow("", front_buttons)
+        self.front_extend_check = QCheckBox("Rand per KI ergänzen (beim Übernehmen, 1 Bildaufruf)")
+        self.front_extend_check.setToolTip("Das Vorderseiten-Motiv vom Bildmodell aufs Kartenformat erweitern – "
+                                           "das Ergebnis erscheint als neue Version unter „Neu“")
+        self.front_extend_check.toggled.connect(self._update_apply_note)
+        form.addRow("", self.front_extend_check)
 
         back_title = QLabel("Rückseite")
         back_title.setObjectName("sectionTitle")
@@ -521,15 +538,15 @@ class CoverManagerDialog(QDialog):
         self.btn_back_reset.setObjectName("ghostButton")
         self.btn_back_reset.setToolTip("Wieder die Rückseite des Vorderseiten-Covers verwenden")
         self.btn_back_reset.clicked.connect(lambda: self._set_back_source(None))
-        self.btn_back_extend = QPushButton("Rand per KI ergänzen")
-        self.btn_back_extend.setObjectName("ghostButton")
-        self.btn_back_extend.setToolTip("Das Rückseiten-Motiv vom Bildmodell aufs Kartenformat erweitern "
-                                        "(1 Bildaufruf) – das Ergebnis erscheint als neue Version unter „Neu“")
-        self.btn_back_extend.clicked.connect(lambda: self._extend_side(back=True))
-        for button in (self.btn_back_pick, self.btn_back_file, self.btn_back_reset, self.btn_back_extend):
+        for button in (self.btn_back_pick, self.btn_back_file, self.btn_back_reset):
             back_buttons.addWidget(button)
         back_buttons.addStretch(1)
         form.addRow("", back_buttons)
+        self.back_extend_check = QCheckBox("Rand per KI ergänzen (beim Übernehmen, 1 Bildaufruf)")
+        self.back_extend_check.setToolTip("Das Rückseiten-Motiv vom Bildmodell aufs Kartenformat erweitern – "
+                                          "das Ergebnis erscheint als neue Version unter „Neu“")
+        self.back_extend_check.toggled.connect(self._update_apply_note)
+        form.addRow("", self.back_extend_check)
         self.back_heading_edit = QLineEdit()
         self.back_heading_edit.setPlaceholderText("Überschrift, z.B. Reihe · Titel")
         self.back_heading_edit.textChanged.connect(self._render_preview)
@@ -1139,9 +1156,12 @@ class CoverManagerDialog(QDialog):
         )
 
     def _set_card_cover(self):
-        candidate = self.selected
-        if candidate is None:
+        front = self.front_source or (SideSource(self.selected) if self.selected is not None else None)
+        if front is None:
+            QMessageBox.information(self, "Keine Vorderseite", "Bitte zuerst ein Bild anklicken oder "
+                                                                "„Als Vorderseite“ wählen.")
             return
+        candidate = front.candidate
         # das vorhandene SD-Kartenmotiv nur neu rendern (Titel/Ausrichtung),
         # alles andere wird dabei im Archiv behalten
         current = self._current_candidate("is_sd_card_art")
@@ -1153,7 +1173,6 @@ class CoverManagerDialog(QDialog):
             if answer:
                 self._persist_album()
                 self._archive_previous(current, "Früheres Kartenmotiv")
-        front = self.front_source or SideSource(candidate)
         entry = None if front.candidate.is_sd_card_art else self._keep(front.candidate)
         if entry and not front.back:
             source = self.archive.load_image(self.album_id, entry)
@@ -1189,7 +1208,7 @@ class CoverManagerDialog(QDialog):
         is_list = mode == BACK_MODE_TRACKLIST
         for widget in (self.back_heading_edit, self.back_lines_edit, self.btn_back_from_tags):
             widget.setVisible(is_list)
-        for widget in (self.btn_back_pick, self.btn_back_file, self.btn_back_reset, self.btn_back_extend,
+        for widget in (self.btn_back_pick, self.btn_back_file, self.btn_back_reset, self.back_extend_check,
                        self.back_source_label):
             widget.setVisible(mode != BACK_MODE_NONE)
         if is_list and not self.back_lines_edit.toPlainText().strip():
@@ -1245,6 +1264,8 @@ class CoverManagerDialog(QDialog):
         if source is None:
             return
         if back:
+            if self.back_mode_combo.currentData() == BACK_MODE_NONE:
+                _select_data(self.back_mode_combo, BACK_MODE_IMAGE)
             self._set_back_source(source)
         else:
             self._set_front_source(source)
@@ -1289,12 +1310,12 @@ class CoverManagerDialog(QDialog):
         front = self.selected
         self.front_source_label.setText(
             f"Vorderseiten-Motiv: {self.front_source.label}" if self.front_source is not None
-            else "Vorderseiten-Motiv: das angeklickte Bild")
+            else ("Vorderseiten-Motiv: das angeklickte Bild" if front is not None
+                  else "Vorderseiten-Motiv: noch keins – Bild anklicken oder „Als Vorderseite“"))
         self.btn_front_reset.setEnabled(self.front_source is not None)
         preview = self._preview_source()
-        self.btn_front_pick.setEnabled(preview is not None and preview.back)
-        self.btn_back_pick.setEnabled(preview is not None and not (self.back_source is None and preview.back
-                                                                   and preview.candidate is front))
+        self.btn_front_pick.setEnabled(preview is not None)
+        self.btn_back_pick.setEnabled(preview is not None)
 
         if self.back_source is not None:
             text = f"Rückseiten-Motiv: {self.back_source.label}"
@@ -1303,65 +1324,108 @@ class CoverManagerDialog(QDialog):
         elif mode == BACK_MODE_TRACKLIST and front is not None:
             text = "Rückseiten-Motiv: Vorderseite des angeklickten Covers (keine eigene Rückseite vorhanden)"
         elif mode == BACK_MODE_IMAGE:
-            text = "Keine Rückseite vorhanden – anderes Bild in der Vorschau wählen oder „Rückseite aus Datei …“"
+            text = "Keine Rückseite vorhanden – Bild in der Vorschau wählen oder „Rückseite aus Datei …“"
         else:
             text = ""
         self.back_source_label.setText(text)
         self.btn_back_reset.setEnabled(self.back_source is not None)
         self.btn_back_file.setEnabled(front is not None)
-        self.side_bar.setTabEnabled(1, mode != BACK_MODE_NONE)
+        self.side_bar.setTabEnabled(1, True)
         self._update_buttons()
+
+    def _update_apply_note(self, *_):
+        if not hasattr(self, "btn_apply"):
+            return
+        jobs = []
+        if self.front_extend_check.isChecked():
+            jobs.append("Vorderseite")
+        if self.back_extend_check.isChecked() and self.back_mode_combo.currentData() != BACK_MODE_NONE:
+            jobs.append("Rückseite")
+        if jobs:
+            self.apply_note.setText(f"Beim Übernehmen: Rand per KI ergänzen für {' und '.join(jobs)} "
+                                    f"(ca. {len(jobs) * ESTIMATED_COST_PER_IMAGE:.2f} USD), dann speichern.")
+        else:
+            self.apply_note.setText("Beim Übernehmen werden Vorder- und Rückseite auf die SD-Karte gespeichert.")
 
     # --- Rand per KI ergaenzen --------------------------------------------------------------
 
-    def _extend_side(self, back: bool):
-        """Vorder- bzw. Rueckseiten-Motiv per Bildmodell aufs Kartenformat erweitern.
-        Das Ergebnis wird eine neue Version unter "Neu" - das Original bleibt."""
-        if self.client is None:
+    def _apply(self):
+        """Alle Einstellungen uebernehmen: zuerst die angehakten Randergaenzungen
+        nacheinander ausfuehren (Ergebnisse als neue Versionen unter "Neu"),
+        danach Vorder- und Rueckseite speichern."""
+        if self._extend_worker is not None and self._extend_worker.isRunning():
+            return
+        jobs = []
+        if self.front_extend_check.isChecked():
+            jobs.append(False)
+        if self.back_extend_check.isChecked() and self.back_mode_combo.currentData() != BACK_MODE_NONE:
+            jobs.append(True)
+        if jobs and self.client is None:
             QMessageBox.information(self, "Kein API-Key", "Für die KI-Randergänzung bitte zuerst unter "
                                                           "Kartencover → KI & Online-Dienste einen Gemini-API-Key hinterlegen.")
             return
-        if self._extend_worker is not None and self._extend_worker.isRunning():
-            return
+        self._extend_jobs = jobs
+        self._run_next_extension()
+
+    def _extension_source(self, back: bool) -> Optional[SideSource]:
         if back:
-            source = self.back_source or (SideSource(self.selected, back=True) if self.selected and self.selected.has_back
-                                          else (SideSource(self.selected) if self.selected else None))
-        else:
-            source = self.front_source or (SideSource(self.selected) if self.selected else None)
-        if source is None or source.image() is None:
+            if self.back_source is not None:
+                return self.back_source
+            if self.selected is not None and self.selected.has_back:
+                return SideSource(self.selected, back=True)
+            if self.selected is not None and self.back_mode_combo.currentData() == BACK_MODE_TRACKLIST:
+                return SideSource(self.selected)
+            return None
+        return self.front_source or (SideSource(self.selected) if self.selected else None)
+
+    def _run_next_extension(self):
+        while self._extend_jobs:
+            back = self._extend_jobs.pop(0)
+            source = self._extension_source(back)
+            if source is None or source.image() is None:
+                continue
+            self._extend_source, self._extend_back = source, back
+            self.status_label.setText(f"Rand wird per KI ergänzt ({'Rückseite' if back else 'Vorderseite'}) …")
+            self._extend_worker = CoverExtendWorker(self.client, image_model(), source.data(),
+                                                    self.orientation_combo.currentData())
+            self._extend_worker.done.connect(self._on_extended)
+            self._extend_worker.failed.connect(self._on_extend_failed)
+            self._extend_worker.finished.connect(self._update_buttons)
+            self._extend_worker.start()
+            self._update_buttons()
             return
-        orientation = self.orientation_combo.currentData()
-        self._extend_source, self._extend_back = source, back
-        self.status_label.setText(f"Rand wird per KI ergänzt ({'Rückseite' if back else 'Vorderseite'}, "
-                                  f"ca. {ESTIMATED_COST_PER_IMAGE:.2f} USD) …")
-        self._extend_worker = CoverExtendWorker(self.client, image_model(), source.data(), orientation)
-        self._extend_worker.done.connect(self._on_extended)
-        self._extend_worker.failed.connect(lambda m: QMessageBox.warning(self, "Rand nicht ergänzt", m))
-        self._extend_worker.finished.connect(self._update_buttons)
-        self._extend_worker.start()
-        self._update_buttons()
+        # alle Erweiterungen fertig (oder keine): speichern
+        self.front_extend_check.setChecked(False)
+        self.back_extend_check.setChecked(False)
+        self._set_card_cover()
+
+    def _on_extend_failed(self, message: str):
+        QMessageBox.warning(self, "Rand nicht ergänzt", f"{message}\n\nDie Seite wird ohne Erweiterung gespeichert.")
+        self._run_next_extension()
 
     def _on_extended(self, image: Image.Image):
+        """Neue Version unter "Neu" anlegen und als Quelle der jeweiligen Seite setzen"""
         source, back = self._extend_source, self._extend_back
         base = source.candidate
         number = sum(1 for c in self.candidates if c.section == SECTION_NEW) + 1
         meta = {"style": "Rand ergänzt", "model": image_model(),
                 "prompt": f"Outpainting {'Rückseite' if back else 'Vorderseite'} von {base.label}"}
         if back:
-            candidate = Candidate(SECTION_NEW, f"KI-Rand · {base.label} #{number}", base.data, base.kind
-                                  if base.kind != KIND_LOCAL else KIND_FILE, meta=meta, back_data=_pil_bytes(image))
+            candidate = Candidate(SECTION_NEW, f"KI-Rand · {base.label} #{number}", base.data,
+                                  base.kind if base.kind != KIND_LOCAL else KIND_FILE, meta=meta,
+                                  back_data=_pil_bytes(image))
             candidate._image = base.image()
+            self._add_candidate(candidate)
+            self.back_source = SideSource(candidate, back=True)
         else:
             candidate = Candidate(SECTION_NEW, f"KI-Rand · {base.label} #{number}", _pil_bytes(image), KIND_AI,
                                   meta=meta, back_data=base.back_data)
             candidate._image = image
-        self.front_source = None
-        self.back_source = None
-        self._add_candidate(candidate, select=True)
-        self.side_bar.setCurrentIndex(1 if back else 0)
+            self._add_candidate(candidate)
+            self.front_source = SideSource(candidate)
         self._update_side_controls()
         self._render_preview()
-        self._flash("✓ Rand ergänzt – neue Version unter „Neu“ (zum Speichern „Als Kartencover verwenden“).")
+        self._run_next_extension()
 
     def _back_meta(self, meta: card_store.CardMeta, extended: bool) -> card_store.CardMeta:
         meta.back_mode = self.back_mode_combo.currentData()
@@ -1462,13 +1526,16 @@ class CoverManagerDialog(QDialog):
         busy = any(w is not None and w.isRunning() for w in (self._research_worker, self._generate_worker))
         searching = self._search_worker is not None and self._search_worker.isRunning()
         self.btn_album_cover.setEnabled(selected and bool(self.folder.tracks) and not self.selected.is_album_cover)
-        self.btn_card_cover.setEnabled(selected)
+        preview = self._preview_source()
+        self.btn_card_cover.setEnabled(preview is not None)
+        self.btn_back_cover.setEnabled(preview is not None)
         self.btn_generate.setEnabled(not busy)
         self.btn_research.setEnabled(not busy)
         extending = self._extend_worker is not None and self._extend_worker.isRunning()
-        self.btn_front_extend.setEnabled(not extending and self.client is not None and self.selected is not None)
-        self.btn_back_extend.setEnabled(not extending and self.client is not None
-                                        and self._back_source_image(self.selected) is not None)
+        self.btn_apply.setEnabled(not extending and (self.front_source is not None or selected))
+        for check in (self.front_extend_check, self.back_extend_check):
+            check.setEnabled(self.client is not None)
+        self._update_apply_note()
         self.btn_search.setText("Suche läuft …" if searching else "Cover suchen")
         self.btn_search.setEnabled(not searching)
         self._update_mark_bar()
