@@ -109,6 +109,7 @@ def test_research_prompt_uses_series_and_episodes_not_feed():
     assert "1. Heia Walpurgisnacht; 2. Der größte Streich" in prompt
     assert "Album-Tag der Dateien: MausHörspiel lang" in prompt
     assert "NICHT der Werktitel" in prompt
+    assert "ausschließlich um dieses eine Album" in prompt
 
 
 def test_research_prompt_marks_verified_tags():

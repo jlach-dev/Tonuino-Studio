@@ -453,7 +453,7 @@ class MainWindow(QMainWindow):
         header_layout.setSpacing(24)
 
         self.cover_label = CoverEditWidget(self.FOLDER_COVER_SIZE)
-        self.cover_label.clicked.connect(self._open_card_cover_dialog)
+        self.cover_label.clicked.connect(lambda: self._open_card_cover_dialog(focus=CoverManagerDialog.FOCUS_ALBUM))
         header_layout.addWidget(self.cover_label)
 
         info_col = QVBoxLayout()
@@ -1393,7 +1393,7 @@ class MainWindow(QMainWindow):
             return False
         return True
 
-    def _open_card_cover_dialog(self):
+    def _open_card_cover_dialog(self, focus: str = CoverManagerDialog.FOCUS_CARD):
         folder = self.current_folder
         if folder is None or self._is_special_folder(folder) or not folder.tracks:
             QMessageBox.information(self, "Kein Ordner gewählt",
@@ -1401,7 +1401,8 @@ class MainWindow(QMainWindow):
             return
         self._release_files()
         archive = get_archive(self)
-        dialog = CoverManagerDialog(folder, self._resolve_folder_name(folder), self.metadata_manager, archive, self)
+        dialog = CoverManagerDialog(folder, self._resolve_folder_name(folder), self.metadata_manager, archive, self,
+                                    focus=focus)
         dialog.exec()
         if dialog.tags_changed:
             self._after_tags_written(folder, dialog.tags_album, dialog.tags_written)

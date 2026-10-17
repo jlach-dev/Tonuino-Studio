@@ -250,8 +250,9 @@ IDEAS_PROMPT_IMAGE = """Das Bild ist die gewählte VORDERSEITE einer Kinder-Hör
 Beschreibe zuerst in einem Satz, was darauf zu sehen ist (Figuren, Stil, Farben).
 Dann nenne drei kurze Bildideen für die RÜCKSEITE derselben Karte: ruhige Nebenszenen, Orte oder
 Gegenstände, die zu genau diesen Figuren, diesem Stil und dieser Farbwelt passen, das Hauptmotiv aber
-nicht wiederholen; kindgerecht, ohne Text im Bild. Beziehe dich NUR auf das Bild, nicht auf anderes Wissen
-über die Reihe.
+nicht wiederholen; kindgerecht, ohne Text im Bild. Das Bild hat Vorrang; der folgende Hintergrund zum
+Inhalt dieses Albums darf die Ideen ergänzen, aber nicht zu anderen Figuren oder Alben führen.
+Hintergrund: {content}
 Antworte NUR mit JSON: {{"front": "<Beschreibung>", "ideas": ["<Idee 1>", "<Idee 2>", "<Idee 3>"]}}"""
 
 IDEAS_PROMPT_TEXT = """Für die Rückseite einer Kinder-Hörspielkarte suchen wir drei kurze Bildideen:
@@ -274,7 +275,8 @@ def suggest_back_ideas(client, text_model: str, req: GenerationRequest,
     if front_bytes:
         model_input = [{"type": "image", "data": base64.b64encode(front_bytes).decode("ascii"),
                         "mime_type": _sniff_mime(front_bytes)},
-                       {"type": "text", "text": IDEAS_PROMPT_IMAGE.format(title=title)}]
+                       {"type": "text", "text": IDEAS_PROMPT_IMAGE.format(
+                           title=title, content=(req.brief_text.strip() or req.brief.as_text() or "(keiner)")[:800])}]
     else:
         model_input = IDEAS_PROMPT_TEXT.format(
             title=title, content=(req.brief_text.strip() or req.brief.as_text() or "(keiner)")[:1500])

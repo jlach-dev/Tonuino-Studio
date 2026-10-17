@@ -219,10 +219,14 @@ class OnlineCoverSearchWorker(QThread):
 class CoverManagerDialog(QDialog):
     THUMB = 96
 
+    FOCUS_CARD = "card"
+    FOCUS_ALBUM = "album"
+
     def __init__(self, folder: Folder, folder_name: str, metadata_manager, archive: Optional[CoverArchive],
-                 parent=None):
+                 parent=None, focus: str = "card"):
         super().__init__(parent)
-        self.setWindowTitle(f"Cover-Manager – Ordner {folder.index:02d}")
+        self.focus = focus
+        self.setWindowTitle(f"Cover-Manager – Album-Cover & Kartencover – Ordner {folder.index:02d}")
         # Wie das Hauptfenster: maximierbar (Dialoge haben den Knopf sonst nicht)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint
                             | Qt.WindowType.WindowMinimizeButtonHint)
@@ -314,7 +318,29 @@ class CoverManagerDialog(QDialog):
         left.addWidget(self.selection_label)
 
         # Aktionen fuer das angeklickte (gross angezeigte) Bild - gleich gewichtet
+        # Zwei getrennte Aufgaben: Album-Cover (in den MP3s) und Kartencover (Druck)
         actions = QHBoxLayout()
+        actions.setSpacing(18)
+        album_box = QVBoxLayout()
+        album_box.setSpacing(4)
+        album_caption = QLabel("Album-Cover (in den MP3s)")
+        album_caption.setObjectName("folderMeta")
+        album_caption.setToolTip("Wird in alle Tracks des Ordners geschrieben und in der App angezeigt")
+        album_box.addWidget(album_caption)
+        self.btn_album_cover = QPushButton("Als Album-Cover setzen")
+        self.btn_album_cover.setToolTip("Das gerade groß angezeigte Bild quadratisch zuschneiden und in alle "
+                                        "Tracks des Ordners schreiben – sofort wirksam")
+        self.btn_album_cover.clicked.connect(self._set_album_cover)
+        album_box.addWidget(self.btn_album_cover, 0, Qt.AlignmentFlag.AlignLeft)
+        actions.addLayout(album_box)
+
+        card_box = QVBoxLayout()
+        card_box.setSpacing(4)
+        card_caption = QLabel("Kartencover (Druck, Tab „Karte“)")
+        card_caption.setObjectName("folderMeta")
+        card_caption.setToolTip("Motiv für die gedruckte RFID-Karte; gespeichert wird im Tab „Karte“ mit „Übernehmen“")
+        card_box.addWidget(card_caption)
+        card_buttons = QHBoxLayout()
         self.btn_card_cover = QPushButton("Als Vorderseite")
         self.btn_card_cover.setToolTip("Das gerade groß angezeigte Bild als Motiv der Vorderseite "
                                        "(gespeichert wird im Tab „Karte“ mit „Übernehmen“)")
@@ -322,13 +348,11 @@ class CoverManagerDialog(QDialog):
         self.btn_back_cover = QPushButton("Als Rückseite")
         self.btn_back_cover.setToolTip("Das gerade groß angezeigte Bild als Motiv der Rückseite")
         self.btn_back_cover.clicked.connect(lambda: self._pick_source(back=True))
-        self.btn_album_cover = QPushButton("Als Album-Cover verwenden")
-        self.btn_album_cover.setToolTip("Quadratisch zuschneiden und in alle Tracks des Ordners schreiben")
-        self.btn_album_cover.clicked.connect(self._set_album_cover)
-        actions.addWidget(self.btn_card_cover)
-        actions.addWidget(self.btn_back_cover)
-        actions.addWidget(self.btn_album_cover)
-        actions.addStretch(1)
+        card_buttons.addWidget(self.btn_card_cover)
+        card_buttons.addWidget(self.btn_back_cover)
+        card_buttons.addStretch(1)
+        card_box.addLayout(card_buttons)
+        actions.addLayout(card_box, 1)
         left.addLayout(actions)
         self.left_splitter.addWidget(top)
 
@@ -432,7 +456,12 @@ class CoverManagerDialog(QDialog):
             if state is not None:
                 splitter.restoreState(state)
 
-        if self.archive is None:
+        if self.focus == self.FOCUS_ALBUM:
+            self.tabs.setCurrentIndex(0)
+            self.status_label.setText("Album-Cover ändern: Bild in der Galerie anklicken (oder suchen) und "
+                                      "„Als Album-Cover setzen“ wählen. Das Kartencover für den Druck ist davon "
+                                      "unabhängig (Tab „Karte“).")
+        elif self.archive is None:
             self.status_label.setText("Kein Datenordner gewählt – Cover können nicht archiviert werden.")
         elif self.client is None:
             self.status_label.setText("Kein Gemini-API-Key hinterlegt (Kartencover → KI & Online-Dienste) – "

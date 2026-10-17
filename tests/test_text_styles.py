@@ -110,3 +110,22 @@ def test_preview_shows_card_only_on_card_tab_and_style_dialog(qt_app, tmp_path, 
     assert '"size_mm": 3.0' in QSettings().value(cm.SETTINGS_TITLE_STYLE, "", type=str)
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
+
+
+def test_cover_manager_album_focus_opens_search_tab(qt_app, tmp_path, monkeypatch):
+    from core.metadata import MetadataManager
+    from core.sd_card import SDCard
+    from gui import cover_manager_dialog as cm
+
+    folder = tmp_path / "sd" / "01"
+    folder.mkdir(parents=True)
+    (folder / "001.mp3").write_bytes(b"x")
+    sd = SDCard(str(tmp_path / "sd"))
+    sd.scan()
+    monkeypatch.setattr(cm, "gemini_client", lambda: None)
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), None, focus=cm.CoverManagerDialog.FOCUS_ALBUM)
+    assert dialog.tabs.currentIndex() == 0
+    assert "Album-Cover ändern" in dialog.status_label.text()
+    assert "Album-Cover" in dialog.windowTitle() and "Kartencover" in dialog.windowTitle()
+    dialog.done(0)

@@ -70,7 +70,7 @@ Den Programmierweg wählst du im Menü **Einstellungen** unter **RFID-Leser**:
 
 ## Kartencover
 
-Ein Klick auf das Cover im Ordnerkopf (oder **Cover-Manager** bzw. Menü **Kartencover**) öffnet den **Cover-Manager**:
+Der **Cover-Manager** verwaltet zwei getrennte Dinge: das **Album-Cover** (quadratisch, in den MP3s, Anzeige in Box und App) und das **Kartencover** (Vorder-/Rückseite für den Druck auf die RFID-Karte). Ein Klick auf das Album-Cover im Ordnerkopf öffnet ihn im Album-Cover-Modus (Reiter „Cover suchen“, Bild wählen → „Als Album-Cover setzen“); **Cover-Manager** bzw. Menü **Kartencover** öffnen ihn für das Kartencover:
 
 - **Galerie** unter der großen Kartenvorschau, filterbar nach *Aktuell* (eingebettetes Album-Cover, Kartenmotiv auf der SD), *Gefunden*, *Archiv* (alle behaltenen Cover inkl. früherer KI-Läufe) und *Neu*.
 - **Cover suchen**: Suchbegriff ist der Album-Tag, sonst der von der Recherche ermittelte Titel, sonst der bereinigte erste Tracktitel (nie „Ordner 01“). Quellen: **Deezer** (bis 1000 px), **Spotify** (640 px, mit eigener Client-ID/Secret), **iTunes** (bis 1200 px), **MusicBrainz**/Cover Art Archive und die **Recherche-Quellen** (Vorschaubild der gefundenen Verlags-/Shopseiten bzw. von der Recherche gemeldete Cover-URLs). Gefundene Cover sind urheberrechtlich geschützt – nur für eigene Karten verwenden.

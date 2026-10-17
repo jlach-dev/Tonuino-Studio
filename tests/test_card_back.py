@@ -308,7 +308,7 @@ def test_back_prompt_and_ideas():
     assert isinstance(calls[-1]["input"], str)  # ohne Vorderseite: nur Text
     suggest_back_ideas(client, "t", req, png_bytes())
     assert calls[-1]["input"][0]["mime_type"] == "image/png"  # Bild zuerst, dann die Aufgabe
-    assert "NUR auf das Bild" in calls[-1]["input"][1]["text"]
+    assert "Das Bild hat Vorrang" in calls[-1]["input"][1]["text"]
     assert suggest_back_ideas.last_front_description == "Eine Eule mit Gitarre"
 
 

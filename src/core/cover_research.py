@@ -200,7 +200,7 @@ def lookup_online_cover(info: FolderInfo) -> Optional[bytes]:
 # --- Gemini mit Google-Suche ------------------------------------------------------------
 
 RESEARCH_PROMPT = """Du hilfst, ein Cover für eine RFID-Karte einer Kinder-Musikbox (TonUINO) zu gestalten.
-Recherchiere kurz im Internet, worum es in diesem Hörspiel/Album geht.
+Recherchiere kurz im Internet, worum es in GENAU diesem Album bzw. dieser Folge geht.
 
 Hörspielreihe / Werk: {series}
 Folge(n) auf dieser Karte: {episodes}
@@ -210,6 +210,9 @@ Tracktitel (Auszug): {titles}
 Hinweis des Nutzers: {extra}
 
 {tag_note}
+Wichtig: Es geht ausschließlich um dieses eine Album / diese Folge(n). Andere Alben oder Folgen derselben
+Reihe (z.B. Fortsetzungen, Tour- oder Sonderausgaben) gehören NICHT in Inhalt, Motive oder Bildidee.
+Prüfe anhand der Tracktitel, ob eine Quelle wirklich dieses Album beschreibt.
 
 Antworte NUR mit einem JSON-Objekt (Deutsch) mit diesen Feldern:
 "summary": Inhalt in 1-2 Sätzen,
