@@ -299,15 +299,17 @@ def test_back_prompt_and_ideas():
     image = SimpleNamespace(data=base64.b64encode(png_bytes((400, 600))).decode())
     client = SimpleNamespace(interactions=SimpleNamespace(
         create=lambda **kw: calls.append(kw) or SimpleNamespace(
-            output_image=image, output_text='["Fritzi im Wald", "Die Lupe", "Der Bär am Fluss"]')))
+            output_image=image, output_text='{"front": "Eine Eule mit Gitarre", '
+                                            '"ideas": ["Fritzi im Wald", "Die Lupe", "Der Bär am Fluss"]}')))
     art = generate_back_art(client, "m", req, png_bytes(), "", True)
     assert art.size == (400, 600)
     assert calls[0]["input"][1]["mime_type"] == "image/png"
     assert suggest_back_ideas(client, "t", req) == ["Fritzi im Wald", "Die Lupe", "Der Bär am Fluss"]
     assert isinstance(calls[-1]["input"], str)  # ohne Vorderseite: nur Text
     suggest_back_ideas(client, "t", req, png_bytes())
-    assert calls[-1]["input"][1]["mime_type"] == "image/png"  # mit Vorderseite als Bild
-    assert "gewählte Vorderseite" in calls[-1]["input"][0]["text"]
+    assert calls[-1]["input"][0]["mime_type"] == "image/png"  # Bild zuerst, dann die Aufgabe
+    assert "NUR auf das Bild" in calls[-1]["input"][1]["text"]
+    assert suggest_back_ideas.last_front_description == "Eine Eule mit Gitarre"
 
 
 def test_ai_back_is_generated_on_apply_and_becomes_new_version(qt_app, tmp_path, monkeypatch):

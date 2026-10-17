@@ -246,36 +246,49 @@ def generate_back_art(client, model: str, req: GenerationRequest, front_bytes: b
         return img.convert("RGB")
 
 
-IDEAS_PROMPT = """Für die Rückseite einer Kinder-Hörspielkarte suchen wir drei kurze Bildideen.
-{front_note}
-Die Ideen sollen ruhige Nebenszenen, Orte oder Gegenstände aus derselben Geschichte sein, zur Vorderseite
-passen (gleiche Figuren, gleicher Stil und gleiche Farbwelt, aber keine Wiederholung des Hauptmotivs),
-kindgerecht, ohne Text im Bild. Reihe/Werk: {title}. Hintergrund: {content}
-Antworte NUR mit einer JSON-Liste aus drei kurzen deutschen Sätzen."""
+IDEAS_PROMPT_IMAGE = """Das Bild ist die gewählte VORDERSEITE einer Kinder-Hörspielkarte ({title}).
+Beschreibe zuerst in einem Satz, was darauf zu sehen ist (Figuren, Stil, Farben).
+Dann nenne drei kurze Bildideen für die RÜCKSEITE derselben Karte: ruhige Nebenszenen, Orte oder
+Gegenstände, die zu genau diesen Figuren, diesem Stil und dieser Farbwelt passen, das Hauptmotiv aber
+nicht wiederholen; kindgerecht, ohne Text im Bild. Beziehe dich NUR auf das Bild, nicht auf anderes Wissen
+über die Reihe.
+Antworte NUR mit JSON: {{"front": "<Beschreibung>", "ideas": ["<Idee 1>", "<Idee 2>", "<Idee 3>"]}}"""
+
+IDEAS_PROMPT_TEXT = """Für die Rückseite einer Kinder-Hörspielkarte suchen wir drei kurze Bildideen:
+ruhige Nebenszenen, Orte oder Gegenstände aus derselben Geschichte, kindgerecht, ohne Text im Bild.
+Reihe/Werk: {title}. Hintergrund: {content}
+Antworte NUR mit JSON: {{"front": "", "ideas": ["<Idee 1>", "<Idee 2>", "<Idee 3>"]}}"""
 
 
 def suggest_back_ideas(client, text_model: str, req: GenerationRequest,
                        front_bytes: Optional[bytes] = None) -> List[str]:
-    """Drei Rueckseiten-Ideen vom Textmodell (guenstiger Aufruf, ohne Suche);
-    mit front_bytes sieht das Modell die gewaehlte Vorderseite und bezieht
-    sich auf deren Motiv, Figuren und Farben."""
+    """Drei Rueckseiten-Ideen vom Textmodell (guenstiger Aufruf, ohne Suche).
+    Mit front_bytes gilt ausschliesslich das Bild der gewaehlten Vorderseite:
+    das Modell beschreibt es erst und leitet daraus die Ideen ab. Die
+    Beschreibung steht danach in suggest_back_ideas.last_front_description."""
     import json
     import re
     from core.card_text import describe_work
     work = describe_work(req.info, req.brief)
-    prompt = IDEAS_PROMPT.format(
-        front_note=("Das angehängte Bild ist die gewählte Vorderseite der Karte - beschreibe Ideen, die genau "
-                    "dazu passen." if front_bytes else "Die Vorderseite zeigt das Hauptmotiv der Geschichte."),
-        title=work.title or work.album_tag or "(unbekannt)",
-        content=(req.brief_text.strip() or req.brief.as_text() or "(keiner)")[:1500])
+    title = work.title or work.album_tag or "(unbekannt)"
     if front_bytes:
-        model_input = [{"type": "text", "text": prompt},
-                       {"type": "image", "data": base64.b64encode(front_bytes).decode("ascii"),
-                        "mime_type": _sniff_mime(front_bytes)}]
+        model_input = [{"type": "image", "data": base64.b64encode(front_bytes).decode("ascii"),
+                        "mime_type": _sniff_mime(front_bytes)},
+                       {"type": "text", "text": IDEAS_PROMPT_IMAGE.format(title=title)}]
     else:
-        model_input = prompt
+        model_input = IDEAS_PROMPT_TEXT.format(
+            title=title, content=(req.brief_text.strip() or req.brief.as_text() or "(keiner)")[:1500])
     interaction = client.interactions.create(model=text_model, input=model_input)
     text = getattr(interaction, "output_text", "") or ""
-    match = re.search(r"\[.*\]", text, re.DOTALL)
-    ideas = json.loads(match.group(0)) if match else [line.strip("-• ") for line in text.splitlines() if line.strip()]
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    suggest_back_ideas.last_front_description = ""
+    if match:
+        data = json.loads(match.group(0))
+        suggest_back_ideas.last_front_description = str(data.get("front", "") or "")
+        ideas = data.get("ideas", [])
+    else:
+        ideas = [line.strip("-• ") for line in text.splitlines() if line.strip()]
     return [str(idea).strip() for idea in ideas if str(idea).strip()][:3]
+
+
+suggest_back_ideas.last_front_description = ""

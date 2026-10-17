@@ -450,11 +450,14 @@ class BackIdeasWorker(QThread):
         self.text_model = text_model
         self.request = request
         self.front_bytes = front_bytes
+        self.front_description = ""
 
     def run(self):
         from core.cover_generator import suggest_back_ideas
         try:
-            self.done.emit(suggest_back_ideas(self.client, self.text_model, self.request, self.front_bytes))
+            ideas = suggest_back_ideas(self.client, self.text_model, self.request, self.front_bytes)
+            self.front_description = suggest_back_ideas.last_front_description
+            self.done.emit(ideas)
         except Exception as e:
             log.exception("Rueckseiten-Ideen fehlgeschlagen")
             self.failed.emit(str(e))

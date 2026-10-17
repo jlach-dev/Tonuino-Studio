@@ -1569,6 +1569,9 @@ class CoverManagerDialog(QDialog):
         if not ideas:
             QMessageBox.information(self, "Keine Vorschläge", "Das Modell hat keine Ideen geliefert.")
             return
+        description = getattr(self._ideas_worker, "front_description", "")
+        if description:
+            self.status_label.setText(f"Vorderseite laut KI: {description}")
         menu = QMenu(self)
         for idea in ideas:
             action = menu.addAction(idea)
