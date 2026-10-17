@@ -182,3 +182,51 @@ def test_series_tab_style_bible_and_character_sheet(app, sd, tmp_path, monkeypat
     assert dialog.anchor_list.count() == 1
     assert any(c.entry is not None and c.entry.id == covers[0].id for c in dialog.candidates)
     dialog.done(0)
+
+
+def test_series_style_takes_precedence_in_dialog(app, sd, tmp_path, monkeypatch, no_network):
+    from gui import cover_manager_dialog as cm
+
+    monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    archive = CoverArchive(str(tmp_path / "data"))
+    profile = archive.series.create("Die Fuchsbande")
+    profile.style = "Aquarell"
+    archive.series.save(profile)
+    archive.ensure_album("album-x", "Folge 39")
+    archive.assign_album("album-x", profile.id)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), archive)
+    monkeypatch.setattr(dialog, "_start_research", lambda: None)
+    dialog.album_id = "album-x"
+    dialog._load_series()
+    dialog.style_combo.setCurrentText("Kinderbuch-Illustration")
+
+    # Serien-Stil gewinnt gegen den Stil aus "KI erzeugen" und wird dort angezeigt
+    assert dialog._effective_style() == "Aquarell"
+    assert "Aquarell" in dialog.series_hint_label.text() and "Vorrang" in dialog.series_hint_label.text()
+
+    requests = []
+
+    class FakeSignal:
+        def connect(self, slot):
+            pass
+
+    class FakeWorker:
+        variant_ready = failed = completed = finished = FakeSignal()
+
+        def __init__(self, source, request, client, model, count):
+            requests.append(request)
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(cm, "CoverGenerateWorker", lambda *a: FakeWorker(*a))
+    dialog._start_generation()
+    assert requests[-1].style == "Aquarell"
+
+    # ohne festen Serien-Stil gilt wieder "KI erzeugen"
+    cm._select_data(dialog.series_style_combo, "")
+    assert dialog._effective_style() == "Kinderbuch-Illustration"
+    dialog.done(0)

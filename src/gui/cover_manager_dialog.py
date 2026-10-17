@@ -1051,6 +1051,14 @@ class CoverManagerDialog(QDialog):
         store.save(profile)
         self._update_series_ui()
 
+    def _effective_style(self) -> str:
+        """Fester Stil der Serie (Tab "Serie") hat Vorrang vor dem Stil aus "KI erzeugen\""""
+        if self.series_profile is not None and hasattr(self, "series_style_combo"):
+            series_style = self.series_style_combo.currentData() or ""
+            if series_style:
+                return series_style
+        return self.style_combo.currentText()
+
     def _series_request_fields(self) -> dict:
         """Felder fuer GenerationRequest: Name, Stilbibel und Anker-Bilder der Serie"""
         if self.series_profile is None:
@@ -1085,9 +1093,13 @@ class CoverManagerDialog(QDialog):
         source = " · MusicBrainz-Serie" if profile.mb_series_id else ""
         self.series_info_label.setText(f"Zugeordnet: {profile.name}{source} · {anchors} Anker · "
                                        + ("mit" if profile.style_bible.strip() else "ohne") + " Stilbibel")
-        self.series_hint_label.setText(f"Serie: {profile.name} – {anchors} Anker-Bild(er) werden als Vorlage "
-                                       "mitgegeben" + (", dazu die Stilbibel" if self.bible_edit.toPlainText().strip()
-                                                       else "") + ".")
+        fixed_style = self.series_style_combo.currentData() or ""
+        self.series_hint_label.setText(
+            f"Serie: {profile.name} – {anchors} Anker-Bild(er) werden als Vorlage mitgegeben"
+            + (", dazu die Stilbibel" if self.bible_edit.toPlainText().strip() else "")
+            + (f". Fester Serien-Stil „{fixed_style}“ hat Vorrang vor dem Stil hier." if fixed_style else "."))
+        self.style_combo.setToolTip(f"Für diese Serie gilt der feste Stil „{fixed_style}“ (Tab „Serie“)"
+                                    if fixed_style else "")
         if anchors == 0:
             self.series_status.setText("Noch keine Anker: ein gutes Cover der Reihe anklicken und „Angeklicktes Bild "
                                        "als Anker“ wählen, oder ein Charakterblatt erzeugen.")
@@ -1178,7 +1190,7 @@ class CoverManagerDialog(QDialog):
             return
         if self._sheet_worker is not None and self._sheet_worker.isRunning():
             return
-        style = self.series_style_combo.currentData() or self.style_combo.currentText()
+        style = self._effective_style()
         self.btn_character_sheet.setEnabled(False)
         self.status_label.setText(f"Charakterblatt für „{profile.name}“ wird erzeugt … "
                                   f"(ca. {ESTIMATED_COST_PER_IMAGE:.2f} USD)")
@@ -1610,13 +1622,13 @@ class CoverManagerDialog(QDialog):
             return
         refs = [c.data for c in self._references()][:MAX_REFERENCE_IMAGES]
         count = self.count_spin.value()
+        style = self._effective_style()
         request = GenerationRequest(
             info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText(),
-            style=self.style_combo.currentText(), extra=self.extra_edit.text(),
+            style=style, extra=self.extra_edit.text(),
             orientation=self.orientation_combo.currentData(), use_reference=bool(refs), reference_images=refs,
             **self._series_request_fields())
-        self._generation_meta = {"style": self.style_combo.currentText(), "model": image_model(),
-                                 "prompt": self.extra_edit.text()}
+        self._generation_meta = {"style": style, "model": image_model(), "prompt": self.extra_edit.text()}
         anchors = len(request.anchors())
         self.status_label.setText(f"Erzeuge {count} Motiv(e) mit {len(refs)} Vorlage(n)"
                                   + (f" und {anchors} Serien-Anker(n)" if anchors else "")
@@ -2066,7 +2078,7 @@ class CoverManagerDialog(QDialog):
             return False
         request = GenerationRequest(
             info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText(),
-            style=self.style_combo.currentText(), orientation=self.orientation_combo.currentData(),
+            style=self._effective_style(), orientation=self.orientation_combo.currentData(),
             **self._series_request_fields())
         self.status_label.setText("KI-Rückseite wird erzeugt (passend zur Vorderseite) …")
         self._back_front = front
