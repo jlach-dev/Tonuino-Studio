@@ -97,3 +97,29 @@ def test_search_title_never_uses_folder_name():
     assert suggest_search_title(FolderInfo(titles=["Intro"]), CoverBrief(album_title="Folge 39")) == "Folge 39"
     assert suggest_search_title(FolderInfo(album="Album-Tag"), CoverBrief(album_title="x")) == "Album-Tag"
     assert clean_track_title("Bibi Blocksberg - Teil 2") == "Bibi Blocksberg"
+
+
+def test_musicbrainz_search_falls_back_to_simplified_title(monkeypatch):
+    from core import musicbrainz
+
+    queries = []
+
+    def fake_get(url, accept="application/json", attempts=3):
+        from urllib.parse import parse_qs, urlparse
+        query = parse_qs(urlparse(url).query)["query"][0]
+        queries.append(query)
+        # nur der vereinfachte Titel ohne Interpret trifft
+        if 'releasegroup:"Eule findet den Beat"' in query and "artist:" not in query:
+            return json.dumps({"release-groups": [{"id": "rg", "title": "Eule findet den Beat", "score": 100,
+                                                   "artist-credit": [{"name": "Eule"}]}]}).encode()
+        return json.dumps({"release-groups": []}).encode()
+
+    monkeypatch.setattr(musicbrainz, "_http_get", fake_get)
+    hits = musicbrainz.search_release_groups("Eule findet den Beat (Musik-Hörspiel)", "Eule")
+    assert [h.title for h in hits] == ["Eule findet den Beat"]
+    assert queries[0].startswith('releasegroup:"Eule findet den Beat \\(Musik')
+    assert len(queries) == 4  # exakt+Interpret, exakt, vereinfacht+Interpret, vereinfacht
+
+    queries.clear()
+    assert musicbrainz.search_release_groups("Gibt es nicht", "X") == []
+    assert any(q.startswith("releasegroup:(Gibt AND es AND nicht)") for q in queries)

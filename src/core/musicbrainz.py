@@ -128,14 +128,32 @@ def search_release_groups(album: str, artist: str = "", limit: int = 8, min_scor
     noch einmal nur nach dem Albumtitel gesucht."""
     if not album.strip():
         return []
-    hits = _search(album, artist, limit, min_score)
-    if not hits and artist.strip():
-        hits = _search(album, "", limit, min_score)
-    return hits
+    # Varianten vom exakten Titel bis zur losen Wortsuche: Zusaetze wie
+    # "(Musik-Hoerspiel)" oder "[Deluxe]" stehen selten im MusicBrainz-Titel
+    variants = [album.strip()]
+    simplified = _PARENTHETICAL.sub("", album).strip(" -–:")
+    if simplified and simplified.lower() != album.strip().lower():
+        variants.append(simplified)
+    for title in variants:
+        for name in ([artist, ""] if artist.strip() else [""]):
+            hits = _search(title, name, limit, min_score)
+            if hits:
+                return hits
+    hits = _search(variants[-1], artist, limit, min_score, exact=False)
+    return hits or ([] if not artist.strip() else _search(variants[-1], "", limit, min_score, exact=False))
 
 
-def _search(album: str, artist: str, limit: int, min_score: int) -> List[ReleaseGroupHit]:
-    query = f'releasegroup:"{_lucene_escape(album)}"'
+_PARENTHETICAL = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]")
+
+
+def _search(album: str, artist: str, limit: int, min_score: int, exact: bool = True) -> List[ReleaseGroupHit]:
+    if exact:
+        query = f'releasegroup:"{_lucene_escape(album)}"'
+    else:
+        words = [w for w in re.split(r"[^\w]+", album) if len(w) > 1]
+        query = "releasegroup:(" + " AND ".join(_lucene_escape(w) for w in words) + ")" if words else ""
+        if not query:
+            return []
     if artist.strip():
         query += f' AND artist:"{_lucene_escape(artist)}"'
     url = "https://musicbrainz.org/ws/2/release-group/?" + urllib.parse.urlencode(
