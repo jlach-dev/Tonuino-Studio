@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QFrame, QFileDialog, QMessageBox,
     QStatusBar, QSplitter,
     QAbstractItemView, QProgressDialog,
-    QMenuBar, QStyle, QStyleOptionViewItem
+    QMenuBar, QStyle, QStyleOptionViewItem, QInputDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint, QRect
 from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup
@@ -24,6 +24,8 @@ from core.metadata import MetadataManager
 from core.ai_settings import SETTINGS_ORIENTATION, SETTINGS_STYLE
 from core.card_layout import ORIENTATION_PORTRAIT
 from core.card_store import card_paths
+from core.card_text import derive_card_text
+from core.cover_research import gather_folder_info
 from core.cover_generator import DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, SOURCE_AI
 from gui.common import resource_path, heading_font, confirm_action, icon_from_glyph, icon_with_hover
 from gui.track_list import HoverListWidget, reorder_with_selection
@@ -316,6 +318,7 @@ class MainWindow(QMainWindow):
         self.folder_list = QListWidget()
         self.folder_list.setObjectName("folderList")
         self.folder_list.itemClicked.connect(self._on_folder_selected)
+        self.folder_list.itemDoubleClicked.connect(self._on_folder_double_clicked)
         layout.addWidget(self.folder_list)
         
         self.rfid_panel = RfidPanel(
@@ -388,10 +391,22 @@ class MainWindow(QMainWindow):
         info_col.setSpacing(2)
         info_col.addStretch(1)
 
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
         self.folder_title = ElidedLabel("Ordner")
         self.folder_title.setObjectName("folderTitle")
         self.folder_title.setFixedHeight(40)
-        info_col.addWidget(self.folder_title)
+        self.folder_title.setToolTip("Doppelklick: Ordner umbenennen")
+        self.folder_title.mouseDoubleClickEvent = lambda _event: self._rename_current_folder()
+        title_row.addWidget(self.folder_title, 1)
+        self.btn_rename_folder = QPushButton()
+        self.btn_rename_folder.setObjectName("ghostButton")
+        self.btn_rename_folder.setIcon(icon_from_glyph("\ue3c9", color=theme.TEXT))  # Edit
+        self.btn_rename_folder.setToolTip("Ordner umbenennen (schreibt den Album-Tag aller Tracks)")
+        self.btn_rename_folder.setFixedSize(32, 32)
+        self.btn_rename_folder.clicked.connect(self._rename_current_folder)
+        title_row.addWidget(self.btn_rename_folder)
+        info_col.addLayout(title_row)
 
         self.folder_subtitle = QLabel()
         self.folder_subtitle.setObjectName("folderSubtitle")
@@ -804,6 +819,7 @@ class MainWindow(QMainWindow):
         self.btn_delete_folder.setEnabled(editable)
         self.cover_label.setEnabled(editable)
         self.btn_card_cover.setEnabled(editable and bool(self.current_folder.tracks))
+        self.btn_rename_folder.setEnabled(editable and bool(self.current_folder.tracks))
 
     def _populate_track_list(self, folder: Folder):
         """Baut die Track-Liste eines Ordners neu auf (liest Metadaten je Track).
@@ -1245,6 +1261,60 @@ class MainWindow(QMainWindow):
             return sum(1 for track in tracks if self.metadata_manager.set_cover(track.filepath, tmp_path))
         finally:
             os.remove(tmp_path)
+
+    # --- Ordner umbenennen ----------------------------------------------------------
+
+    def _on_folder_double_clicked(self, item: QListWidgetItem):
+        identity = item.data(Qt.ItemDataRole.UserRole)
+        folder = self.sd_card.get_any_folder(identity) if self.sd_card else None
+        if folder is not None and not folder.is_special:
+            self._rename_folder(folder)
+
+    def _rename_current_folder(self):
+        if self.current_folder is not None and not self._is_special_folder(self.current_folder):
+            self._rename_folder(self.current_folder)
+
+    def _rename_folder(self, folder: Folder):
+        """Der Ordnername ist der Album-Tag (TALB) der Tracks - Umbenennen
+        schreibt ihn in alle Tracks des Ordners. Vorgeschlagen wird die aus den
+        Tracktiteln erkannte Reihe, falls der Album-Tag nur ein Feed-Name ist."""
+        if not folder.tracks:
+            QMessageBox.information(self, "Ordner umbenennen",
+                                    "Der Name wird als Album-Tag in den Tracks gespeichert - "
+                                    "bitte zuerst Tracks hinzufügen.")
+            return
+        current = self._resolve_folder_name(folder)
+        if current.startswith("Ordner "):
+            current = ""
+        suggestion = current
+        try:
+            series, _title = derive_card_text(gather_folder_info(folder, self.metadata_manager, max_titles=5))
+            if series and not current:
+                suggestion = series
+        except Exception:
+            pass
+
+        name, ok = QInputDialog.getText(
+            self, f"Ordner {folder.index:02d} umbenennen",
+            "Name (wird als Album-Tag in alle Tracks geschrieben):", text=suggestion)
+        name = name.strip()
+        if not ok or not name or name == current:
+            return
+
+        self._release_files()
+        written = sum(1 for track in folder.tracks
+                      if self.metadata_manager.write_metadata(track.filepath, album=name))
+        if written == 0:
+            QMessageBox.warning(self, "Umbenennen fehlgeschlagen",
+                                "Der Album-Tag konnte in keinen Track geschrieben werden "
+                                "(Datei gesperrt oder schreibgeschützt?).")
+            return
+        self._set_folder_name(folder.index, name)
+        if written < len(folder.tracks):
+            QMessageBox.warning(self, "Teilweise umbenannt",
+                                f"Album-Tag nur in {written} von {len(folder.tracks)} Tracks geschrieben.")
+        else:
+            self.status_bar.showMessage(f"Ordner {folder.index:02d} heißt jetzt „{name}“ ({written} Tracks getaggt)")
 
     # --- Kartencover ----------------------------------------------------------------
 

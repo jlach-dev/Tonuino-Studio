@@ -2,6 +2,9 @@
 Kartentext aus den Tags ableiten: Hoerspielreihe (klein) und Folgentitel
 
 Beispiele:
+  Tracktitel "Die kleine Hexe (1/2): Heia Walpurgisnacht | MausHörspiel lang (07.12.2024)",
+             "Die kleine Hexe (2/2): Der größte Streich | …"  (TALB nur der Feed)
+      -> Reihe "Die kleine Hexe", Titel "1. Heia Walpurgisnacht" / "2. Der größte Streich"
   TALB "Folge 39: Fall 77: Die verschleppte Schleppe/Fall 78: Der gefiederte Vergessling",
   TPE1 "Die Fuchsbande"
       -> Reihe "Die Fuchsbande · Folge 39"
@@ -14,7 +17,7 @@ Beispiele:
 import re
 from typing import List, Optional, Tuple
 
-from core.cover_research import CoverBrief, FolderInfo, clean_track_title
+from core.cover_research import CoverBrief, FolderInfo, clean_track_title, parse_episode_titles
 
 MAX_EPISODES = 4
 
@@ -41,6 +44,13 @@ def _split_episodes(album: str) -> List[str]:
 
 def derive_card_text(info: FolderInfo, brief: Optional[CoverBrief] = None) -> Tuple[str, str]:
     """(Reihe, Titel mit einer Zeile je Folge)"""
+    episodes = parse_episode_titles(info.titles)
+    if episodes:
+        # Der Album-Tag ist bei solchen Downloads meist nur der Feed-Name -
+        # Reihe und Folgen stehen in den Tracktiteln
+        titles = [f"{e.number}. {e.title}" if len(episodes) > 1 else e.title for e in episodes]
+        return episodes[0].series, "\n".join(titles[:MAX_EPISODES])
+
     series = (info.album_artist or info.artist or (brief.series if brief else "")).strip()
     albums = [a.strip() for a in info.albums if a.strip()] or ([info.album.strip()] if info.album.strip() else [])
 

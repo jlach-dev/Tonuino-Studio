@@ -100,8 +100,15 @@ def test_card_text_from_tags_series_and_double_episodes():
         albums=["Bibi Blocksberg - Folge 1: Hexen gibt es doch", "Bibi Blocksberg - Folge 2: Der Superbesen"],
         artist="Bibi Blocksberg")) == ("Bibi Blocksberg", "Folge 1: Hexen gibt es doch\nFolge 2: Der Superbesen")
     assert derive_card_text(FolderInfo(albums=["AC/DC Live"], artist="AC/DC")) == ("AC/DC", "Live")
-    assert derive_card_text(FolderInfo(titles=["Die kleine Hexe (1/2): A", "Die kleine Hexe (2/2): B"])) == (
-        "", "Die kleine Hexe")
+    # Podcast-Download: Album-Tag ist nur der Feed, Reihe und Folgen stehen im Tracktitel
+    feed = FolderInfo(album="MausHörspiel lang", artist="Otfried Preußler", titles=[
+        "Die kleine Hexe (1/2): Heia Walpurgisnacht | MausHörspiel lang (07.12.2024)",
+        "Die kleine Hexe (2/2): Der größte Streich | MausHörspiel lang (07.12.2024)"])
+    assert derive_card_text(feed) == ("Die kleine Hexe", "1. Heia Walpurgisnacht\n2. Der größte Streich")
+    # dieselbe Folge in zwei Teilen -> nur ein Titel, ohne Nummer
+    assert derive_card_text(FolderInfo(titles=["Bibi - Folge 12: Der Superbesen (Teil 1)",
+                                               "Bibi - Folge 12: Der Superbesen (Teil 1)"])) == (
+        "Bibi", "Der Superbesen (Teil 1)")
 
 
 def test_multi_episode_text_fits_card():

@@ -105,10 +105,53 @@ def clean_track_title(title: str) -> str:
     return text.split(" | ")[0].strip()
 
 
+@dataclass
+class Episode:
+    series: str
+    number: int
+    title: str
+
+
+# "Die kleine Hexe (1/2): Heia Walpurgisnacht | MausHörspiel lang (07.12.2024)"
+_EPISODE_PART = re.compile(
+    r"^(?P<series>.+?)\s*\((?P<n>\d+)\s*/\s*(?P<m>\d+)\)\s*[:\-–]\s*(?P<title>.+)$")
+# "Bibi Blocksberg - Folge 12: Der Superbesen", "Benjamin Blümchen – Teil 3 - ..."
+_EPISODE_WORD = re.compile(
+    r"^(?P<series>.+?)\s*[-–:|]\s*(?:folge|teil|episode|kapitel)\s*(?P<n>\d+)\s*[:\-–.]\s*(?P<title>.+)$",
+    re.IGNORECASE)
+
+
+def parse_episode_titles(titles: List[str]) -> List[Episode]:
+    """Erkennt in Tracktiteln das Muster "Reihe (n/m): Folgentitel" bzw.
+    "Reihe - Folge n: Folgentitel" (typisch fuer Podcast-/Radio-Downloads, bei
+    denen der Album-Tag nur den Feed nennt). Liefert nur dann Folgen, wenn alle
+    passenden Titel dieselbe Reihe nennen - sonst leer."""
+    episodes: List[Episode] = []
+    for title in titles:
+        text = (title or "").split(" | ")[0].strip()
+        text = _TRACK_PREFIX.sub("", text)
+        match = _EPISODE_PART.match(text) or _EPISODE_WORD.match(text)
+        if match:
+            episodes.append(Episode(match.group("series").strip(" -–:"), int(match.group("n")),
+                                    match.group("title").strip()))
+    if not episodes or len({e.series.lower() for e in episodes}) != 1:
+        return []
+    # gleiche Folge auf mehreren Tracks (Teil 1/2) nur einmal
+    unique: List[Episode] = []
+    for episode in episodes:
+        if not any(u.number == episode.number and u.title.lower() == episode.title.lower() for u in unique):
+            unique.append(episode)
+    return unique
+
+
 def suggest_search_title(info: FolderInfo, brief: Optional[CoverBrief] = None) -> str:
     """Suchbegriff fuer die Cover-Suche - nie der vom Manager vergebene
-    Ordnername ("Ordner 01"): Album-Tag, sonst Recherche-Titel, sonst der
-    bereinigte erste Tracktitel."""
+    Ordnername ("Ordner 01"): aus Tracktiteln erkannte Reihe (der Album-Tag ist
+    dann meist nur der Podcast-Feed), sonst Album-Tag, sonst Recherche-Titel,
+    sonst der bereinigte erste Tracktitel."""
+    episodes = parse_episode_titles(info.titles)
+    if episodes:
+        return episodes[0].series
     if info.album.strip():
         return info.album.strip()
     if brief is not None and brief.album_title.strip():

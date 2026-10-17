@@ -92,6 +92,8 @@ def test_search_title_never_uses_folder_name():
     info = FolderInfo(album="", artist="Die Fuchsbande",
                       titles=["01 - Die kleine Hexe (1/2): Heia Walpurgisnacht | MausHörspiel lang (07.12.2024)"])
     assert suggest_search_title(info) == "Die kleine Hexe"
-    assert suggest_search_title(info, CoverBrief(album_title="Folge 39: Fall 77")) == "Folge 39: Fall 77"
+    # erkannte Reihe aus den Tracktiteln schlaegt Album-Tag (Feed) und Recherche-Titel
+    assert suggest_search_title(info, CoverBrief(album_title="Folge 39: Fall 77")) == "Die kleine Hexe"
+    assert suggest_search_title(FolderInfo(titles=["Intro"]), CoverBrief(album_title="Folge 39")) == "Folge 39"
     assert suggest_search_title(FolderInfo(album="Album-Tag"), CoverBrief(album_title="x")) == "Album-Tag"
     assert clean_track_title("Bibi Blocksberg - Teil 2") == "Bibi Blocksberg"
