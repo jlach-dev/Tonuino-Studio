@@ -392,3 +392,24 @@ class CoverBatchWorker(QThread):
                 log.exception("Batch-Cover fuer %s fehlgeschlagen", label)
                 self.error.emit(label, str(e))
         self.completed.emit(done)
+
+
+class CoverExtendWorker(QThread):
+    """Erweitert ein Bild per Bildmodell auf das Kartenformat (Outpainting)"""
+    done = pyqtSignal(object)  # PIL.Image
+    failed = pyqtSignal(str)
+
+    def __init__(self, client, image_model: str, image_bytes: bytes, orientation: str):
+        super().__init__()
+        self.client = client
+        self.image_model = image_model
+        self.image_bytes = image_bytes
+        self.orientation = orientation
+
+    def run(self):
+        from core.cover_generator import extend_to_card
+        try:
+            self.done.emit(extend_to_card(self.client, self.image_model, self.image_bytes, self.orientation))
+        except Exception as e:
+            log.exception("KI-Randergaenzung fehlgeschlagen")
+            self.failed.emit(str(e))

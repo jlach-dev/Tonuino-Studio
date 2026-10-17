@@ -168,3 +168,64 @@ def test_cover_manager_saves_back_side(qt_app, tmp_path, monkeypatch):
     assert not card_store.has_back(sd.folders[1].path)
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
+
+
+def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_path, monkeypatch):
+    from core.metadata import MetadataManager
+    from gui import cover_manager_dialog as cm
+
+    folder = tmp_path / "sd" / "01"
+    folder.mkdir(parents=True)
+    (folder / "001.mp3").write_bytes(b"x")
+    sd = SDCard(str(tmp_path / "sd"))
+    sd.scan()
+    monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "Eule", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+
+    with_back = cm.Candidate(cm.SECTION_ONLINE, "MB", png_bytes(color=(10, 10, 10)), KIND_ONLINE,
+                             back_data=png_bytes(color=(200, 0, 0)))
+    other = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes(color=(0, 0, 200)), KIND_ONLINE)
+    dialog._add_candidate(with_back, select=True)
+    dialog._add_candidate(other)
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_IMAGE)
+
+    # Vorschau zeigt die Rueckseite von "MB" -> als Vorderseiten-Motiv uebernehmen
+    dialog.side_bar.setCurrentIndex(1)
+    assert dialog._preview_source().back
+    dialog._pick_source(back=False)
+    assert dialog.front_source.candidate is with_back and dialog.front_source.back
+    assert dialog._front_image().getpixel((0, 0)) == (200, 0, 0)
+
+    # anderes Bild anklicken, dessen Vorderseite als Rueckseite waehlen
+    dialog.gallery.setCurrentRow(1)
+    dialog.side_bar.setCurrentIndex(0)
+    dialog._pick_source(back=True)
+    assert dialog.back_source.candidate is other and not dialog.back_source.back
+    assert dialog._back_source_image(other).getpixel((0, 0)) == (0, 0, 200)
+
+    # KI-Randergaenzung der Rueckseite: neue Version unter "Neu", Original unveraendert
+    class FakeWorker:
+        def __init__(self, client, model, data, orientation):
+            self.data = data
+
+        def start(self):
+            dialog._on_extended(Image.new("RGB", (400, 600), (1, 2, 3)))
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(cm, "CoverExtendWorker", lambda *a: FakeWorker(*a))
+    monkeypatch.setattr(cm, "image_model", lambda: "m")
+    dialog._extend_side(back=True)
+    new = [c for c in dialog.candidates if c.section == cm.SECTION_NEW]
+    assert len(new) == 1 and new[0].back_image().size == (400, 600)
+    assert new[0].image().getpixel((0, 0)) == (0, 0, 200)  # Vorderseite der Quelle uebernommen
+    assert other.back_data is None  # Original unveraendert
+    assert dialog.selected is new[0] and dialog.side_bar.currentIndex() == 1
+
+    dialog._extend_side(back=False)
+    new = [c for c in dialog.candidates if c.section == cm.SECTION_NEW]
+    assert len(new) == 2 and new[1].image().size == (400, 600) and new[1].kind == "ai"
+    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    dialog.done(0)

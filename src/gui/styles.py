@@ -635,6 +635,60 @@ QSpinBox:focus {
     border-color: @BLUE@;
 }
 
+/* Ohne eigene Gestaltung zeichnet Qt die Pfeil-Buttons im Stylesheet-Modus
+   ohne Breite - sie sind dann nicht klickbar. Plus/Minus braucht keine Bilder. */
+QSpinBox, QDoubleSpinBox {
+    padding-right: 24px;
+}
+
+/* Pfeile als Dreiecke aus transparenten Raendern (keine Bilddateien noetig) */
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    width: 0px;
+    height: 0px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid @TEXT@;
+}
+
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    width: 0px;
+    height: 0px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid @TEXT@;
+}
+
+QSpinBox::up-arrow:disabled, QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:off {
+    border-bottom-color: @SURFACE2@;
+}
+
+QSpinBox::down-arrow:disabled, QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:off {
+    border-top-color: @SURFACE2@;
+}
+
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 22px;
+    background-color: @HOVER_MID@;
+    border-left: 1px solid @SURFACE1@;
+}
+
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-position: top right;
+    border-top-right-radius: 6px;
+}
+
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 6px;
+}
+
+QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
+    background-color: @HOVER_STRONG@;
+}
+
 /* === Group Box === */
 QGroupBox {
     background-color: @MANTLE@;
