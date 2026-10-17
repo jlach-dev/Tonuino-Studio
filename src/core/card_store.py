@@ -20,7 +20,7 @@ from typing import Optional
 from PIL import Image
 
 from core.card_layout import (
-    BACK_MODE_NONE, BACK_MODE_TRACKLIST, CardText, ORIENTATION_PORTRAIT, render_back_card, render_card,
+    BACK_MODE_NONE, BACK_MODE_TRACKLIST, CardText, ORIENTATION_PORTRAIT, TextStyle, render_back_card, render_card,
 )
 
 CARD_IMAGE = "card.png"
@@ -50,6 +50,8 @@ class CardMeta:
     back_lines: list = field(default_factory=list)  # Trackliste fuer die Rueckseite
     back_archive_cover_id: str = ""
     back_extended: bool = False  # Rand per KI ergaenzt
+    title_style: dict = field(default_factory=dict)  # TextStyle (Schrift, Groesse, Farbe) fuer den Titel
+    series_style: dict = field(default_factory=dict)  # ... fuer die Reihe
 
     @classmethod
     def from_dict(cls, data: dict) -> "CardMeta":
@@ -138,7 +140,9 @@ def load_raw_art(folder_path: str) -> Optional[Image.Image]:
 
 def render_from_meta(art: Image.Image, meta: CardMeta, folder_number: Optional[int], spec=None) -> Image.Image:
     text = CardText(title=meta.title, folder_number=folder_number if meta.show_number else None,
-                    series=meta.series)
+                    series=meta.series,
+                    title_style=TextStyle.from_dict(meta.title_style) if meta.title_style else None,
+                    series_style=TextStyle.from_dict(meta.series_style) if meta.series_style else None)
     return render_card(art, text, meta.orientation, spec)
 
 

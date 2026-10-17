@@ -9,8 +9,8 @@ neue (kostenpflichtige) Bildgenerierung geaendert werden koennen.
 
 import os
 import sys
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import asdict, dataclass
+from typing import Dict, List, Optional
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
@@ -51,6 +51,32 @@ class CardSpec:
 
 
 @dataclass
+class TextStyle:
+    """Schrift fuer einen Textbereich der Karte (Reihe bzw. Titel)"""
+    family: str = ""  # "" = Standardschrift (gebuendelt bzw. System)
+    size_mm: float = 0.0  # 0 = automatisch (so gross wie es passt)
+    bold: bool = True
+    color: str = "#ffffff"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data) -> "TextStyle":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+    def rgba(self, alpha: int = 255) -> tuple:
+        value = self.color.lstrip("#")
+        try:
+            r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+        except (ValueError, IndexError):
+            r, g, b = 255, 255, 255
+        return r, g, b, alpha
+
+
+@dataclass
 class CardText:
     """Was per Code auf die Karte gesetzt wird. title darf mehrere Zeilen
     enthalten (eine je Folge, z.B. bei Doppelfolgen); series steht klein
@@ -58,6 +84,8 @@ class CardText:
     title: str = ""
     folder_number: Optional[int] = None
     series: str = ""
+    title_style: Optional[TextStyle] = None
+    series_style: Optional[TextStyle] = None
 
     @property
     def paragraphs(self) -> List[str]:
@@ -100,6 +128,68 @@ def find_title_font() -> Optional[str]:
         if os.path.exists(path):
             return path
     return None
+
+
+_FONT_DIRS = [
+    r"C:\Windows\Fonts",
+    os.path.join(os.path.expanduser("~"), "AppData", "Local", "Microsoft", "Windows", "Fonts"),
+    "/System/Library/Fonts", "/System/Library/Fonts/Supplemental", "/Library/Fonts",
+    os.path.join(os.path.expanduser("~"), "Library", "Fonts"),
+    "/usr/share/fonts", "/usr/local/share/fonts", os.path.join(os.path.expanduser("~"), ".fonts"),
+]
+_font_index: Optional[Dict[str, Dict[str, str]]] = None
+
+
+def _scan_fonts() -> Dict[str, Dict[str, str]]:
+    """family (klein) -> {stil (klein): pfad}; einmalig je Prozess"""
+    global _font_index
+    if _font_index is not None:
+        return _font_index
+    index: Dict[str, Dict[str, str]] = {}
+    for directory in [_bundled_font_dir()] + _FONT_DIRS:
+        if not os.path.isdir(directory):
+            continue
+        for root, _dirs, files in os.walk(directory):
+            for name in files:
+                if not name.lower().endswith((".ttf", ".otf")):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    family, style = ImageFont.truetype(path, 10).getname()
+                except Exception:
+                    continue
+                index.setdefault((family or "").lower(), {})[(style or "").lower()] = path
+    _font_index = index
+    return index
+
+
+def find_font_file(family: str, bold: bool = True) -> Optional[str]:
+    """Schriftdatei zu einem Familiennamen (z.B. "Comic Sans MS"), bevorzugt fett"""
+    styles = _scan_fonts().get((family or "").strip().lower())
+    if not styles:
+        return None
+    wanted = ["bold", "fett", "semibold", "demibold", "black", "heavy"] if bold else ["regular", "normal", "book", "standard"]
+    for key in wanted:
+        for style, path in styles.items():
+            if (style == key or style.startswith(key + " ")) and "italic" not in style:
+                return path
+    if bold:
+        for style, path in styles.items():
+            if "bold" in style and "italic" not in style:
+                return path
+    for style, path in styles.items():
+        if "italic" not in style and "oblique" not in style:
+            return path
+    return next(iter(styles.values()))
+
+
+def resolve_font(style: Optional["TextStyle"]) -> Optional[str]:
+    """Schriftdatei fuer einen Textstil; ohne Familie die Standardschrift"""
+    if style is not None and style.family.strip():
+        path = find_font_file(style.family, style.bold)
+        if path:
+            return path
+    return find_title_font()
 
 
 def _load_font(path: Optional[str], size: int) -> ImageFont.FreeTypeFont:
@@ -207,15 +297,23 @@ class TextBlock:
 
 def fit_text_block(draw: ImageDraw.ImageDraw, series: str, paragraphs: List[str], font_path: Optional[str],
                    max_width: int, max_height: int, max_lines: int, start_size: int,
-                   min_size: int = 10) -> TextBlock:
+                   min_size: int = 10, title_style: Optional[TextStyle] = None,
+                   series_style: Optional[TextStyle] = None, dpi: int = DPI) -> TextBlock:
     """Groesste Schriftgroesse, mit der Reihe (klein) und alle Titelzeilen in
     die Box passen; jede Folge beginnt in einer neuen Zeile. Passt es selbst in
-    der Mindestgroesse nicht, wird gekuerzt (…)."""
-    size = start_size
+    der Mindestgroesse nicht, wird gekuerzt (…). Feste Groessen aus den Stilen
+    (size_mm > 0) werden nicht verkleinert."""
+    title_path = resolve_font(title_style) if title_style else font_path
+    series_path = resolve_font(series_style) if series_style else font_path
+    fixed_title = mm_to_px(title_style.size_mm, dpi) if title_style and title_style.size_mm > 0 else 0
+    fixed_series = mm_to_px(series_style.size_mm, dpi) if series_style and series_style.size_mm > 0 else 0
+    size = fixed_title or start_size
+    if fixed_title:
+        min_size = fixed_title
     while True:
-        font = _load_font(font_path, size)
-        series_size = max(min_size, round(size * 0.58))
-        series_font = _load_font(font_path, series_size)
+        font = _load_font(title_path, size)
+        series_size = fixed_series or max(min_size, round(size * 0.58))
+        series_font = _load_font(series_path, series_size)
         lines, starts = [], set()
         for paragraph in paragraphs:
             starts.add(len(lines))
@@ -261,7 +359,10 @@ def render_card(art: Image.Image, text: CardText, orientation: str,
             draw, text.series.strip(), paragraphs, find_title_font(), width - 2 * safe,
             max_height=round(height * (0.40 if portrait else 0.46)),
             max_lines=(5 if portrait else 3) if len(paragraphs) > 1 else (3 if portrait else 2),
-            start_size=mm_to_px(6.0 if len(paragraphs) <= 1 else 4.6, dpi))
+            start_size=mm_to_px(6.0 if len(paragraphs) <= 1 else 4.6, dpi),
+            title_style=text.title_style, series_style=text.series_style, dpi=dpi)
+        title_color = (text.title_style or TextStyle()).rgba()
+        series_color = (text.series_style or TextStyle()).rgba(215)
 
         # Textband unten: weicher Verlauf von transparent nach dunkel, damit
         # weisse Schrift auf jedem Motiv lesbar bleibt; waechst mit dem Text
@@ -278,14 +379,14 @@ def render_card(art: Image.Image, text: CardText, orientation: str,
         y = height - safe - block.height
         shadow = max(2, block.line_height // 18)
         for line in block.series_lines or []:
-            _draw_centered(draw, y, line, block.series_font, width, max(1, shadow // 2), (255, 255, 255, 215))
+            _draw_centered(draw, y, line, block.series_font, width, max(1, shadow // 2), series_color)
             y += block.series_line_height
         if block.series_lines:
             y += round(block.series_line_height * 0.25)
         for index, line in enumerate(block.lines):
             if index and index in block.paragraph_starts:
                 y += block.paragraph_gap
-            _draw_centered(draw, y, line, block.font, width, shadow, (255, 255, 255, 255))
+            _draw_centered(draw, y, line, block.font, width, shadow, title_color)
             y += block.line_height
 
     if text.folder_number is not None:

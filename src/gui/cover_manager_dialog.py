@@ -10,6 +10,7 @@ auf die SD-Karte) gesetzt und im Archiv behalten werden.
 """
 
 import io
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -28,7 +29,8 @@ from PyQt6.QtWidgets import (
 from core import ai_settings, album_identity, card_store, cover_sources
 from core.card_text import derive_card_text, describe_work
 from core.card_layout import (
-    BACK_MODE_IMAGE, BACK_MODE_NONE, BACK_MODE_TRACKLIST, ORIENTATION_PORTRAIT, album_cover_jpeg, prepare_card_art,
+    BACK_MODE_IMAGE, BACK_MODE_NONE, BACK_MODE_TRACKLIST, ORIENTATION_PORTRAIT, TextStyle, album_cover_jpeg,
+    prepare_card_art,
 )
 from core.cover_archive import (
     KIND_AI, KIND_FILE, KIND_LOCAL, KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive, CoverEntry, sha1,
@@ -41,7 +43,9 @@ from core.sd_card import Folder
 from gui.card_cover_dialog import (
     ORIENTATIONS, _select_data, gemini_client, image_model, pil_to_pixmap, text_model,
 )
-from gui.common import confirm_action
+from gui.common import confirm_action, icon_from_glyph
+from gui.text_style_dialog import TextStyleDialog
+from gui import theme
 from gui.tag_diff_dialog import TagDiffDialog
 from gui.workers import CoverExtendWorker, CoverGenerateWorker, CoverResearchWorker
 
@@ -49,6 +53,8 @@ log = logging.getLogger(__name__)
 
 SETTINGS_DATA_DIR = "library/data_dir"
 SETTINGS_SOURCES = "covers/search_sources"
+SETTINGS_TITLE_STYLE = "covers/title_style"
+SETTINGS_SERIES_STYLE = "covers/series_style"
 
 SECTION_CURRENT = "current"
 SECTION_ONLINE = "online"
@@ -388,6 +394,7 @@ class CoverManagerDialog(QDialog):
         self.tabs.addTab(self._search_tab(), "Cover suchen")
         self.tabs.addTab(self._card_tab(), "Karte")
         self.tabs.addTab(self._ai_tab(), "KI erzeugen")
+        self.tabs.currentChanged.connect(self._render_preview)
         right.addWidget(self.tabs, 1)
 
         self.status_label = QLabel()
@@ -506,12 +513,12 @@ class CoverManagerDialog(QDialog):
         self.series_edit = QLineEdit()
         self.series_edit.setPlaceholderText("z.B. Die Fuchsbande · Folge 39")
         self.series_edit.textChanged.connect(self._render_preview)
-        form.addRow("Reihe (klein):", self.series_edit)
+        form.addRow("Reihe (klein):", self._with_gear(self.series_edit, "Reihe", "series"))
         self.title_edit = QPlainTextEdit()
         self.title_edit.setPlaceholderText("Eine Zeile je Folge")
         self.title_edit.setFixedHeight(76)
         self.title_edit.textChanged.connect(self._render_preview)
-        form.addRow("Titel:", self.title_edit)
+        form.addRow("Titel:", self._with_gear(self.title_edit, "Titel", "title"))
         self.btn_from_tags = QPushButton("Aus Tags übernehmen")
         self.btn_from_tags.setObjectName("ghostButton")
         self.btn_from_tags.setToolTip("Reihe und Folgentitel aus den MP3-Tags (Album, Interpret) ableiten")
@@ -537,7 +544,7 @@ class CoverManagerDialog(QDialog):
         self.front_source_label.setWordWrap(True)
         form.addRow("", self.front_source_label)
         front_buttons = QHBoxLayout()
-        self.btn_front_pick = QPushButton("Bild in der Vorschau als Vorderseite")
+        self.btn_front_pick = QPushButton("Vorschau → Vorderseite")
         self.btn_front_pick.setObjectName("ghostButton")
         self.btn_front_pick.setToolTip("Das gerade groß angezeigte Bild (auch eine Rückseite) als Motiv der Vorderseite")
         self.btn_front_pick.clicked.connect(lambda: self._pick_source(back=False))
@@ -548,7 +555,7 @@ class CoverManagerDialog(QDialog):
             front_buttons.addWidget(button)
         front_buttons.addStretch(1)
         form.addRow("", front_buttons)
-        self.front_extend_check = QCheckBox("Rand per KI ergänzen (beim Übernehmen, 1 Bildaufruf)")
+        self.front_extend_check = QCheckBox("Rand per KI ergänzen (1 Bildaufruf)")
         self.front_extend_check.setToolTip("Das Vorderseiten-Motiv vom Bildmodell aufs Kartenformat erweitern – "
                                            "das Ergebnis erscheint als neue Version unter „Neu“")
         self.front_extend_check.toggled.connect(self._update_apply_note)
@@ -568,11 +575,11 @@ class CoverManagerDialog(QDialog):
         self.back_source_label.setWordWrap(True)
         form.addRow("", self.back_source_label)
         back_buttons = QHBoxLayout()
-        self.btn_back_pick = QPushButton("Bild in der Vorschau als Rückseite")
+        self.btn_back_pick = QPushButton("Vorschau → Rückseite")
         self.btn_back_pick.setObjectName("ghostButton")
         self.btn_back_pick.setToolTip("Das gerade groß angezeigte Bild als Rückseiten-Motiv verwenden")
         self.btn_back_pick.clicked.connect(lambda: self._pick_source(back=True))
-        self.btn_back_file = QPushButton("Rückseite aus Datei …")
+        self.btn_back_file = QPushButton("Aus Datei …")
         self.btn_back_file.setObjectName("ghostButton")
         self.btn_back_file.clicked.connect(self._add_back_file)
         self.btn_back_reset = QPushButton("Zurücksetzen")
@@ -583,7 +590,7 @@ class CoverManagerDialog(QDialog):
             back_buttons.addWidget(button)
         back_buttons.addStretch(1)
         form.addRow("", back_buttons)
-        self.back_extend_check = QCheckBox("Rand per KI ergänzen (beim Übernehmen, 1 Bildaufruf)")
+        self.back_extend_check = QCheckBox("Rand per KI ergänzen (1 Bildaufruf)")
         self.back_extend_check.setToolTip("Das Rückseiten-Motiv vom Bildmodell aufs Kartenformat erweitern – "
                                           "das Ergebnis erscheint als neue Version unter „Neu“")
         self.back_extend_check.toggled.connect(self._update_apply_note)
@@ -603,6 +610,11 @@ class CoverManagerDialog(QDialog):
         form.addRow("", self.btn_back_from_tags)
 
         meta = self._card_meta
+        settings = QSettings()
+        self.title_style = TextStyle.from_dict(
+            meta.title_style if meta and meta.title_style else json.loads(settings.value(SETTINGS_TITLE_STYLE, "{}")))
+        self.series_style = TextStyle.from_dict(
+            meta.series_style if meta and meta.series_style else json.loads(settings.value(SETTINGS_SERIES_STYLE, "{}")))
         self.title_edit.setPlainText(meta.title if meta else self.folder_name)
         if meta:
             self.series_edit.setText(meta.series)
@@ -613,6 +625,36 @@ class CoverManagerDialog(QDialog):
             self.back_lines_edit.setPlainText("\n".join(meta.back_lines))
         self._on_back_mode_changed()
         return tab
+
+    def _with_gear(self, widget: QWidget, label: str, which: str) -> QWidget:
+        """Eingabefeld mit Zahnrad oben rechts (Schriftart, Groesse, Farbe)"""
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(widget, 1)
+        gear = QPushButton()
+        gear.setObjectName("ghostButton")
+        gear.setIcon(icon_from_glyph("\ue8b8", color=theme.TEXT))  # Settings
+        gear.setFixedSize(28, 28)
+        gear.setToolTip(f"Schrift für „{label}“: Schriftart, Größe, Farbe")
+        gear.clicked.connect(lambda: self._edit_text_style(which, label))
+        layout.addWidget(gear, 0, Qt.AlignmentFlag.AlignTop)
+        return row
+
+    def _edit_text_style(self, which: str, label: str):
+        current = self.title_style if which == "title" else self.series_style
+        dialog = TextStyleDialog(label, current, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        style = dialog.result_style()
+        if which == "title":
+            self.title_style = style
+            QSettings().setValue(SETTINGS_TITLE_STYLE, json.dumps(style.to_dict()))
+        else:
+            self.series_style = style
+            QSettings().setValue(SETTINGS_SERIES_STYLE, json.dumps(style.to_dict()))
+        self._render_preview()
 
     def _ai_tab(self) -> QWidget:
         tab = QWidget()
@@ -1197,6 +1239,8 @@ class CoverManagerDialog(QDialog):
             research_sources=list(self.brief.sources),
             album_id=self.album_id if self.archive is not None else "",
             archive_cover_id=entry.id if entry else "",
+            title_style=self.title_style.to_dict(),
+            series_style=self.series_style.to_dict(),
         )
 
     def _set_card_cover(self):
@@ -1546,17 +1590,25 @@ class CoverManagerDialog(QDialog):
             return
         try:
             orientation = self.orientation_combo.currentData()
+            # Nur im Reiter "Karte" wird die fertige Karte (mit Text) gezeigt,
+            # sonst das Bild selbst, damit sich Cover unverfaelscht vergleichen lassen
+            self._preview_shows_card = self.tabs.currentIndex() == 1
             if self.side_bar.currentIndex() == 1:
                 source = self._back_source_image(self.selected)
                 if source is None:
                     self.preview.clear()
                     self.preview.setText("Keine Rückseite – im Tab „Karte“ unter „Rückseite“ ein Bild wählen")
                     return
-                meta = self._back_meta(self._card_meta_now(None), False)
-                card = card_store.render_back_from_meta(prepare_card_art(source, orientation), meta)
-            else:
+                if self._preview_shows_card:
+                    meta = self._back_meta(self._card_meta_now(None), False)
+                    card = card_store.render_back_from_meta(prepare_card_art(source, orientation), meta)
+                else:
+                    card = source
+            elif self._preview_shows_card:
                 art = prepare_card_art(self._front_image(), orientation)
                 card = card_store.render_from_meta(art, self._card_meta_now(None), self.folder.index)
+            else:
+                card = self._front_image()
         except Exception as e:
             self.preview.setText(f"Vorschau nicht möglich: {e}")
             return
