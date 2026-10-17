@@ -407,8 +407,44 @@ def render_card(art: Image.Image, text: CardText, orientation: str,
 
 
 BACK_MODE_NONE = ""
-BACK_MODE_IMAGE = "image"  # Original-Rueckseite (bzw. gewaehltes Bild) ohne Text
-BACK_MODE_TRACKLIST = "tracklist"  # Bild als Hintergrund, Trackliste per Code
+BACK_MODE_IMAGE = "image"  # Original-Rueckseite bzw. gewaehltes Bild
+BACK_MODE_AI = "ai"  # per Bildmodell passend zur Vorderseite erzeugt (optional mit Wunsch)
+BACK_MODE_BLUR = "blur"  # Vorderseite weichgezeichnet und abgedunkelt
+BACK_MODE_GRADIENT = "gradient"  # Farbverlauf aus den Coverfarben
+BACK_MODE_TRACKLIST = "tracklist"  # (alt) Bild + Trackliste; heute: Flag back_tracklist
+
+
+def blur_background(front: Image.Image, size) -> Image.Image:
+    """Vorderseite als ruhiger Hintergrund: stark weichgezeichnet und abgedunkelt"""
+    background = ImageOps.fit(front.convert("RGB"), size, Image.Resampling.LANCZOS)
+    background = background.filter(ImageFilter.GaussianBlur(radius=max(size) / 18))
+    return Image.blend(background, Image.new("RGB", size, (0, 0, 0)), 0.45)
+
+
+def dominant_colors(image: Image.Image, count: int = 2):
+    """Die count haeufigsten Farben (ohne fast Weiss/Schwarz, falls moeglich)"""
+    small = image.convert("RGB").resize((64, 64))
+    quantized = small.quantize(colors=8, method=Image.Quantize.MEDIANCUT)
+    palette = quantized.getpalette()[:8 * 3]
+    counts = sorted(quantized.getcolors(), reverse=True)
+    colors = [tuple(palette[index * 3:index * 3 + 3]) for _n, index in counts]
+    usable = [c for c in colors if 25 < sum(c) / 3 < 235] or colors
+    while len(usable) < count:
+        usable.append(usable[-1] if usable else (60, 60, 90))
+    return usable[:count]
+
+
+def gradient_background(front: Image.Image, size) -> Image.Image:
+    """Senkrechter Verlauf aus den zwei dominanten Coverfarben (dunklere unten)"""
+    top, bottom = dominant_colors(front, 2)
+    if sum(top) < sum(bottom):
+        top, bottom = bottom, top
+    bottom = tuple(round(c * 0.6) for c in bottom)
+    strip = Image.new("RGB", (1, size[1]))
+    for y in range(size[1]):
+        t = y / max(1, size[1] - 1)
+        strip.putpixel((0, y), tuple(round(top[i] * (1 - t) + bottom[i] * t) for i in range(3)))
+    return strip.resize(size)
 
 
 def _fit_list_font(draw, lines: List[str], font_path: Optional[str], max_width: int, max_height: int,

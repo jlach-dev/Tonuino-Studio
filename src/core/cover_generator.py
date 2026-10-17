@@ -183,3 +183,85 @@ def extend_to_card(client, model: str, image_bytes: bytes, orientation: str, ima
     with Image.open(io.BytesIO(data)) as img:
         img.load()
         return img.convert("RGB")
+
+
+# --- Rueckseite ---------------------------------------------------------------------------------
+
+def build_back_prompt(req: GenerationRequest, wish: str = "", with_tracklist: bool = True) -> str:
+    """Prompt fuer die Rueckseite: Gegenstueck zur (angehaengten) Vorderseite im
+    selben Stil, ruhiger komponiert; optional nach Wunsch des Nutzers."""
+    from core.card_text import describe_work
+    work = describe_work(req.info, req.brief)
+    shape = "tall portrait (2:3)" if req.orientation == ORIENTATION_PORTRAIT else "wide landscape (3:2)"
+    content = req.brief_text.strip() or req.brief.as_text()
+    lines = [
+        f"Create the BACK side artwork for a children's RFID music card ({shape} format). "
+        "The attached image is the FRONT side of the same card.",
+        f"Audio play / series: {work.series or work.album_tag or 'unknown'}"
+        + (f" by {work.artist}" if work.artist else ""),
+    ]
+    if work.episodes:
+        lines.append("Episode(s): " + "; ".join(work.episodes))
+    if content:
+        lines.append(f"Background information (German):\n{content}")
+    if wish.strip():
+        lines.append(f"The user wants this scene on the back (German, highest priority): {wish.strip()}")
+    else:
+        hint = "a secondary scene, place or object from the same story"
+        if len(work.episodes) > 1:
+            hint = f"a scene from the second episode ({work.episodes[1]})"
+        lines.append(f"Show {hint} - a companion to the front, not a copy of it.")
+    lines += [
+        f"Style: {STYLE_PRESETS.get(req.style, req.style)}; exactly the same illustration style, colour palette "
+        "and character designs as the attached front side.",
+        "Composition: calmer and less detailed than the front; "
+        + ("keep a large, even, low-contrast area in the upper two thirds where a text panel with the "
+           "track list will be placed later; " if with_tracklist else "full-bleed artwork; ")
+        + "no frame, no border.",
+        "IMPORTANT: absolutely no text, letters, numbers, logos or watermarks in the image.",
+        "Child-friendly, cheerful, no scary or violent content.",
+    ]
+    return "\n\n".join(lines)
+
+
+def generate_back_art(client, model: str, req: GenerationRequest, front_bytes: bytes, wish: str = "",
+                      with_tracklist: bool = True, image_size: str = "2K") -> Image.Image:
+    """Rueckseiten-Motiv vom Bildmodell, mit der Vorderseite als Referenzbild"""
+    prompt = build_back_prompt(req, wish, with_tracklist)
+    interaction = client.interactions.create(
+        model=model,
+        input=[{"type": "text", "text": prompt},
+               {"type": "image", "data": base64.b64encode(front_bytes).decode("ascii"),
+                "mime_type": _sniff_mime(front_bytes)}],
+        response_format={"type": "image", "aspect_ratio": "2:3" if req.orientation == ORIENTATION_PORTRAIT else "3:2",
+                         "image_size": image_size},
+    )
+    image = getattr(interaction, "output_image", None)
+    if image is None or not getattr(image, "data", None):
+        text = getattr(interaction, "output_text", "") or ""
+        raise RuntimeError("Das Modell hat kein Bild geliefert" + (f": {text[:300]}" if text else ""))
+    data = image.data if isinstance(image.data, bytes) else base64.b64decode(image.data)
+    with Image.open(io.BytesIO(data)) as img:
+        img.load()
+        return img.convert("RGB")
+
+
+IDEAS_PROMPT = """Für die Rückseite einer Kinder-Hörspielkarte (Vorderseite zeigt das Hauptmotiv) suchen wir
+drei kurze Bildideen: ruhige Nebenszenen, Orte oder Gegenstände aus derselben Geschichte, kindgerecht,
+ohne Text im Bild. Reihe/Werk: {title}. Hintergrund: {content}
+Antworte NUR mit einer JSON-Liste aus drei kurzen deutschen Sätzen."""
+
+
+def suggest_back_ideas(client, text_model: str, req: GenerationRequest) -> List[str]:
+    """Drei Rueckseiten-Ideen vom Textmodell (guenstiger Aufruf, ohne Suche)"""
+    import json
+    import re
+    from core.card_text import describe_work
+    work = describe_work(req.info, req.brief)
+    prompt = IDEAS_PROMPT.format(title=work.title or work.album_tag or "(unbekannt)",
+                                 content=(req.brief_text.strip() or req.brief.as_text() or "(keiner)")[:1500])
+    interaction = client.interactions.create(model=text_model, input=prompt)
+    text = getattr(interaction, "output_text", "") or ""
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    ideas = json.loads(match.group(0)) if match else [line.strip("-• ") for line in text.splitlines() if line.strip()]
+    return [str(idea).strip() for idea in ideas if str(idea).strip()][:3]

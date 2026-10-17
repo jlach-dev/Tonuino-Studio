@@ -45,7 +45,9 @@ class CardMeta:
     created: str = ""
     album_id: str = ""  # Verknuepfung zum Cover-Archiv bzw. zur Bibliothek
     archive_cover_id: str = ""
-    back_mode: str = BACK_MODE_NONE  # "", "image", "tracklist" (siehe card_layout)
+    back_mode: str = BACK_MODE_NONE  # "", "image", "ai", "blur", "gradient" (siehe card_layout)
+    back_tracklist: bool = False  # Ueberschrift + Trackliste auf die Rueckseite setzen
+    back_prompt: str = ""  # Wunschtext fuer die KI-Rueckseite
     back_heading: str = ""
     back_lines: list = field(default_factory=list)  # Trackliste fuer die Rueckseite
     back_archive_cover_id: str = ""
@@ -87,7 +89,7 @@ def load_back_raw(folder_path: str) -> Optional[Image.Image]:
 
 
 def render_back_from_meta(art: Image.Image, meta: CardMeta, spec=None) -> Image.Image:
-    if meta.back_mode == BACK_MODE_TRACKLIST:
+    if meta.back_tracklist or meta.back_mode == BACK_MODE_TRACKLIST:  # (alt: eigener Modus)
         return render_back_card(art, meta.orientation, meta.back_heading, meta.back_lines, spec)
     return render_back_card(art, meta.orientation, spec=spec)
 

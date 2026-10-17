@@ -7,10 +7,11 @@ from PIL import Image
 
 from core import card_store, cover_sources, musicbrainz
 from core.card_layout import (
-    BACK_MODE_IMAGE, BACK_MODE_TRACKLIST, CardSpec, ORIENTATION_LANDSCAPE, ORIENTATION_PORTRAIT, render_back_card,
+    BACK_MODE_AI, BACK_MODE_BLUR, BACK_MODE_GRADIENT, BACK_MODE_IMAGE, BACK_MODE_TRACKLIST, CardSpec,
+    ORIENTATION_LANDSCAPE, ORIENTATION_PORTRAIT, blur_background, gradient_background, render_back_card,
 )
 from core.cover_archive import KIND_ONLINE, CoverArchive
-from core.cover_generator import extend_to_card
+from core.cover_generator import GenerationRequest, extend_to_card
 from core.sd_card import SDCard
 
 
@@ -148,13 +149,22 @@ def test_cover_manager_saves_back_side(qt_app, tmp_path, monkeypatch):
     assert meta.back_mode == BACK_MODE_IMAGE
     assert dialog.archive.covers(dialog.album_id)[0].back_file  # Rueckseite archiviert
 
-    # Trackliste auf der Vorderseite eines Bildes ohne eigene Rueckseite
+    # Trackliste auf dem Ambient Blur eines Bildes ohne eigene Rueckseite
     plain = cm.Candidate(cm.SECTION_NEW, "KI", png_bytes(color=(0, 200, 0)), "ai")
     dialog._add_candidate(plain, select=True)
-    cm._select_data(dialog.back_mode_combo, BACK_MODE_TRACKLIST)
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_BLUR)
+    dialog.back_tracklist_check.setChecked(True)
     dialog.back_lines_edit.setPlainText("01. Titel-Song\n02. Rock-Song")
     dialog._set_card_cover()
-    assert card_store.load_meta(sd.folders[1].path).back_lines == ["01. Titel-Song", "02. Rock-Song"]
+    saved_meta = card_store.load_meta(sd.folders[1].path)
+    assert saved_meta.back_lines == ["01. Titel-Song", "02. Rock-Song"] and saved_meta.back_tracklist
+    assert saved_meta.back_mode == BACK_MODE_BLUR
+
+    # Farbverlauf
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_GRADIENT)
+    dialog._set_card_cover()
+    assert card_store.load_meta(sd.folders[1].path).back_mode == BACK_MODE_GRADIENT
+    assert card_store.has_back(sd.folders[1].path)
 
     # Druckbogen: Vorderseiten, dann Rueckseiten
     sd.folders[1].card_path = str(card_store.card_paths(sd.folders[1].path)[0])
@@ -191,6 +201,9 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
     dialog._add_candidate(with_back, select=True)
     dialog._add_candidate(other)
     cm._select_data(dialog.back_mode_combo, BACK_MODE_IMAGE)
+
+    assert blur_background(Image.new("RGB", (300, 300), "red"), (100, 150)).size == (100, 150)
+    assert gradient_background(Image.new("RGB", (300, 300), (200, 30, 30)), (100, 150)).size == (100, 150)
 
     # Vorschau zeigt die Rueckseite von "MB" -> als Vorderseiten-Motiv uebernehmen
     dialog.side_bar.setCurrentIndex(1)
@@ -245,7 +258,7 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
     # "Uebernehmen" fuehrt beide angehakten Randergaenzungen als Batch aus und speichert danach
     dialog.front_extend_check.setChecked(True)
     dialog.back_extend_check.setChecked(True)
-    assert "Vorderseite und Rückseite" in dialog.apply_note.text()
+    assert "Rand der Vorderseite ergänzen, Rand der Rückseite ergänzen" in dialog.apply_note.text()
     dialog._apply()
 
     new = [c for c in dialog.candidates if c.section == cm.SECTION_NEW]
@@ -263,5 +276,86 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
     # ohne Haken speichert "Uebernehmen" direkt
     dialog._apply()
     assert saved == [True, True]
+    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    dialog.done(0)
+
+
+def test_back_prompt_and_ideas():
+    from types import SimpleNamespace
+    from core.cover_generator import build_back_prompt, generate_back_art, suggest_back_ideas
+    from core.cover_research import CoverBrief, FolderInfo
+
+    info = FolderInfo(album="Folge 39: Fall 77: Die verschleppte Schleppe/Fall 78: Der gefiederte Vergessling",
+                      artist="Die Fuchsbande")
+    req = GenerationRequest(info=info, brief=CoverBrief(), style="Aquarell")
+    prompt = build_back_prompt(req, with_tracklist=True)
+    assert "BACK side" in prompt and "FRONT side" in prompt
+    assert "Fall 78: Der gefiederte Vergessling" in prompt  # zweite Folge als Szene
+    assert "text panel" in prompt and "no text" in prompt
+    wished = build_back_prompt(req, "Fritzi mit Lupe im Wald", with_tracklist=False)
+    assert "Fritzi mit Lupe im Wald" in wished and "full-bleed" in wished
+
+    calls = []
+    image = SimpleNamespace(data=base64.b64encode(png_bytes((400, 600))).decode())
+    client = SimpleNamespace(interactions=SimpleNamespace(
+        create=lambda **kw: calls.append(kw) or SimpleNamespace(
+            output_image=image, output_text='["Fritzi im Wald", "Die Lupe", "Der Bär am Fluss"]')))
+    art = generate_back_art(client, "m", req, png_bytes(), "", True)
+    assert art.size == (400, 600)
+    assert calls[0]["input"][1]["mime_type"] == "image/png"
+    assert suggest_back_ideas(client, "t", req) == ["Fritzi im Wald", "Die Lupe", "Der Bär am Fluss"]
+
+
+def test_ai_back_is_generated_on_apply_and_becomes_new_version(qt_app, tmp_path, monkeypatch):
+    from core.metadata import MetadataManager
+    from gui import cover_manager_dialog as cm
+
+    folder = tmp_path / "sd" / "01"
+    folder.mkdir(parents=True)
+    (folder / "001.mp3").write_bytes(b"x")
+    sd = SDCard(str(tmp_path / "sd"))
+    sd.scan()
+    monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm, "image_model", lambda: "m")
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+    front = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes(color=(0, 0, 200)), KIND_ONLINE)
+    dialog._add_candidate(front, select=True)
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_AI)
+    dialog.back_tracklist_check.setChecked(True)
+    assert dialog._needs_ai_back()
+    assert "KI-Rückseite erzeugen" in dialog.apply_note.text()
+
+    class FakeSignal:
+        def connect(self, slot):
+            pass
+
+    class FakeBackWorker:
+        done = failed = finished = FakeSignal()
+
+        def __init__(self, client, model, request, front_bytes, wish, with_tracklist):
+            assert with_tracklist and front_bytes == front.data
+            self.wish = wish
+
+        def start(self):
+            dialog._on_back_generated(Image.new("RGB", (400, 600), (9, 9, 9)))
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(cm, "CoverBackGenerateWorker", lambda *a: FakeBackWorker(*a))
+    dialog.back_wish_edit.setText("Fritzi im Wald")
+    dialog._apply()
+
+    new = [c for c in dialog.candidates if c.section == cm.SECTION_NEW]
+    assert len(new) == 1 and new[0].meta["kind"] == "ai_back" and new[0].back_image().size == (400, 600)
+    assert not dialog._needs_ai_back()
+    meta = card_store.load_meta(sd.folders[1].path)
+    assert meta.back_mode == BACK_MODE_AI and meta.back_tracklist and meta.back_prompt == "Fritzi im Wald"
+    assert card_store.has_back(sd.folders[1].path)
+
+    # erneutes Uebernehmen erzeugt nicht noch einmal
+    monkeypatch.setattr(cm, "CoverBackGenerateWorker", lambda *a: pytest.fail("nicht erneut erzeugen"))
+    dialog._apply()
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)

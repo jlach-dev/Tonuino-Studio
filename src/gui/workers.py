@@ -413,3 +413,47 @@ class CoverExtendWorker(QThread):
         except Exception as e:
             log.exception("KI-Randergaenzung fehlgeschlagen")
             self.failed.emit(str(e))
+
+
+class CoverBackGenerateWorker(QThread):
+    """Erzeugt ein Rueckseiten-Motiv passend zur Vorderseite (Bildmodell)"""
+    done = pyqtSignal(object)  # PIL.Image
+    failed = pyqtSignal(str)
+
+    def __init__(self, client, image_model: str, request, front_bytes: bytes, wish: str, with_tracklist: bool):
+        super().__init__()
+        self.client = client
+        self.image_model = image_model
+        self.request = request
+        self.front_bytes = front_bytes
+        self.wish = wish
+        self.with_tracklist = with_tracklist
+
+    def run(self):
+        from core.cover_generator import generate_back_art
+        try:
+            self.done.emit(generate_back_art(self.client, self.image_model, self.request, self.front_bytes,
+                                             self.wish, self.with_tracklist))
+        except Exception as e:
+            log.exception("KI-Rueckseite fehlgeschlagen")
+            self.failed.emit(str(e))
+
+
+class BackIdeasWorker(QThread):
+    """Drei Rueckseiten-Ideen vom Textmodell"""
+    done = pyqtSignal(object)  # list[str]
+    failed = pyqtSignal(str)
+
+    def __init__(self, client, text_model: str, request):
+        super().__init__()
+        self.client = client
+        self.text_model = text_model
+        self.request = request
+
+    def run(self):
+        from core.cover_generator import suggest_back_ideas
+        try:
+            self.done.emit(suggest_back_ideas(self.client, self.text_model, self.request))
+        except Exception as e:
+            log.exception("Rueckseiten-Ideen fehlgeschlagen")
+            self.failed.emit(str(e))

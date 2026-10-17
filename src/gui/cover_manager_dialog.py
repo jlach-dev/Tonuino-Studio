@@ -22,14 +22,15 @@ from PyQt6.QtCore import Qt, QSettings, QSize, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
+    QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
     QScrollArea, QSplitter, QTabBar, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from core import ai_settings, album_identity, card_store, cover_sources
 from core.card_text import derive_card_text, describe_work
 from core.card_layout import (
-    BACK_MODE_IMAGE, BACK_MODE_NONE, BACK_MODE_TRACKLIST, ORIENTATION_PORTRAIT, TextStyle, album_cover_jpeg,
+    BACK_MODE_AI, BACK_MODE_BLUR, BACK_MODE_GRADIENT, BACK_MODE_IMAGE, BACK_MODE_NONE, BACK_MODE_TRACKLIST,
+    CardSpec, ORIENTATION_PORTRAIT, TextStyle, album_cover_jpeg, blur_background, gradient_background,
     prepare_card_art,
 )
 from core.cover_archive import (
@@ -47,7 +48,9 @@ from gui.common import confirm_action, icon_from_glyph
 from gui.text_style_dialog import TextStylesPopup
 from gui import theme
 from gui.tag_diff_dialog import TagDiffDialog
-from gui.workers import CoverExtendWorker, CoverGenerateWorker, CoverResearchWorker
+from gui.workers import (
+    BackIdeasWorker, CoverBackGenerateWorker, CoverExtendWorker, CoverGenerateWorker, CoverResearchWorker,
+)
 
 log = logging.getLogger(__name__)
 
@@ -259,6 +262,8 @@ class CoverManagerDialog(QDialog):
         self._research_worker: Optional[CoverResearchWorker] = None
         self._generate_worker: Optional[CoverGenerateWorker] = None
         self._extend_worker: Optional[CoverExtendWorker] = None
+        self._back_worker: Optional[CoverBackGenerateWorker] = None
+        self._ideas_worker: Optional[BackIdeasWorker] = None
         # explizit gewaehlte Bildquellen (sonst: angeklicktes Bild bzw. dessen Rueckseite)
         self.front_source: Optional[SideSource] = None
         self.back_source: Optional[SideSource] = None
@@ -571,11 +576,34 @@ class CoverManagerDialog(QDialog):
         back_title.setObjectName("sectionTitle")
         form.addRow(back_title)
         self.back_mode_combo = QComboBox()
-        self.back_mode_combo.addItem("Keine", BACK_MODE_NONE)
+        self.back_mode_combo.addItem("Keine Rückseite", BACK_MODE_NONE)
         self.back_mode_combo.addItem("Original-Rückseite / gewähltes Bild", BACK_MODE_IMAGE)
-        self.back_mode_combo.addItem("Trackliste auf Bild", BACK_MODE_TRACKLIST)
+        self.back_mode_combo.addItem("KI-Rückseite passend zur Vorderseite (optional mit Wunsch)", BACK_MODE_AI)
+        self.back_mode_combo.addItem("Ambient Blur der Vorderseite (ohne KI)", BACK_MODE_BLUR)
+        self.back_mode_combo.addItem("Farbverlauf aus den Coverfarben (ohne KI)", BACK_MODE_GRADIENT)
         self.back_mode_combo.currentIndexChanged.connect(self._on_back_mode_changed)
-        form.addRow("Rückseite:", self.back_mode_combo)
+        form.addRow("Motiv:", self.back_mode_combo)
+        self.back_tracklist_check = QCheckBox("Trackliste auf Bild (Überschrift + Titel per Code)")
+        self.back_tracklist_check.toggled.connect(self._on_back_mode_changed)
+        form.addRow("", self.back_tracklist_check)
+        self.back_wish_edit = QLineEdit()
+        self.back_wish_edit.setPlaceholderText("optional, z.B. „Abraxas auf dem Hexenhaus im Mondlicht“ – leer = automatisch")
+        wish_row = QHBoxLayout()
+        wish_row.addWidget(self.back_wish_edit, 1)
+        self.btn_back_ideas = QPushButton("Idee vorschlagen")
+        self.btn_back_ideas.setObjectName("ghostButton")
+        self.btn_back_ideas.setToolTip("Das Textmodell schlägt drei Rückseiten-Szenen vor (günstiger Aufruf)")
+        self.btn_back_ideas.clicked.connect(self._suggest_back_ideas)
+        wish_row.addWidget(self.btn_back_ideas)
+        self.back_wish_row = QWidget()
+        self.back_wish_row.setLayout(wish_row)
+        form.addRow("Wunsch:", self.back_wish_row)
+        self.back_wish_label = form.labelForField(self.back_wish_row)
+        self.btn_back_regenerate = QPushButton("KI-Rückseite neu erzeugen")
+        self.btn_back_regenerate.setObjectName("ghostButton")
+        self.btn_back_regenerate.setToolTip("Beim nächsten Übernehmen eine neue KI-Rückseite erzeugen")
+        self.btn_back_regenerate.clicked.connect(lambda: self._set_back_source(None))
+        form.addRow("", self.btn_back_regenerate)
         self.back_source_label = QLabel()
         self.back_source_label.setObjectName("folderMeta")
         self.back_source_label.setWordWrap(True)
@@ -626,7 +654,14 @@ class CoverManagerDialog(QDialog):
             self.series_edit.setText(meta.series)
             _select_data(self.orientation_combo, meta.orientation)
             self.number_check.setChecked(meta.show_number)
-            _select_data(self.back_mode_combo, meta.back_mode)
+            mode = meta.back_mode
+            if mode == BACK_MODE_TRACKLIST:  # alter eigener Modus -> Flag + Bild/Blur
+                mode = BACK_MODE_IMAGE if card_store.has_back(self.folder.path) else BACK_MODE_BLUR
+                self.back_tracklist_check.setChecked(True)
+            else:
+                self.back_tracklist_check.setChecked(meta.back_tracklist)
+            _select_data(self.back_mode_combo, mode)
+            self.back_wish_edit.setText(meta.back_prompt)
             self.back_heading_edit.setText(meta.back_heading)
             self.back_lines_edit.setPlainText("\n".join(meta.back_lines))
         self._on_back_mode_changed()
@@ -1315,12 +1350,19 @@ class CoverManagerDialog(QDialog):
 
     def _on_back_mode_changed(self, *_):
         mode = self.back_mode_combo.currentData()
-        is_list = mode == BACK_MODE_TRACKLIST
+        is_list = self.back_tracklist_check.isChecked() and mode != BACK_MODE_NONE
+        self.back_tracklist_check.setVisible(mode != BACK_MODE_NONE)
         for widget in (self.back_heading_edit, self.back_lines_edit, self.btn_back_from_tags):
             widget.setVisible(is_list)
         for widget in (self.btn_back_pick, self.btn_back_file, self.btn_back_reset, self.back_extend_check,
                        self.back_source_label):
-            widget.setVisible(mode != BACK_MODE_NONE)
+            widget.setVisible(mode == BACK_MODE_IMAGE)
+        for widget in (self.back_wish_row, self.btn_back_regenerate):
+            widget.setVisible(mode == BACK_MODE_AI)
+        if self.back_wish_label is not None:
+            self.back_wish_label.setVisible(mode == BACK_MODE_AI)
+        if mode not in (BACK_MODE_IMAGE, BACK_MODE_AI):
+            self.back_source = None
         if is_list and not self.back_lines_edit.toPlainText().strip():
             self._fill_back_from_tags()
         self._update_side_controls()
@@ -1358,14 +1400,25 @@ class CoverManagerDialog(QDialog):
     def _back_source_image(self, front: Optional[Candidate]) -> Optional[Image.Image]:
         """Bildquelle fuer die Rueckseite: explizit gewaehlte Seite, sonst die
         Rueckseite des Vorderseiten-Covers, bei Trackliste sonst dessen Vorderseite"""
+        mode = self.back_mode_combo.currentData()
+        front_image = (self.front_source.image() if self.front_source is not None
+                       else (front.image() if front is not None else None))
+        size = CardSpec().size_px(self.orientation_combo.currentData())
+        if mode == BACK_MODE_BLUR:
+            return blur_background(front_image, size) if front_image is not None else None
+        if mode == BACK_MODE_GRADIENT:
+            return gradient_background(front_image, size) if front_image is not None else None
+        if mode == BACK_MODE_AI:
+            if self.back_source is not None:
+                return self.back_source.image()
+            # Platzhalter bis zur Erzeugung beim Uebernehmen
+            return blur_background(front_image, size) if front_image is not None else None
         if self.back_source is not None:
             return self.back_source.image()
         if front is None:
             return None
         if front.has_back:
             return front.back_image()
-        if self.back_mode_combo.currentData() == BACK_MODE_TRACKLIST:
-            return front.image()
         return None
 
     def _pick_source(self, back: bool):
@@ -1427,14 +1480,17 @@ class CoverManagerDialog(QDialog):
         self.btn_front_pick.setEnabled(preview is not None)
         self.btn_back_pick.setEnabled(preview is not None)
 
-        if self.back_source is not None:
+        if mode == BACK_MODE_AI:
+            text = ("KI-Rückseite: " + self.back_source.candidate.label if not self._needs_ai_back()
+                    else "KI-Rückseite wird beim Übernehmen erzeugt (Vorschau zeigt bis dahin einen Platzhalter)")
+        elif mode in (BACK_MODE_BLUR, BACK_MODE_GRADIENT):
+            text = "Rückseiten-Motiv: aus der Vorderseite berechnet"
+        elif self.back_source is not None:
             text = f"Rückseiten-Motiv: {self.back_source.label}"
         elif front is not None and front.has_back:
             text = "Rückseiten-Motiv: Rückseite des angeklickten Covers"
-        elif mode == BACK_MODE_TRACKLIST and front is not None:
-            text = "Rückseiten-Motiv: Vorderseite des angeklickten Covers (keine eigene Rückseite vorhanden)"
         elif mode == BACK_MODE_IMAGE:
-            text = "Keine Rückseite vorhanden – Bild in der Vorschau wählen oder „Rückseite aus Datei …“"
+            text = "Keine Rückseite vorhanden – Bild in der Vorschau wählen oder „Aus Datei …“"
         else:
             text = ""
         self.back_source_label.setText(text)
@@ -1448,11 +1504,13 @@ class CoverManagerDialog(QDialog):
             return
         jobs = []
         if self.front_extend_check.isChecked():
-            jobs.append("Vorderseite")
-        if self.back_extend_check.isChecked() and self.back_mode_combo.currentData() != BACK_MODE_NONE:
-            jobs.append("Rückseite")
+            jobs.append("Rand der Vorderseite ergänzen")
+        if hasattr(self, "back_tracklist_check") and self._needs_ai_back():
+            jobs.append("KI-Rückseite erzeugen")
+        if self.back_extend_check.isChecked() and self.back_mode_combo.currentData() == BACK_MODE_IMAGE:
+            jobs.append("Rand der Rückseite ergänzen")
         if jobs:
-            self.apply_note.setText(f"Beim Übernehmen: Rand per KI ergänzen für {' und '.join(jobs)} "
+            self.apply_note.setText(f"Beim Übernehmen per KI: {', '.join(jobs)} "
                                     f"(ca. {len(jobs) * ESTIMATED_COST_PER_IMAGE:.2f} USD), dann speichern.")
         else:
             self.apply_note.setText("Beim Übernehmen werden Vorder- und Rückseite auf die SD-Karte gespeichert.")
@@ -1467,30 +1525,115 @@ class CoverManagerDialog(QDialog):
             return
         jobs = []
         if self.front_extend_check.isChecked():
-            jobs.append(False)
-        if self.back_extend_check.isChecked() and self.back_mode_combo.currentData() != BACK_MODE_NONE:
-            jobs.append(True)
+            jobs.append("extend_front")
+        if self._needs_ai_back():
+            jobs.append("generate_back")
+        if self.back_extend_check.isChecked() and self.back_mode_combo.currentData() == BACK_MODE_IMAGE:
+            jobs.append("extend_back")
         if jobs and self.client is None:
-            QMessageBox.information(self, "Kein API-Key", "Für die KI-Randergänzung bitte zuerst unter "
+            QMessageBox.information(self, "Kein API-Key", "Für KI-Rückseite und Randergänzung bitte zuerst unter "
                                                           "Kartencover → KI & Online-Dienste einen Gemini-API-Key hinterlegen.")
             return
         self._extend_jobs = jobs
         self._run_next_extension()
 
+    def _suggest_back_ideas(self):
+        if self.client is None:
+            QMessageBox.information(self, "Kein API-Key", "Für Vorschläge bitte zuerst unter "
+                                                          "Kartencover → KI & Online-Dienste einen Gemini-API-Key hinterlegen.")
+            return
+        if self._ideas_worker is not None and self._ideas_worker.isRunning():
+            return
+        request = GenerationRequest(info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText())
+        self.btn_back_ideas.setEnabled(False)
+        self.btn_back_ideas.setText("Ideen …")
+        self._ideas_worker = BackIdeasWorker(self.client, text_model(), request)
+        self._ideas_worker.done.connect(self._show_back_ideas)
+        self._ideas_worker.failed.connect(lambda m: QMessageBox.warning(self, "Keine Vorschläge", m))
+        self._ideas_worker.finished.connect(lambda: (self.btn_back_ideas.setEnabled(True),
+                                                     self.btn_back_ideas.setText("Idee vorschlagen")))
+        self._ideas_worker.start()
+
+    def _show_back_ideas(self, ideas):
+        if not ideas:
+            QMessageBox.information(self, "Keine Vorschläge", "Das Modell hat keine Ideen geliefert.")
+            return
+        menu = QMenu(self)
+        for idea in ideas:
+            action = menu.addAction(idea)
+            action.triggered.connect(lambda _c=False, text=idea: self._use_back_idea(text))
+        menu.exec(self.btn_back_ideas.mapToGlobal(self.btn_back_ideas.rect().bottomLeft()))
+
+    def _use_back_idea(self, text: str):
+        self.back_wish_edit.setText(text)
+        self.back_source = None  # neue Idee -> beim Uebernehmen neu erzeugen
+        self._update_side_controls()
+
+    def _needs_ai_back(self) -> bool:
+        """KI-Rueckseite gewaehlt und noch keine erzeugte Version als Quelle gesetzt"""
+        if self.back_mode_combo.currentData() != BACK_MODE_AI:
+            return False
+        source = self.back_source
+        return not (source is not None and source.back and source.candidate.meta.get("kind") == "ai_back")
+
+    def _start_back_generation(self) -> bool:
+        front = self.front_source or (SideSource(self.selected) if self.selected else None)
+        if front is None:
+            return False
+        request = GenerationRequest(
+            info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText(),
+            style=self.style_combo.currentText(), orientation=self.orientation_combo.currentData())
+        self.status_label.setText("KI-Rückseite wird erzeugt (passend zur Vorderseite) …")
+        self._back_front = front
+        self._back_worker = CoverBackGenerateWorker(self.client, image_model(), request, _pil_bytes(front.image()),
+                                                    self.back_wish_edit.text(), self.back_tracklist_check.isChecked())
+        self._back_worker.done.connect(self._on_back_generated)
+        self._back_worker.failed.connect(self._on_back_failed)
+        self._back_worker.finished.connect(self._update_buttons)
+        self._back_worker.start()
+        self._update_buttons()
+        return True
+
+    def _on_back_failed(self, message: str):
+        QMessageBox.warning(self, "KI-Rückseite nicht erzeugt", f"{message}\n\nEs wird ohne Rückseite gespeichert.")
+        self._run_next_extension()
+
+    def _on_back_generated(self, image: Image.Image):
+        """Neue Version unter "Neu": Vorderseite der Quelle + erzeugte Rueckseite"""
+        base = self._back_front.candidate
+        number = sum(1 for c in self.candidates if c.section == SECTION_NEW) + 1
+        meta = {"kind": "ai_back", "style": self.style_combo.currentText(), "model": image_model(),
+                "prompt": self.back_wish_edit.text().strip() or "passend zur Vorderseite"}
+        candidate = Candidate(SECTION_NEW, f"KI-Rückseite · {base.label} #{number}", self._back_front.data(),
+                              base.kind if base.kind != KIND_LOCAL else KIND_FILE, meta=meta,
+                              back_data=_pil_bytes(image))
+        candidate._image = self._back_front.image()
+        self._add_candidate(candidate)
+        self.back_source = SideSource(candidate, back=True)
+        self._update_side_controls()
+        self.side_bar.setCurrentIndex(1)
+        self._render_preview()
+        self._run_next_extension()
+
     def _extension_source(self, back: bool) -> Optional[SideSource]:
         if back:
+            if self.back_mode_combo.currentData() != BACK_MODE_IMAGE:
+                return None  # Blur/Verlauf/KI sind schon im Kartenformat
             if self.back_source is not None:
                 return self.back_source
             if self.selected is not None and self.selected.has_back:
                 return SideSource(self.selected, back=True)
-            if self.selected is not None and self.back_mode_combo.currentData() == BACK_MODE_TRACKLIST:
-                return SideSource(self.selected)
             return None
         return self.front_source or (SideSource(self.selected) if self.selected else None)
 
     def _run_next_extension(self):
         while self._extend_jobs:
-            back = self._extend_jobs.pop(0)
+            job = self._extend_jobs.pop(0)
+            if job == "generate_back":
+                if self._start_back_generation():
+                    return
+                continue
+            back = job == "extend_back"
             source = self._extension_source(back)
             if source is None or source.image() is None:
                 continue
@@ -1539,6 +1682,8 @@ class CoverManagerDialog(QDialog):
 
     def _back_meta(self, meta: card_store.CardMeta, extended: bool) -> card_store.CardMeta:
         meta.back_mode = self.back_mode_combo.currentData()
+        meta.back_tracklist = self.back_tracklist_check.isChecked()
+        meta.back_prompt = self.back_wish_edit.text().strip()
         meta.back_heading = self.back_heading_edit.text().strip()
         meta.back_lines = [l for l in self.back_lines_edit.toPlainText().splitlines() if l.strip()]
         meta.back_extended = extended
@@ -1560,6 +1705,9 @@ class CoverManagerDialog(QDialog):
             card_store.delete_back(self.folder.path, meta)
             return " Keine Rückseite gespeichert (kein Rückseiten-Bild vorhanden)."
         extended = bool(self.back_source is not None and self.back_source.candidate.meta.get("style") == "Rand ergänzt")
+        if mode == BACK_MODE_AI and self._needs_ai_back():
+            card_store.delete_back(self.folder.path, meta)
+            return " KI-Rückseite wurde nicht erzeugt, daher keine Rückseite gespeichert."
         art = prepare_card_art(source, orientation)
         try:
             card_store.save_back(self.folder.path, art, self._back_meta(meta, extended))
@@ -1649,8 +1797,10 @@ class CoverManagerDialog(QDialog):
         self.btn_back_cover.setEnabled(preview is not None)
         self.btn_generate.setEnabled(not busy)
         self.btn_research.setEnabled(not busy)
-        extending = self._extend_worker is not None and self._extend_worker.isRunning()
+        extending = any(w is not None and w.isRunning() for w in (self._extend_worker, self._back_worker))
         self.btn_apply.setEnabled(not extending and (self.front_source is not None or selected))
+        if hasattr(self, "btn_back_regenerate"):
+            self.btn_back_regenerate.setEnabled(not self._needs_ai_back())
         for check in (self.front_extend_check, self.back_extend_check):
             check.setEnabled(self.client is not None)
         self._update_apply_note()
@@ -1684,7 +1834,8 @@ class CoverManagerDialog(QDialog):
             settings.setValue("cover_manager/geometry", self.saveGeometry())
         settings.setValue("cover_manager/splitter", self.main_splitter.saveState())
         settings.setValue("cover_manager/left_splitter", self.left_splitter.saveState())
-        for worker in (self._search_worker, self._research_worker, self._generate_worker, self._extend_worker):
+        for worker in (self._search_worker, self._research_worker, self._generate_worker, self._extend_worker,
+                       self._back_worker, self._ideas_worker):
             if worker is not None and worker.isRunning():
                 if hasattr(worker, "cancel"):
                     worker.cancel()
