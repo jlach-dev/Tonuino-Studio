@@ -10,7 +10,7 @@ import base64
 import io
 import logging
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from PIL import Image
 
@@ -246,21 +246,35 @@ def generate_back_art(client, model: str, req: GenerationRequest, front_bytes: b
         return img.convert("RGB")
 
 
-IDEAS_PROMPT = """Für die Rückseite einer Kinder-Hörspielkarte (Vorderseite zeigt das Hauptmotiv) suchen wir
-drei kurze Bildideen: ruhige Nebenszenen, Orte oder Gegenstände aus derselben Geschichte, kindgerecht,
-ohne Text im Bild. Reihe/Werk: {title}. Hintergrund: {content}
+IDEAS_PROMPT = """Für die Rückseite einer Kinder-Hörspielkarte suchen wir drei kurze Bildideen.
+{front_note}
+Die Ideen sollen ruhige Nebenszenen, Orte oder Gegenstände aus derselben Geschichte sein, zur Vorderseite
+passen (gleiche Figuren, gleicher Stil und gleiche Farbwelt, aber keine Wiederholung des Hauptmotivs),
+kindgerecht, ohne Text im Bild. Reihe/Werk: {title}. Hintergrund: {content}
 Antworte NUR mit einer JSON-Liste aus drei kurzen deutschen Sätzen."""
 
 
-def suggest_back_ideas(client, text_model: str, req: GenerationRequest) -> List[str]:
-    """Drei Rueckseiten-Ideen vom Textmodell (guenstiger Aufruf, ohne Suche)"""
+def suggest_back_ideas(client, text_model: str, req: GenerationRequest,
+                       front_bytes: Optional[bytes] = None) -> List[str]:
+    """Drei Rueckseiten-Ideen vom Textmodell (guenstiger Aufruf, ohne Suche);
+    mit front_bytes sieht das Modell die gewaehlte Vorderseite und bezieht
+    sich auf deren Motiv, Figuren und Farben."""
     import json
     import re
     from core.card_text import describe_work
     work = describe_work(req.info, req.brief)
-    prompt = IDEAS_PROMPT.format(title=work.title or work.album_tag or "(unbekannt)",
-                                 content=(req.brief_text.strip() or req.brief.as_text() or "(keiner)")[:1500])
-    interaction = client.interactions.create(model=text_model, input=prompt)
+    prompt = IDEAS_PROMPT.format(
+        front_note=("Das angehängte Bild ist die gewählte Vorderseite der Karte - beschreibe Ideen, die genau "
+                    "dazu passen." if front_bytes else "Die Vorderseite zeigt das Hauptmotiv der Geschichte."),
+        title=work.title or work.album_tag or "(unbekannt)",
+        content=(req.brief_text.strip() or req.brief.as_text() or "(keiner)")[:1500])
+    if front_bytes:
+        model_input = [{"type": "text", "text": prompt},
+                       {"type": "image", "data": base64.b64encode(front_bytes).decode("ascii"),
+                        "mime_type": _sniff_mime(front_bytes)}]
+    else:
+        model_input = prompt
+    interaction = client.interactions.create(model=text_model, input=model_input)
     text = getattr(interaction, "output_text", "") or ""
     match = re.search(r"\[.*\]", text, re.DOTALL)
     ideas = json.loads(match.group(0)) if match else [line.strip("-• ") for line in text.splitlines() if line.strip()]

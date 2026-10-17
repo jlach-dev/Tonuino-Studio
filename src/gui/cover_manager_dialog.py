@@ -1553,9 +1553,12 @@ class CoverManagerDialog(QDialog):
         if self._ideas_worker is not None and self._ideas_worker.isRunning():
             return
         request = GenerationRequest(info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText())
+        # Ideen beziehen sich auf die aktuell gewaehlte Vorderseite
+        front = self.front_source or (SideSource(self.selected) if self.selected else None)
+        front_bytes = _pil_bytes(front.image()) if front is not None and front.image() is not None else None
         self.btn_back_ideas.setEnabled(False)
         self.btn_back_ideas.setText("Ideen …")
-        self._ideas_worker = BackIdeasWorker(self.client, text_model(), request)
+        self._ideas_worker = BackIdeasWorker(self.client, text_model(), request, front_bytes)
         self._ideas_worker.done.connect(self._show_back_ideas)
         self._ideas_worker.failed.connect(lambda m: QMessageBox.warning(self, "Keine Vorschläge", m))
         self._ideas_worker.finished.connect(lambda: (self.btn_back_ideas.setEnabled(True),

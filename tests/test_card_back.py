@@ -304,6 +304,10 @@ def test_back_prompt_and_ideas():
     assert art.size == (400, 600)
     assert calls[0]["input"][1]["mime_type"] == "image/png"
     assert suggest_back_ideas(client, "t", req) == ["Fritzi im Wald", "Die Lupe", "Der Bär am Fluss"]
+    assert isinstance(calls[-1]["input"], str)  # ohne Vorderseite: nur Text
+    suggest_back_ideas(client, "t", req, png_bytes())
+    assert calls[-1]["input"][1]["mime_type"] == "image/png"  # mit Vorderseite als Bild
+    assert "gewählte Vorderseite" in calls[-1]["input"][0]["text"]
 
 
 def test_ai_back_is_generated_on_apply_and_becomes_new_version(qt_app, tmp_path, monkeypatch):

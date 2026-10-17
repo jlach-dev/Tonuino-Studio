@@ -444,16 +444,17 @@ class BackIdeasWorker(QThread):
     done = pyqtSignal(object)  # list[str]
     failed = pyqtSignal(str)
 
-    def __init__(self, client, text_model: str, request):
+    def __init__(self, client, text_model: str, request, front_bytes=None):
         super().__init__()
         self.client = client
         self.text_model = text_model
         self.request = request
+        self.front_bytes = front_bytes
 
     def run(self):
         from core.cover_generator import suggest_back_ideas
         try:
-            self.done.emit(suggest_back_ideas(self.client, self.text_model, self.request))
+            self.done.emit(suggest_back_ideas(self.client, self.text_model, self.request, self.front_bytes))
         except Exception as e:
             log.exception("Rueckseiten-Ideen fehlgeschlagen")
             self.failed.emit(str(e))
