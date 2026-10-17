@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QFrame, QFileDialog, QMessageBox,
     QStatusBar, QSplitter,
     QAbstractItemView, QProgressDialog,
-    QMenuBar, QStyle, QStyleOptionViewItem, QInputDialog, QDialog
+    QMenuBar, QStyle, QStyleOptionViewItem, QInputDialog, QDialog, QApplication
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint, QRect
 from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup, QKeySequence, QShortcut
@@ -147,8 +147,8 @@ class MainWindow(QMainWindow):
         # weder eine Kante noch den Groessen-Mauszeiger gibt. Die Trennlinie
         # zieht die Sidebar selbst (border-right).
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(0)
-        splitter.handle(1).setEnabled(False)
+        splitter.setHandleWidth(4)
+        self._main_splitter = splitter
         
         main_layout.addWidget(splitter)
 
@@ -240,10 +240,14 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
         if settings.value("window/maximized", False, type=bool):
             self.showMaximized()
+        splitter_state = settings.value("window/splitter")
+        if splitter_state is not None:
+            self._main_splitter.restoreState(splitter_state)
 
     def _save_window_state(self):
         settings = QSettings()
         settings.setValue("window/maximized", self.isMaximized() or self.isFullScreen())
+        settings.setValue("window/splitter", self._main_splitter.saveState())
         if not self.isMaximized() and not self.isFullScreen():
             settings.setValue("window/geometry", self.saveGeometry())
 
@@ -312,7 +316,8 @@ class MainWindow(QMainWindow):
         """Erstellt die Sidebar"""
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(300)
+        sidebar.setMinimumWidth(240)
+        sidebar.setMaximumWidth(520)
         
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -1819,6 +1824,11 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Wird beim Schliessen aufgerufen"""
         self._save_window_state()
+        # Offene Dialoge (z.B. Cover-Manager) schliessen, sonst bleiben sie
+        # ohne Hauptfenster stehen
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, QDialog) and widget is not self and widget.isVisible():
+                widget.reject()
         self.player_bar.stop()
         self.rfid_panel.shutdown()
         self.update_controller.shutdown()

@@ -22,7 +22,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
-    QTabBar, QTabWidget, QVBoxLayout, QWidget,
+    QSplitter, QTabBar, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from core import ai_settings, album_identity, card_store, cover_sources
@@ -262,11 +262,17 @@ class CoverManagerDialog(QDialog):
     # --- Aufbau -----------------------------------------------------------------------------
 
     def _setup_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setSpacing(20)
+        outer = QHBoxLayout(self)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        outer.addWidget(self.main_splitter)
 
-        # links: Vorschau, Aktionen, Galerie
-        left = QVBoxLayout()
+        # links oben: Vorschau und Aktionen; links unten: Galerie - per Splitter teilbar
+        self.left_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.left_splitter.setChildrenCollapsible(False)
+        top = QWidget()
+        left = QVBoxLayout(top)
+        left.setContentsMargins(0, 0, 0, 0)
         self.preview = QLabel("Bild in der Galerie auswählen")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setMinimumSize(300, 220)
@@ -306,7 +312,11 @@ class CoverManagerDialog(QDialog):
         actions.addWidget(self.btn_album_cover)
         actions.addStretch(1)
         left.addLayout(actions)
+        self.left_splitter.addWidget(top)
 
+        bottom = QWidget()
+        left = QVBoxLayout(bottom)
+        left.setContentsMargins(0, 0, 0, 0)
         gallery_header = QHBoxLayout()
         self.filter_bar = QTabBar()
         self.filter_bar.setDrawBase(False)
@@ -363,10 +373,15 @@ class CoverManagerDialog(QDialog):
         hint.setObjectName("folderMeta")
         hint.setWordWrap(True)
         left.addWidget(hint)
-        layout.addLayout(left, 3)
+        self.left_splitter.addWidget(bottom)
+        self.left_splitter.setStretchFactor(0, 1)
+        self.left_splitter.setStretchFactor(1, 1)
+        self.main_splitter.addWidget(self.left_splitter)
 
         # rechts: Tabs
-        right = QVBoxLayout()
+        right_widget = QWidget()
+        right = QVBoxLayout(right_widget)
+        right.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget()
         self.tabs.addTab(self._search_tab(), "Cover suchen")
         self.tabs.addTab(self._card_tab(), "Karte")
@@ -383,7 +398,15 @@ class CoverManagerDialog(QDialog):
         btn_close.clicked.connect(self.reject)
         close_row.addWidget(btn_close)
         right.addLayout(close_row)
-        layout.addLayout(right, 2)
+        self.main_splitter.addWidget(right_widget)
+        self.main_splitter.setStretchFactor(0, 3)
+        self.main_splitter.setStretchFactor(1, 2)
+        settings = QSettings()
+        for splitter, key in ((self.main_splitter, "cover_manager/splitter"),
+                              (self.left_splitter, "cover_manager/left_splitter")):
+            state = settings.value(key)
+            if state is not None:
+                splitter.restoreState(state)
 
         if self.archive is None:
             self.status_label.setText("Kein Datenordner gewählt – Cover können nicht archiviert werden.")
@@ -785,9 +808,12 @@ class CoverManagerDialog(QDialog):
             return
         candidate = item.data(Qt.ItemDataRole.UserRole)
         if candidate is not self.selected:
-            # Ein Klick bestimmt die Vorderseite neu; eine explizit gewaehlte
-            # Rueckseite bleibt dagegen bestehen
+            # Ein Klick bestimmt die Vorderseite neu. Eine explizit gewaehlte
+            # Rueckseite bleibt bestehen - ausser das angeklickte Cover bringt
+            # eine eigene Rueckseite mit, dann zaehlt diese.
             self.front_source = None
+            if candidate.has_back:
+                self.back_source = None
         self.selected = candidate
         self.selection_label.setText(self._item_tooltip(self.selected).replace("\n", " · "))
         self._update_side_controls()
@@ -1200,11 +1226,16 @@ class CoverManagerDialog(QDialog):
         back_note = self._save_back(front.candidate, orientation)
         self.card_changed = True
         self._card_meta = card_store.load_meta(self.folder.path)
-        if current is not None and current is not candidate:
-            self._remove_candidate(current)
+        if current is not candidate:
+            # "Aktuell" sofort auf den neuen Stand bringen (inkl. Rueckseite)
+            if current is not None:
+                self._remove_candidate(current)
+            back_raw = card_store.back_paths(self.folder.path)[1]
             self._add_candidate(Candidate(SECTION_CURRENT, "Kartenmotiv (SD)",
                                           card_store.card_paths(self.folder.path)[1].read_bytes(),
-                                          KIND_LOCAL, is_sd_card_art=True))
+                                          KIND_LOCAL, is_sd_card_art=True,
+                                          back_data=back_raw.read_bytes() if back_raw.exists() else None))
+        self._render_preview()
         self._flash("✓ Kartencover auf der SD-Karte gespeichert (card.png)." + back_note)
 
     # --- Rueckseite ---------------------------------------------------------------------------
@@ -1505,9 +1536,9 @@ class CoverManagerDialog(QDialog):
             orientation = self.orientation_combo.currentData()
             if self.side_bar.currentIndex() == 1:
                 source = self._back_source_image(self.selected)
-                if source is None or self.back_mode_combo.currentData() == BACK_MODE_NONE:
+                if source is None:
                     self.preview.clear()
-                    self.preview.setText("Keine Rückseite – im Tab „Karte“ unter „Rückseite“ einstellen")
+                    self.preview.setText("Keine Rückseite – im Tab „Karte“ unter „Rückseite“ ein Bild wählen")
                     return
                 meta = self._back_meta(self._card_meta_now(None), False)
                 card = card_store.render_back_from_meta(prepare_card_art(source, orientation), meta)
@@ -1566,7 +1597,10 @@ class CoverManagerDialog(QDialog):
                     self._keep(candidate)
             elif box.clickedButton() != btn_discard:
                 return
-        QSettings().setValue("cover_manager/geometry", self.saveGeometry())
+        settings = QSettings()
+        settings.setValue("cover_manager/geometry", self.saveGeometry())
+        settings.setValue("cover_manager/splitter", self.main_splitter.saveState())
+        settings.setValue("cover_manager/left_splitter", self.left_splitter.saveState())
         for worker in (self._search_worker, self._research_worker, self._generate_worker, self._extend_worker):
             if worker is not None and worker.isRunning():
                 if hasattr(worker, "cancel"):

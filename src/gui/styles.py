@@ -286,6 +286,23 @@ QPushButton#ghostButton {
     padding: 6px 12px;
 }
 
+/* === Splitter === */
+QSplitter::handle {
+    background-color: @SURFACE0@;
+}
+
+QSplitter::handle:hover {
+    background-color: @BLUE@;
+}
+
+QSplitter::handle:horizontal {
+    width: 4px;
+}
+
+QSplitter::handle:vertical {
+    height: 4px;
+}
+
 /* === Tabs (Cover-Manager) === */
 QTabWidget::pane {
     background-color: @SURFACE_DEEP@;

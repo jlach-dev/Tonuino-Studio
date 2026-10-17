@@ -142,6 +142,8 @@ def test_cover_manager_saves_back_side(qt_app, tmp_path, monkeypatch):
 
     dialog._set_card_cover()
     assert card_store.has_card(sd.folders[1].path) and card_store.has_back(sd.folders[1].path)
+    # "Aktuell" zeigt das neue Kartenmotiv sofort mit Rueckseite (kein Neuladen noetig)
+    assert dialog._current_candidate("is_sd_card_art").has_back
     meta = card_store.load_meta(sd.folders[1].path)
     assert meta.back_mode == BACK_MODE_IMAGE
     assert dialog.archive.covers(dialog.album_id)[0].back_file  # Rueckseite archiviert
@@ -203,6 +205,20 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
     dialog._pick_source(back=True)
     assert dialog.back_source.candidate is other and not dialog.back_source.back
     assert dialog._back_source_image(other).getpixel((0, 0)) == (0, 0, 200)
+
+    # Klick auf ein Cover mit eigener Rueckseite zeigt dessen Rueckseite, nicht die zuvor gewaehlte
+    dialog.gallery.setCurrentRow(0)
+    assert dialog.back_source is None
+    dialog.side_bar.setCurrentIndex(1)
+    assert dialog._preview_source().candidate is with_back and dialog._preview_source().back
+    cm._select_data(dialog.back_mode_combo, "")
+    dialog._render_preview()
+    assert dialog.preview.pixmap() is not None and not dialog.preview.pixmap().isNull()  # auch ohne aktiven Modus
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_IMAGE)
+    dialog.gallery.setCurrentRow(1)
+    dialog.side_bar.setCurrentIndex(0)
+    dialog._pick_source(back=True)
+    assert dialog.back_source.candidate is other
 
     # KI-Randergaenzung der Rueckseite: neue Version unter "Neu", Original unveraendert
     class FakeSignal:
