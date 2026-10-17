@@ -640,6 +640,7 @@ class MainWindow(QMainWindow):
         self.library_view.sources_requested.connect(self._edit_library_sources)
         self.library_view.tags_requested.connect(self._library_tags)
         self.library_view.recognize_requested.connect(self._library_recognize)
+        self.library_view.organize_requested.connect(self._library_organize)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.welcome_widget)
@@ -2217,6 +2218,25 @@ class MainWindow(QMainWindow):
         worker.failed.connect(lambda m: (dialog.close(), QMessageBox.warning(self, "Erkennung fehlgeschlagen", m)))
         dialog.canceled.connect(worker.cancel)
         worker.start()
+
+    def _library_organize(self, album, paths):
+        """Dateien eines Bibliotheksalbums nach Tags in Interpret/Album-Ordner verschieben"""
+        from gui.organize_dialog import OrganizeDialog
+        if album is None:
+            return
+        files = list(paths) if paths else list(album.tracks)
+        root = album.source or (self._library._source_of(album.path) if self._library else "") or \
+            os.path.dirname(album.path)
+        if not files or not root:
+            return
+        self.player_bar.stop()
+        dialog = OrganizeDialog(files, root, self, label=album.name)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.result is not None:
+            moved = dialog.result.moved
+            self.status_bar.showMessage(f"{moved} Datei(en) einsortiert" + (
+                f", {dialog.result.removed_dirs} leere Ordner entfernt" if dialog.result.removed_dirs else ""))
+            self.library_view.show_overview()
+            self._start_library_scan(force=True)
 
     def _on_recognized(self, result, candidates):
         from gui.recognition_dialog import RecognitionDialog

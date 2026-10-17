@@ -87,6 +87,7 @@ class AlbumPanel(QWidget):
     back_requested = pyqtSignal()
     tags_requested = pyqtSignal(object)  # LibraryAlbum
     recognize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien (leer = alle)
+    organize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien (leer = alle)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,6 +140,11 @@ class AlbumPanel(QWidget):
         self.btn_recognize.clicked.connect(
             lambda: self.recognize_requested.emit(self.album, self.track_list.selected_paths()))
         actions.addWidget(self.btn_recognize)
+        self.btn_organize = QPushButton("Einsortieren …")
+        self.btn_organize.setToolTip("Dateien nach ihren Tags in Interpret/Album-Ordner verschieben (mit Vorschau)")
+        self.btn_organize.clicked.connect(
+            lambda: self.organize_requested.emit(self.album, self.track_list.selected_paths()))
+        actions.addWidget(self.btn_organize)
         actions.addStretch(1)
         info.addLayout(actions)
         head_layout.addLayout(info, 1)
@@ -179,6 +185,7 @@ class AlbumPanel(QWidget):
         self.track_list.addItem("Tracks werden gelesen …")
         self.btn_tags.setEnabled(not album.offline)
         self.btn_recognize.setEnabled(not album.offline)
+        self.btn_organize.setEnabled(not album.offline)
 
     def set_tracks(self, tracks: List[LibraryTrack]):
         self.tracks = tracks
@@ -254,6 +261,7 @@ class LibraryView(QWidget):
     sources_requested = pyqtSignal()
     tags_requested = pyqtSignal(object)  # LibraryAlbum
     recognize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien
+    organize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -336,6 +344,7 @@ class LibraryView(QWidget):
         self.album_panel.back_requested.connect(self.show_overview)
         self.album_panel.tags_requested.connect(self.tags_requested)
         self.album_panel.recognize_requested.connect(self.recognize_requested)
+        self.album_panel.organize_requested.connect(self.organize_requested)
         self.pages.addWidget(self.album_panel)
         layout.addWidget(self.pages, 1)
         self._rebuild_series_combo()
