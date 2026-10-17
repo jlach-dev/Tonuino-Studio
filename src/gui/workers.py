@@ -604,3 +604,39 @@ class AlbumTracksWorker(QThread):
             tracks = []
         if not self._cancelled:
             self.done.emit(self.album.path, tracks)
+
+
+class RecognizeWorker(QThread):
+    """Stuecke per fpcalc + AcoustID erkennen; danach die Releases der
+    gemeinsamen Release-Group (MusicBrainz) als Kandidaten laden"""
+    progress = pyqtSignal(int, int, str)
+    done = pyqtSignal(object, object)  # RecognitionResult, list[ReleaseCandidate]
+    failed = pyqtSignal(str)
+
+    def __init__(self, paths: list, api_key: str, fpcalc: str):
+        super().__init__()
+        self.paths = paths
+        self.api_key = api_key
+        self.fpcalc = fpcalc
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        from core import tag_lookup
+        from core.acoustid import recognize_files
+        try:
+            result = recognize_files(self.paths, self.api_key, self.fpcalc, progress=self.progress.emit,
+                                     cancelled=lambda: self._cancelled)
+            candidates = []
+            if result.release_group_id and not self._cancelled:
+                try:
+                    candidates = tag_lookup.candidates_from_release_group(result.release_group_id)
+                except Exception as e:
+                    log.warning("Releases der Release-Group nicht ladbar: %s", e)
+            if not self._cancelled:
+                self.done.emit(result, candidates)
+        except Exception as e:
+            log.exception("Erkennung fehlgeschlagen")
+            self.failed.emit(str(e))

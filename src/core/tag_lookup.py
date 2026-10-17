@@ -249,6 +249,11 @@ def search_candidates(title: str, artist: str = "", sources: Iterable[str] = ALL
     return [item[2] for item in found]
 
 
+def candidates_from_release_group(release_group_id: str, limit: int = 5) -> List[ReleaseCandidate]:
+    """Releases einer MusicBrainz-Release-Group (z.B. aus der AcoustID-Erkennung)"""
+    return [_from_release_hit(hit) for hit in musicbrainz.releases_of_group(release_group_id, limit)]
+
+
 # --- Tracklisten -----------------------------------------------------------------------------
 
 def _load_deezer_tracks(candidate: ReleaseCandidate):
@@ -402,10 +407,20 @@ def _old_values(meta: TrackMetadata) -> Dict[str, str]:
     }
 
 
-def build_diff(local: List[LocalTrack], candidate: ReleaseCandidate) -> List[TrackDiff]:
+def build_diff(local: List[LocalTrack], candidate: ReleaseCandidate,
+               recording_ids: Optional[Dict[str, str]] = None) -> List[TrackDiff]:
     """Alt -> neu je Track. Ohne Zuordnung bleibt new leer. Fuer MusicBrainz
-    werden die IDs (Release, Release-Group, Track, Interpreten) vorgesehen."""
+    werden die IDs (Release, Release-Group, Track, Interpreten) vorgesehen.
+    recording_ids (Dateipfad -> Recording-ID, aus der Erkennung) ordnet Tracks
+    sicher zu; der Rest faellt auf Position/Dauer/Titel zurueck."""
     matches = match_tracks(local, candidate.tracks)
+    if recording_ids:
+        by_recording = {t.recording_id: t for t in candidate.tracks if t.recording_id}
+        matches = list(matches)
+        for index, item in enumerate(local):
+            track = by_recording.get(recording_ids.get(item.filepath, ""))
+            if track is not None:
+                matches[index] = (track, "acoustid")
     total = candidate.track_count or len(candidate.tracks)
     diffs = []
     for item, (release_track, method) in zip(local, matches):

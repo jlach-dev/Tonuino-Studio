@@ -36,6 +36,7 @@ from gui.workers import (
     LibraryScanWorker,
 )
 from gui.card_cover_dialog import AiSettingsDialog, gemini_client, image_model, text_model
+from gui.workers import RecognizeWorker
 from gui.cover_manager_dialog import CoverManagerDialog, SETTINGS_DATA_DIR, get_archive
 from gui.library_dnd import DropArea, FolderListWidget
 from gui.library_settings_dialog import LibrarySourcesDialog, library_sources
@@ -2186,7 +2187,65 @@ class MainWindow(QMainWindow):
             self.library_view.open_album(path)
 
     def _library_recognize(self, album, paths):
-        QMessageBox.information(self, "Stücke erkennen", "Kommt im nächsten Schritt.")
+        """Stuecke eines Bibliotheksalbums (oder nur der markierten) per AcoustID erkennen"""
+        from core import ai_settings
+        from core.acoustid import find_fpcalc
+        if album is None:
+            return
+        files = list(paths) if paths else list(album.tracks)
+        if not files:
+            return
+        key = ai_settings.get_acoustid_key()
+        fpcalc = find_fpcalc(QSettings().value(ai_settings.SETTINGS_FPCALC, "", type=str),
+                             QSettings().value("library/data_dir", "", type=str))
+        if not key or not fpcalc:
+            missing = " und ".join(p for p, ok in (("ein AcoustID-Key", key), ("fpcalc", fpcalc)) if not ok)
+            if confirm_action(self, "Stücke erkennen", f"Zum Erkennen fehlt noch {missing}.\n\n"
+                              "Jetzt die Einstellungen (KI & Online-Dienste) öffnen?", default_no=False):
+                AiSettingsDialog(self).exec()
+            return
+        dialog = QProgressDialog("Stücke werden erkannt (Fingerabdruck + AcoustID) …", "Abbrechen", 0, len(files),
+                                 self)
+        dialog.setWindowTitle("Stücke erkennen")
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setValue(0)
+        worker = RecognizeWorker(files, key, fpcalc)
+        self._recognize_job = {"worker": worker, "dialog": dialog, "album": album, "files": files}
+        worker.progress.connect(lambda cur, total, name: self._on_import_progress(dialog, cur, total, name))
+        worker.done.connect(self._on_recognized)
+        worker.failed.connect(lambda m: (dialog.close(), QMessageBox.warning(self, "Erkennung fehlgeschlagen", m)))
+        dialog.canceled.connect(worker.cancel)
+        worker.start()
+
+    def _on_recognized(self, result, candidates):
+        from gui.recognition_dialog import RecognitionDialog
+        job, self._recognize_job = getattr(self, "_recognize_job", None), None
+        if job is None:
+            return
+        job["dialog"].close()
+        album, files = job["album"], job["files"]
+        if result.recognized == 0:
+            QMessageBox.information(self, "Stücke erkennen", "Keine der Dateien wurde erkannt. "
+                                    + (f"Fehler: {result.files[0].error}" if result.files and result.files[0].error
+                                       else "Die Aufnahmen sind AcoustID offenbar unbekannt."))
+            return
+        written = 0
+        if candidates and result.agreeing >= max(1, len(files) // 2):
+            # gemeinsames Album erkannt: Tag-Dialog mit den Ausgaben dieser Release-Group
+            self.player_bar.stop()
+            dialog = TagDiffDialog(files, self.metadata_manager, self, album.title or album.name, album.artist,
+                                   label=f"{album.name} (erkannt: {result.release_group_title})",
+                                   preset=candidates, recording_ids=result.recording_ids())
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                written = dialog.written
+        else:
+            dialog = RecognitionDialog(result, self, label=album.name)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                written = dialog.written
+        if written:
+            self.status_bar.showMessage(f"Tags in {written} Datei(en) von „{album.name}“ geschrieben")
+            self._refresh_library_album(album.path)
 
     def _ask_replace_or_append(self, target: Folder, count: int) -> Optional[str]:
         """Ersetzen / Anhaengen / Abbrechen (None) fuer einen Ordner, der schon Tracks hat"""

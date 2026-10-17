@@ -103,3 +103,38 @@ def set_spotify_credentials(client_id: str, secret: str):
                 keyring.delete_password(KEYRING_SERVICE, user)
             except keyring.errors.PasswordDeleteError:
                 pass
+
+
+# --- AcoustID (Stuecke erkennen) --------------------------------------------------------------
+# Kostenloser Application-Key von https://acoustid.org/new-application (nicht-kommerziell)
+
+ACOUSTID_USER = "acoustid_api_key"
+ACOUSTID_ENV = "ACOUSTID_API_KEY"
+SETTINGS_FPCALC = "library/fpcalc_path"
+
+
+def get_acoustid_key() -> Optional[str]:
+    value = os.environ.get(ACOUSTID_ENV, "").strip()
+    if value:
+        return value
+    try:
+        import keyring
+        return keyring.get_password(KEYRING_SERVICE, ACOUSTID_USER) or None
+    except Exception:
+        log.exception("AcoustID-Key konnte nicht gelesen werden")
+        return None
+
+
+def acoustid_key_from_env() -> bool:
+    return bool(os.environ.get(ACOUSTID_ENV, "").strip())
+
+
+def set_acoustid_key(key: str):
+    import keyring
+    if key.strip():
+        keyring.set_password(KEYRING_SERVICE, ACOUSTID_USER, key.strip())
+    else:
+        try:
+            keyring.delete_password(KEYRING_SERVICE, ACOUSTID_USER)
+        except keyring.errors.PasswordDeleteError:
+            pass

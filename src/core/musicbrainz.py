@@ -209,6 +209,20 @@ def _search_releases(album: str, artist: str, limit: int, min_score: int) -> Lis
     return hits
 
 
+def releases_of_group(release_group_id: str, limit: int = 5) -> List[ReleaseHit]:
+    """Releases (Ausgaben) einer Release-Group, ohne Trackliste; offizielle zuerst"""
+    url = ("https://musicbrainz.org/ws/2/release?" + urllib.parse.urlencode(
+        {"release-group": release_group_id, "inc": "artist-credits+release-groups", "fmt": "json",
+         "limit": limit, "status": "official"}))
+    data = json.loads(_http_get(url))
+    hits = []
+    for release in data.get("releases", []):
+        hits.append(ReleaseHit(release.get("id", ""), release.get("title", ""), _credit(release.get("artist-credit")),
+                               release.get("date", ""), int(release.get("track-count", 0) or 0),
+                               release_group_id, _credit_ids(release.get("artist-credit")), 100))
+    return hits
+
+
 def lookup_release(release_id: str) -> ReleaseHit:
     """Release mit vollstaendiger Trackliste (Aufnahmen und Interpreten).
     Bei mehreren Medien (CD 1/2) werden die Positionen fortlaufend gezaehlt."""

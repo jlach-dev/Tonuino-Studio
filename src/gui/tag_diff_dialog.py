@@ -98,9 +98,14 @@ class TagDiffDialog(QDialog):
     """Tags eines SD-Ordners aus MusicBrainz/Deezer/iTunes uebernehmen"""
 
     def __init__(self, folder, metadata_manager, parent=None, title: str = "", artist: str = "",
-                 label: str = ""):
-        """folder: SD-Ordner (Folder) oder Liste von Dateipfaden eines Bibliotheksalbums"""
+                 label: str = "", preset: Optional[List[ReleaseCandidate]] = None,
+                 recording_ids: Optional[Dict[str, str]] = None):
+        """folder: SD-Ordner (Folder) oder Liste von Dateipfaden eines Bibliotheksalbums.
+        preset: Kandidaten aus der Stueck-Erkennung (dann keine automatische Suche);
+        recording_ids: Dateipfad -> MusicBrainz-Recording-ID fuer die sichere Zuordnung."""
         super().__init__(parent)
+        self.preset = list(preset) if preset else []
+        self.recording_ids = dict(recording_ids or {})
         if isinstance(folder, (list, tuple)):
             self.setWindowTitle(f"Tags nachtragen – {label or 'Bibliotheksalbum'}")
         else:
@@ -124,7 +129,17 @@ class TagDiffDialog(QDialog):
         self._updating = False
 
         self._setup_ui(title, artist)
-        QTimer.singleShot(0, self._start_search)
+        QTimer.singleShot(0, self._use_preset if self.preset else self._start_search)
+
+    def _use_preset(self):
+        """Kandidaten der Erkennung anzeigen (lokale Tags synchron lesen, keine Suche)"""
+        self.status_label.setText("Tags der Tracks werden gelesen …")
+        self.local = tag_lookup.read_local_tracks(self.folder, self.metadata_manager)
+        if self.preset:
+            self.title_edit.setText(self.preset[0].title)
+            self.artist_edit.setText(self.preset[0].artist)
+        # _on_candidates zeigt den ersten Kandidaten und meldet die Zuordnung (inkl. "per Erkennung")
+        self._on_candidates(self.preset)
 
     # --- Aufbau -----------------------------------------------------------------------------
 
@@ -296,11 +311,14 @@ class TagDiffDialog(QDialog):
     def _show_candidate(self, candidate: ReleaseCandidate):
         if self.local is None:
             return
-        self.diffs = tag_lookup.build_diff(self.local, candidate)
+        self.diffs = tag_lookup.build_diff(self.local, candidate, self.recording_ids or None)
         self._fill_table(self.diffs)
         matched = sum(1 for d in self.diffs if d.matched)
+        via_acoustid = sum(1 for d in self.diffs if d.method == "acoustid")
         unsure = sum(1 for d in self.diffs if d.method == tag_lookup.MATCH_POSITION)
         text = f"{matched} von {len(self.diffs)} Tracks zugeordnet"
+        if via_acoustid:
+            text += f" ({via_acoustid} per Erkennung)"
         if unsure:
             text += f", davon {unsure} nur über die Position – bitte prüfen"
         if candidate.source != tag_lookup.SOURCE_MUSICBRAINZ:
