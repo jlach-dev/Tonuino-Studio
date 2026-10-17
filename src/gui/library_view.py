@@ -137,7 +137,7 @@ class AlbumPanel(QWidget):
         self.btn_cover.clicked.connect(lambda: self.cover_requested.emit(self.album))
         actions.addWidget(self.btn_cover)
         self.btn_tags = QPushButton("Tags nachtragen …")
-        self.btn_tags.setToolTip("Album, Titel und Interpret aus dem Internet (MusicBrainz, Deezer, iTunes) "
+        self.btn_tags.setToolTip("Album, Titel und Interpret aus dem Internet (MusicBrainz, Deezer, iTunes, Spotify) "
                                  "übernehmen – mit Vorschau")
         self.btn_tags.clicked.connect(lambda: self.tags_requested.emit(self.album))
         actions.addWidget(self.btn_tags)

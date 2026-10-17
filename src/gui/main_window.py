@@ -338,7 +338,7 @@ class MainWindow(QMainWindow):
         cover_menu.addSeparator()
         self.action_tag_lookup = cover_menu.addAction("Tags von MusicBrainz …")
         self.action_tag_lookup.setToolTip("Album, Titel, Tracknummern und MusicBrainz-IDs für den gewählten Ordner "
-                                          "aus MusicBrainz (bzw. Deezer/iTunes) übernehmen")
+                                          "aus MusicBrainz (bzw. Deezer/iTunes/Spotify) übernehmen")
         self.action_tag_lookup.triggered.connect(self._open_tag_lookup_dialog)
         cover_menu.addSeparator()
         action_ai_settings = cover_menu.addAction("KI & Online-Dienste (Gemini, Spotify) …")

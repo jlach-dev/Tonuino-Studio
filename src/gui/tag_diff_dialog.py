@@ -95,7 +95,7 @@ class TagTracksWorker(QThread):
 
 
 class TagDiffDialog(QDialog):
-    """Tags eines SD-Ordners aus MusicBrainz/Deezer/iTunes uebernehmen"""
+    """Tags eines SD-Ordners aus MusicBrainz/Deezer/iTunes/Spotify uebernehmen"""
 
     def __init__(self, folder, metadata_manager, parent=None, title: str = "", artist: str = "",
                  label: str = "", preset: Optional[List[ReleaseCandidate]] = None,
@@ -167,6 +167,10 @@ class TagDiffDialog(QDialog):
             check.setChecked(source in saved)
             check.setToolTip("Nur MusicBrainz liefert auch die MusicBrainz-IDs" if source == tag_lookup.SOURCE_MUSICBRAINZ
                              else f"Alben und Tracklisten bei {source} suchen")
+            if source == tag_lookup.SOURCE_SPOTIFY and not tag_lookup.spotify_available():
+                check.setChecked(False)
+                check.setEnabled(False)
+                check.setToolTip("Spotify: Client-ID und Secret unter Kartencover → KI & Online-Dienste eintragen")
             self.source_checks[source] = check
             sources_row.addWidget(check)
         self.btn_search = QPushButton("Suchen")

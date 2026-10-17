@@ -1,5 +1,5 @@
 """
-Tags von MusicBrainz (bzw. Deezer/iTunes als Ersatz) fuer einen SD-Ordner
+Tags von MusicBrainz (bzw. Deezer/iTunes/Spotify als Ersatz) fuer einen SD-Ordner
 
 Typischer Fall: Podcast-/Radio-Downloads, bei denen TALB nur den Feed nennt
 ("MausHörspiel lang"), TPE1 den Autor und die Titel das Muster
@@ -18,6 +18,7 @@ haben. Ablauf:
 import difflib
 import logging
 import re
+import json
 import urllib.parse
 from dataclasses import dataclass, field
 import os
@@ -33,7 +34,8 @@ log = logging.getLogger(__name__)
 SOURCE_MUSICBRAINZ = "MusicBrainz"
 SOURCE_DEEZER = "Deezer"
 SOURCE_ITUNES = "iTunes"
-ALL_SOURCES = (SOURCE_MUSICBRAINZ, SOURCE_DEEZER, SOURCE_ITUNES)
+SOURCE_SPOTIFY = "Spotify"  # braucht Client-ID/Secret (KI & Online-Dienste), sonst uebersprungen
+ALL_SOURCES = (SOURCE_MUSICBRAINZ, SOURCE_DEEZER, SOURCE_ITUNES, SOURCE_SPOTIFY)
 
 DURATION_TOLERANCE = 3.0  # Sekunden
 MIN_TITLE_SIMILARITY = 0.6
@@ -215,22 +217,54 @@ def search_itunes(title: str, artist: str = "", limit: int = 6, country: str = "
     return result
 
 
+def _spotify_get(url: str) -> dict:
+    token = cover_sources._spotify_access_token()
+    return json.loads(cover_sources._get(url, accept="application/json",
+                                         headers={"Authorization": f"Bearer {token}"}))
+
+
+def spotify_available() -> bool:
+    """Spotify wird nur abgefragt, wenn Zugangsdaten hinterlegt sind"""
+    try:
+        return bool(cover_sources.spotify_credentials())
+    except Exception:
+        return False
+
+
+def search_spotify(title: str, artist: str = "", limit: int = 6, market: str = "DE") -> List[ReleaseCandidate]:
+    query = f"{artist} {title}".strip()
+    data = _spotify_get("https://api.spotify.com/v1/search?" + urllib.parse.urlencode(
+        {"q": query, "type": "album", "market": market, "limit": limit}))
+    result = []
+    for album in (data.get("albums") or {}).get("items", [])[:limit]:
+        if not album.get("id"):
+            continue
+        artists = ", ".join(a.get("name", "") for a in album.get("artists", []) if a.get("name"))
+        result.append(ReleaseCandidate(SOURCE_SPOTIFY, str(album["id"]), album.get("name", ""), artists,
+                                       album.get("release_date", ""), int(album.get("total_tracks") or 0),
+                                       (album.get("external_urls") or {}).get("spotify", "")))
+    return result
+
+
 SEARCHERS = {
     SOURCE_MUSICBRAINZ: search_musicbrainz,
     SOURCE_DEEZER: search_deezer,
     SOURCE_ITUNES: search_itunes,
+    SOURCE_SPOTIFY: search_spotify,
 }
+AVAILABILITY = {SOURCE_SPOTIFY: spotify_available}
 
 
 def search_candidates(title: str, artist: str = "", sources: Iterable[str] = ALL_SOURCES, track_count: int = 0,
                       on_status: Optional[Callable[[str], None]] = None,
                       cancelled: Callable[[], bool] = lambda: False) -> List[ReleaseCandidate]:
     """Kandidaten aller gewaehlten Quellen: passende Trackanzahl zuerst, dann
-    in der Reihenfolge der Quellen (MusicBrainz vor Deezer vor iTunes) und
-    nach Suchtreffer-Score."""
+    in der Reihenfolge der Quellen (MusicBrainz vor Deezer vor iTunes vor
+    Spotify) und nach Suchtreffer-Score. Quellen ohne Zugangsdaten (Spotify)
+    werden stillschweigend uebersprungen."""
     if not title.strip():
         return []
-    sources = [s for s in ALL_SOURCES if s in set(sources)]
+    sources = [s for s in ALL_SOURCES if s in set(sources) and AVAILABILITY.get(s, lambda: True)()]
     found: List[ReleaseCandidate] = []
     for rank, source in enumerate(sources):
         if cancelled():
@@ -283,6 +317,23 @@ def _load_itunes_tracks(candidate: ReleaseCandidate, country: str = "DE"):
     return tracks
 
 
+def _load_spotify_tracks(candidate: ReleaseCandidate, market: str = "DE"):
+    url = f"https://api.spotify.com/v1/albums/{candidate.id}/tracks?" + urllib.parse.urlencode(
+        {"market": market, "limit": 50})
+    items = []
+    while url:
+        data = _spotify_get(url)
+        items.extend(data.get("items") or [])
+        url = data.get("next") or ""
+    items.sort(key=lambda s: (int(s.get("disc_number") or 1), int(s.get("track_number") or 0)))
+    tracks = []
+    for position, item in enumerate(items, start=1):
+        artists = ", ".join(a.get("name", "") for a in item.get("artists", []) if a.get("name"))
+        tracks.append(ReleaseTrack(position, item.get("name", ""), artists or candidate.artist,
+                                   float(item.get("duration_ms") or 0) / 1000.0))
+    return tracks
+
+
 def load_tracks(candidate: ReleaseCandidate) -> ReleaseCandidate:
     """Laedt die Trackliste nach (einmalig); MusicBrainz liefert dabei auch
     Datum, Release-Group und Interpreten-IDs."""
@@ -300,6 +351,8 @@ def load_tracks(candidate: ReleaseCandidate) -> ReleaseCandidate:
         candidate.tracks = _load_deezer_tracks(candidate)
     elif candidate.source == SOURCE_ITUNES:
         candidate.tracks = _load_itunes_tracks(candidate)
+    elif candidate.source == SOURCE_SPOTIFY:
+        candidate.tracks = _load_spotify_tracks(candidate)
     candidate.track_count = len(candidate.tracks) or candidate.track_count
     candidate.tracks_loaded = True
     return candidate

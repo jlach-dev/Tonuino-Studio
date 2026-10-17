@@ -89,6 +89,7 @@ def test_search_candidates_prefers_matching_track_count(monkeypatch):
         raise AssertionError(url)
 
     monkeypatch.setattr(cover_sources, "_get", _get)
+    monkeypatch.setattr(cover_sources, "spotify_credentials", lambda: None)  # Spotify ohne Zugangsdaten: uebersprungen
     status = []
     found = tag_lookup.search_candidates("Die kleine Hexe", "Otfried Preußler", track_count=2, on_status=status.append)
     assert [(c.source, c.id) for c in found] == [
@@ -209,3 +210,42 @@ def test_apply_diff_writes_only_selected_fields(mp3_pair):
     meta2 = manager.read_metadata(str(mp3_pair[1]))
     assert (meta2.album, meta2.title) == ("Die kleine Hexe", "Alt 2")
     assert album_identity.read_mb_ids(str(mp3_pair[1]))["release_id"] == ""
+
+
+def test_spotify_candidates_and_tracks(monkeypatch):
+    calls = []
+
+    def _get(url, accept="*/*", max_bytes=0, headers=None, data=None):
+        calls.append(url)
+        if url == "https://accounts.spotify.com/api/token":
+            return json.dumps({"access_token": "tok", "expires_in": 3600}).encode()
+        assert headers == {"Authorization": "Bearer tok"}
+        if url.startswith("https://api.spotify.com/v1/search?"):
+            return json.dumps({"albums": {"items": [
+                {"id": "sp1", "name": "Die kleine Hexe", "total_tracks": 2, "release_date": "2004-09-13",
+                 "artists": [{"name": "Otfried Preußler"}], "external_urls": {"spotify": "https://open.spotify.com/x"}}]}}).encode()
+        if url.startswith("https://api.spotify.com/v1/albums/sp1/tracks"):
+            if "offset" not in url:
+                return json.dumps({"items": [
+                    {"name": "Teil 2", "disc_number": 1, "track_number": 2, "duration_ms": 1800000},
+                ], "next": "https://api.spotify.com/v1/albums/sp1/tracks?offset=50"}).encode()
+            return json.dumps({"items": [
+                {"name": "Teil 1", "disc_number": 1, "track_number": 1, "duration_ms": 1500000,
+                 "artists": [{"name": "Sprecher"}]}], "next": None}).encode()
+        raise AssertionError(url)
+
+    monkeypatch.setattr(cover_sources, "_get", _get)
+    monkeypatch.setattr(cover_sources, "spotify_credentials", lambda: ("id", "secret"))
+    cover_sources._spotify_token.update(value="", expires=0.0, client_id="")
+    assert tag_lookup.spotify_available()
+    found = tag_lookup.search_candidates("Die kleine Hexe", "Otfried Preußler", sources=["Spotify"])
+    assert [(c.source, c.id, c.track_count, c.year, c.url) for c in found] == [
+        ("Spotify", "sp1", 2, "2004", "https://open.spotify.com/x")]
+    loaded = tag_lookup.load_tracks(found[0])
+    assert [(t.position, t.title, t.artist, t.length) for t in loaded.tracks] == [
+        (1, "Teil 1", "Sprecher", 1500.0), (2, "Teil 2", "Otfried Preußler", 1800.0)]
+    assert calls.count("https://accounts.spotify.com/api/token") == 1  # Token wird wiederverwendet
+
+    monkeypatch.setattr(cover_sources, "spotify_credentials", lambda: None)
+    assert not tag_lookup.spotify_available()
+    assert tag_lookup.search_candidates("Die kleine Hexe", sources=["Spotify"]) == []

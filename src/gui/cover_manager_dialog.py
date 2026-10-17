@@ -536,7 +536,7 @@ class CoverManagerDialog(QDialog):
         self.btn_tags = QPushButton("Tags von MusicBrainz …")
         self.btn_tags.setObjectName("ghostButton")
         self.btn_tags.setToolTip("Album, Titel, Tracknummern und MusicBrainz-IDs der Tracks aus MusicBrainz "
-                                 "(bzw. Deezer/iTunes) übernehmen - mit Prüfung alt → neu")
+                                 "(bzw. Deezer/iTunes/Spotify) übernehmen - mit Prüfung alt → neu")
         self.btn_tags.clicked.connect(self._open_tag_lookup)
         button_row.addWidget(self.btn_tags)
         button_row.addStretch(1)
