@@ -288,6 +288,8 @@ class CoverManagerDialog(QDialog):
         # explizit gewaehlte Bildquellen (sonst: angeklicktes Bild bzw. dessen Rueckseite)
         self.front_source: Optional[SideSource] = None
         self.back_source: Optional[SideSource] = None
+        # zuletzt erzeugte KI-Rueckseite - unabhaengig davon, welches Bild angeklickt ist
+        self.ai_back: Optional[SideSource] = None
 
         # Kartendateien: auf der SD-Karte im Ordner, aus der Bibliothek heraus im Archiv
         self._card_dir = folder.path
@@ -340,6 +342,11 @@ class CoverManagerDialog(QDialog):
         self.selection_label = QLabel()
         self.selection_label.setWordWrap(True)
         left.addWidget(self.selection_label)
+        # Was beim Uebernehmen gespeichert wird - in jedem Reiter sichtbar
+        self.sides_label = QLabel()
+        self.sides_label.setObjectName("folderMeta")
+        self.sides_label.setWordWrap(True)
+        left.addWidget(self.sides_label)
 
         # Aktionen fuer das angeklickte (gross angezeigte) Bild - gleich gewichtet
         # Zwei getrennte Aufgaben: Album-Cover (in den MP3s) und Kartencover (Druck)
@@ -366,11 +373,12 @@ class CoverManagerDialog(QDialog):
         card_box.addWidget(card_caption)
         card_buttons = QHBoxLayout()
         self.btn_card_cover = QPushButton("Als Vorderseite")
-        self.btn_card_cover.setToolTip("Das gerade groß angezeigte Bild als Motiv der Vorderseite "
-                                       "(gespeichert wird im Tab „Karte“ mit „Übernehmen“)")
+        self.btn_card_cover.setToolTip("Das angeklickte Bild (bzw. seine Rückseite, wenn „Rückseite“ gewählt ist) "
+                                       "als Motiv der Vorderseite – gespeichert wird im Tab „Karte“ mit „Übernehmen“")
         self.btn_card_cover.clicked.connect(lambda: self._pick_source(back=False))
         self.btn_back_cover = QPushButton("Als Rückseite")
-        self.btn_back_cover.setToolTip("Das gerade groß angezeigte Bild als Motiv der Rückseite")
+        self.btn_back_cover.setToolTip("Das angeklickte Bild (bzw. seine Rückseite) als Motiv der Rückseite; "
+                                       "der Rückseiten-Modus wechselt dabei auf „Bild“")
         self.btn_back_cover.clicked.connect(lambda: self._pick_source(back=True))
         card_buttons.addWidget(self.btn_card_cover)
         card_buttons.addWidget(self.btn_back_cover)
@@ -612,12 +620,14 @@ class CoverManagerDialog(QDialog):
         self.front_source_label.setWordWrap(True)
         form.addRow("", self.front_source_label)
         front_buttons = QHBoxLayout()
-        self.btn_front_pick = QPushButton("Vorschau → Vorderseite")
+        self.btn_front_pick = QPushButton("Als Vorderseite")
         self.btn_front_pick.setObjectName("ghostButton")
-        self.btn_front_pick.setToolTip("Das gerade groß angezeigte Bild (auch eine Rückseite) als Motiv der Vorderseite")
+        self.btn_front_pick.setToolTip("Das angeklickte Bild (bzw. seine Rückseite, wenn „Rückseite“ gewählt ist) "
+                                       "als Motiv der Vorderseite")
         self.btn_front_pick.clicked.connect(lambda: self._pick_source(back=False))
         self.btn_front_reset = QPushButton("Zurücksetzen")
         self.btn_front_reset.setObjectName("ghostButton")
+        self.btn_front_reset.setToolTip("Festlegung aufheben – dann gilt wieder das angeklickte Bild")
         self.btn_front_reset.clicked.connect(lambda: self._set_front_source(None))
         for button in (self.btn_front_pick, self.btn_front_reset):
             front_buttons.addWidget(button)
@@ -665,9 +675,9 @@ class CoverManagerDialog(QDialog):
         self.back_source_label.setWordWrap(True)
         form.addRow("", self.back_source_label)
         back_buttons = QHBoxLayout()
-        self.btn_back_pick = QPushButton("Vorschau → Rückseite")
+        self.btn_back_pick = QPushButton("Als Rückseite")
         self.btn_back_pick.setObjectName("ghostButton")
-        self.btn_back_pick.setToolTip("Das gerade groß angezeigte Bild als Rückseiten-Motiv verwenden")
+        self.btn_back_pick.setToolTip("Das angeklickte Bild (bzw. seine Rückseite) als Rückseiten-Motiv verwenden")
         self.btn_back_pick.clicked.connect(lambda: self._pick_source(back=True))
         self.btn_back_file = QPushButton("Aus Datei …")
         self.btn_back_file.setObjectName("ghostButton")
@@ -1352,6 +1362,10 @@ class CoverManagerDialog(QDialog):
         self.candidates.remove(candidate)
         if self.selected is candidate:
             self.selected = None
+        for attr in ("front_source", "back_source", "ai_back"):
+            source = getattr(self, attr)
+            if source is not None and source.candidate is candidate:
+                setattr(self, attr, None)
         self._apply_filter()
 
     def _load_current(self):
@@ -1394,15 +1408,10 @@ class CoverManagerDialog(QDialog):
         if item is None:
             return
         candidate = item.data(Qt.ItemDataRole.UserRole)
-        if candidate is not self.selected:
-            # Ein Klick bestimmt die Vorderseite neu. Eine explizit gewaehlte
-            # Rueckseite bleibt bestehen - ausser das angeklickte Cover bringt
-            # eine eigene Rueckseite mit, dann zaehlt diese.
-            self.front_source = None
-            if candidate.has_back:
-                is_ai_back = candidate.meta.get("kind") == "ai_back"
-                self.back_source = (SideSource(candidate, back=True)
-                                    if is_ai_back and self.back_mode_combo.currentData() == BACK_MODE_AI else None)
+        # Ein Klick zeigt das Bild nur in der Vorschau. Vorder- und Rueckseite der
+        # Karte aendern sich ausschliesslich ueber "Als Vorderseite" / "Als Rueckseite",
+        # "Zuruecksetzen", "Aus Datei" oder eine fertige KI-Erzeugung. Solange keine
+        # Vorderseite festgelegt ist, gilt das angeklickte Bild als Vorschlag.
         self.selected = candidate
         self.selection_label.setText(self._item_tooltip(self.selected).replace("\n", " · "))
         self._update_side_controls()
@@ -1882,12 +1891,11 @@ class CoverManagerDialog(QDialog):
             widget.setVisible(mode == BACK_MODE_AI)
         if self.back_wish_label is not None:
             self.back_wish_label.setVisible(mode == BACK_MODE_AI)
-        if mode not in (BACK_MODE_IMAGE, BACK_MODE_AI):
-            self.back_source = None
+        # Eine gewaehlte Rueckseite bleibt gemerkt, auch wenn zwischendurch Blur,
+        # Verlauf oder KI eingestellt ist; sie wirkt nur im Modus "Bild".
         if is_list and not self.back_lines_edit.toPlainText().strip():
             self._fill_back_from_tags()
         self._update_side_controls()
-        self.side_bar.setCurrentIndex(1 if mode != BACK_MODE_NONE else 0)
         self._render_preview()
 
     def _fill_back_from_tags(self):
@@ -1900,19 +1908,39 @@ class CoverManagerDialog(QDialog):
 
     # --- Bildquellen der beiden Seiten --------------------------------------------------------
 
-    def _preview_source(self) -> Optional[SideSource]:
-        """Was die Vorschau gerade zeigt"""
+    def _browse_source(self) -> Optional[SideSource]:
+        """Die gerade angeschaute Seite des angeklickten Bildes (Grundlage fuer
+        "Als Vorderseite" / "Als Rueckseite"); None, wenn das Bild keine Rueckseite hat"""
         if self.selected is None:
             return None
         if self.side_bar.currentIndex() == 0:
-            return self.front_source or SideSource(self.selected)
-        if self.back_source is not None:
-            return self.back_source
-        if self.selected.has_back:
-            return SideSource(self.selected, back=True)
-        if self.back_mode_combo.currentData() == BACK_MODE_TRACKLIST:
             return SideSource(self.selected)
+        return SideSource(self.selected, back=True) if self.selected.has_back else None
+
+    def _front_candidate(self) -> Optional[Candidate]:
+        """Das Cover, dessen Vorderseite die Karte bekommt (festgelegt oder angeklickt)"""
+        if self.front_source is not None:
+            return self.front_source.candidate
+        return self.selected
+
+    def _preview_source(self) -> Optional[SideSource]:
+        """Was die Vorschau gerade zeigt: im Reiter "Karte" die Karte selbst
+        (festgelegte Seiten), sonst das angeklickte Bild"""
+        if self.selected is None:
+            return None
+        if not self._card_tab_active():
+            return self._browse_source()
+        if self.side_bar.currentIndex() == 0:
+            return self.front_source or SideSource(self.selected)
+        if self.back_source is not None and self.back_mode_combo.currentData() == BACK_MODE_IMAGE:
+            return self.back_source
+        front = self._front_candidate()
+        if front is not None and front.has_back:
+            return SideSource(front, back=True)
         return None
+
+    def _card_tab_active(self) -> bool:
+        return hasattr(self, "tabs") and self.tabs.currentIndex() == 1
 
     def _front_image(self) -> Optional[Image.Image]:
         source = self.front_source or (SideSource(self.selected) if self.selected else None)
@@ -1922,6 +1950,8 @@ class CoverManagerDialog(QDialog):
         """Bildquelle fuer die Rueckseite: explizit gewaehlte Seite, sonst die
         Rueckseite des Vorderseiten-Covers, bei Trackliste sonst dessen Vorderseite"""
         mode = self.back_mode_combo.currentData()
+        if self.front_source is not None:
+            front = self.front_source.candidate
         front_image = (self.front_source.image() if self.front_source is not None
                        else (front.image() if front is not None else None))
         size = CardSpec().size_px(self.orientation_combo.currentData())
@@ -1944,16 +1974,20 @@ class CoverManagerDialog(QDialog):
         return None
 
     def _pick_source(self, back: bool):
-        """Das in der Vorschau gezeigte Bild als Vorder- bzw. Rueckseiten-Motiv uebernehmen"""
-        source = self._preview_source()
+        """Die angeschaute Seite des angeklickten Bildes als Vorder- bzw. Rueckseiten-Motiv festlegen"""
+        source = self._browse_source()
         if source is None:
+            if self.selected is not None:
+                self._flash("Dieses Bild hat keine Rückseite – bitte „Vorderseite“ wählen oder ein anderes Bild.")
             return
         if back:
-            if self.back_mode_combo.currentData() == BACK_MODE_NONE:
-                _select_data(self.back_mode_combo, BACK_MODE_IMAGE)
+            if self.back_mode_combo.currentData() != BACK_MODE_IMAGE:
+                _select_data(self.back_mode_combo, BACK_MODE_IMAGE)  # Wahl soll sichtbar wirken
             self._set_back_source(source)
+            self._flash(f"Rückseite: {source.label}")
         else:
             self._set_front_source(source)
+            self._flash(f"Vorderseite: {source.label}")
 
     def _set_front_source(self, source: Optional[SideSource]):
         self.front_source = source
@@ -1990,40 +2024,46 @@ class CoverManagerDialog(QDialog):
         self.side_bar.setCurrentIndex(1)
         self._render_preview()
 
-    def _update_side_controls(self):
-        mode = self.back_mode_combo.currentData()
-        front = self.selected
-        self.front_source_label.setText(
-            f"Vorderseiten-Motiv: {self.front_source.label}" if self.front_source is not None
-            else ("Vorderseiten-Motiv: das angeklickte Bild" if front is not None
-                  else "Vorderseiten-Motiv: noch keins – Bild anklicken oder „Als Vorderseite“"))
-        self.btn_front_reset.setEnabled(self.front_source is not None)
-        preview = self._preview_source()
-        self.btn_front_pick.setEnabled(preview is not None)
-        self.btn_back_pick.setEnabled(preview is not None)
+    def _front_state_text(self) -> str:
+        if self.front_source is not None:
+            return self.front_source.label
+        if self.selected is not None:
+            return f"{self.selected.label} (angeklickt, nicht festgelegt)"
+        return "noch keine – Bild anklicken und „Als Vorderseite“"
 
+    def _back_state_text(self) -> str:
+        mode = self.back_mode_combo.currentData()
+        front = self._front_candidate()
+        if mode == BACK_MODE_NONE:
+            return "keine"
         if mode == BACK_MODE_AI:
             source = self._ai_back_source()
             if source is not None and not self._needs_ai_back():
-                text = f"KI-Rückseite: {source.candidate.label} (wird wiederverwendet)"
-            elif source is not None:
-                text = "KI-Rückseite wird beim Übernehmen neu erzeugt"
-            else:
-                text = "KI-Rückseite wird beim Übernehmen erzeugt (Vorschau zeigt bis dahin einen Platzhalter)"
-        elif mode in (BACK_MODE_BLUR, BACK_MODE_GRADIENT):
-            text = "Rückseiten-Motiv: aus der Vorderseite berechnet"
-        elif self.back_source is not None:
-            text = f"Rückseiten-Motiv: {self.back_source.label}"
-        elif front is not None and front.has_back:
-            text = "Rückseiten-Motiv: Rückseite des angeklickten Covers"
-        elif mode == BACK_MODE_IMAGE:
-            text = "Keine Rückseite vorhanden – Bild in der Vorschau wählen oder „Aus Datei …“"
-        else:
-            text = ""
-        self.back_source_label.setText(text)
+                return f"KI-Rückseite {source.candidate.label} (wird wiederverwendet)"
+            if source is not None:
+                return "KI-Rückseite wird beim Übernehmen neu erzeugt"
+            return "KI-Rückseite wird beim Übernehmen erzeugt (Vorschau zeigt bis dahin einen Platzhalter)"
+        if mode == BACK_MODE_BLUR:
+            return "Blur aus der Vorderseite"
+        if mode == BACK_MODE_GRADIENT:
+            return "Verlauf aus der Vorderseite"
+        if self.back_source is not None:
+            return self.back_source.label
+        if front is not None and front.has_back:
+            return f"Rückseite von {front.label}"
+        return "noch keine – Bild anklicken und „Als Rückseite“ oder „Aus Datei …“"
+
+    def _update_side_controls(self):
+        front_text, back_text = self._front_state_text(), self._back_state_text()
+        self.front_source_label.setText(f"Vorderseiten-Motiv: {front_text}")
+        self.back_source_label.setText(f"Rückseiten-Motiv: {back_text}")
+        self.sides_label.setText(f"Karte · Vorderseite: {front_text} · Rückseite: {back_text}")
+        self.btn_front_reset.setEnabled(self.front_source is not None)
+        browse = self._browse_source()
+        self.btn_front_pick.setEnabled(browse is not None)
+        self.btn_back_pick.setEnabled(browse is not None)
         self.btn_back_reset.setEnabled(self.back_source is not None)
-        self.btn_back_file.setEnabled(front is not None)
-        self.side_bar.setTabEnabled(1, True)
+        self.btn_back_file.setEnabled(self.selected is not None)
         self._update_buttons()
 
     def _update_apply_note(self, *_):
@@ -2118,11 +2158,13 @@ class CoverManagerDialog(QDialog):
 
     def _ai_back_source(self) -> Optional[SideSource]:
         """Die zuletzt erzeugte KI-Rueckseite: explizit gesetzt oder die des angeklickten Bildes"""
-        source = self.back_source
-        if source is not None and source.back and source.candidate.meta.get("kind") == "ai_back":
-            return source
-        if self.selected is not None and self.selected.has_back and self.selected.meta.get("kind") == "ai_back":
-            return SideSource(self.selected, back=True)
+        if self.ai_back is not None and self.ai_back.candidate in self.candidates:
+            return self.ai_back
+        # aus dem Archiv geladene oder zuvor angeklickte KI-Rueckseite als Ersatz
+        for source in (self.back_source, SideSource(self.selected, back=True) if self.selected else None):
+            if (source is not None and source.back and source.candidate.has_back
+                    and source.candidate.meta.get("kind") == "ai_back"):
+                return source
         return None
 
     def _needs_ai_back(self) -> bool:
@@ -2167,7 +2209,7 @@ class CoverManagerDialog(QDialog):
                               back_data=_pil_bytes(image))
         candidate._image = self._back_front.image()
         self._add_candidate(candidate)
-        self.back_source = SideSource(candidate, back=True)
+        self.ai_back = SideSource(candidate, back=True)
         self.back_regenerate_check.setChecked(False)
         self._update_side_controls()
         self.side_bar.setCurrentIndex(1)
@@ -2188,8 +2230,9 @@ class CoverManagerDialog(QDialog):
                 return None  # Blur/Verlauf/KI sind schon im Kartenformat
             if self.back_source is not None:
                 return self.back_source
-            if self.selected is not None and self.selected.has_back:
-                return SideSource(self.selected, back=True)
+            front = self._front_candidate()
+            if front is not None and front.has_back:
+                return SideSource(front, back=True)
             return None
         return self.front_source or (SideSource(self.selected) if self.selected else None)
 
@@ -2330,21 +2373,26 @@ class CoverManagerDialog(QDialog):
             # sonst das Bild selbst, damit sich Cover unverfaelscht vergleichen lassen
             self._preview_shows_card = self.tabs.currentIndex() == 1
             if self.side_bar.currentIndex() == 1:
-                source = self._back_source_image(self.selected)
-                if source is None:
-                    self.preview.clear()
-                    self.preview.setText("Keine Rückseite – im Tab „Karte“ unter „Rückseite“ ein Bild wählen")
-                    return
                 if self._preview_shows_card:
+                    source = self._back_source_image(self.selected)
+                    if source is None:
+                        self.preview.clear()
+                        self.preview.setText("Keine Rückseite – unter „Rückseite“ ein Bild wählen oder einen Modus "
+                                             "(Blur, Verlauf, KI) einstellen")
+                        return
                     meta = self._back_meta(self._card_meta_now(None), False)
                     card = card_store.render_back_from_meta(prepare_card_art(source, orientation), meta)
                 else:
-                    card = source
+                    card = self.selected.back_image()
+                    if card is None:
+                        self.preview.clear()
+                        self.preview.setText("Dieses Bild hat keine eigene Rückseite")
+                        return
             elif self._preview_shows_card:
                 art = prepare_card_art(self._front_image(), orientation)
                 card = card_store.render_from_meta(art, self._card_meta_now(None), self.folder.index)
             else:
-                card = self._front_image()
+                card = self.selected.image()
         except Exception as e:
             self.preview.setText(f"Vorschau nicht möglich: {e}")
             return

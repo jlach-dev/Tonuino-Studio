@@ -219,19 +219,33 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
     assert dialog.back_source.candidate is other and not dialog.back_source.back
     assert dialog._back_source_image(other).getpixel((0, 0)) == (0, 0, 200)
 
-    # Klick auf ein Cover mit eigener Rueckseite zeigt dessen Rueckseite, nicht die zuvor gewaehlte
+    # Klick auf ein anderes Cover (auch mit eigener Rueckseite) aendert die festgelegten Seiten nicht;
+    # ausserhalb des Karten-Reiters zeigt die Vorschau das angeklickte Bild bzw. dessen Rueckseite
     dialog.gallery.setCurrentRow(0)
-    assert dialog.back_source is None
+    assert dialog.back_source.candidate is other and dialog.front_source.candidate is with_back
     dialog.side_bar.setCurrentIndex(1)
     assert dialog._preview_source().candidate is with_back and dialog._preview_source().back
+    dialog.tabs.setCurrentIndex(1)  # Reiter Karte: die Vorschau zeigt die Karte (festgelegte Rueckseite)
+    assert dialog._preview_source().candidate is other
+    dialog.tabs.setCurrentIndex(0)
+    # Moduswechsel verwirft die gewaehlte Rueckseite nicht und springt nicht um
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_BLUR)
+    assert dialog.back_source.candidate is other and dialog.side_bar.currentIndex() == 1
+    dialog.side_bar.setCurrentIndex(0)
     cm._select_data(dialog.back_mode_combo, "")
     dialog._render_preview()
     assert dialog.preview.pixmap() is not None and not dialog.preview.pixmap().isNull()  # auch ohne aktiven Modus
-    cm._select_data(dialog.back_mode_combo, BACK_MODE_IMAGE)
+    # "Als Rueckseite" schaltet den Modus immer auf "Bild"
     dialog.gallery.setCurrentRow(1)
     dialog.side_bar.setCurrentIndex(0)
     dialog._pick_source(back=True)
-    assert dialog.back_source.candidate is other
+    assert dialog.back_source.candidate is other and dialog.back_mode_combo.currentData() == BACK_MODE_IMAGE
+    assert "Rückseite: Deezer (Vorderseite)" in dialog.sides_label.text()
+    # "Als Rueckseite" bei einem Bild ohne Rueckseite im Reiter "Rueckseite": Hinweis, keine Aenderung
+    dialog.side_bar.setCurrentIndex(1)
+    dialog._pick_source(back=False)
+    assert dialog.front_source.candidate is with_back and "keine Rückseite" in dialog.status_label.text()
+    dialog.side_bar.setCurrentIndex(0)
 
     # KI-Randergaenzung der Rueckseite: neue Version unter "Neu", Original unveraendert
     class FakeSignal:
@@ -474,5 +488,45 @@ def test_keep_ai_back_version_with_ai_front(tmp_path, monkeypatch):
     entries = archive.covers(dialog.album_id)
     assert len(entries) == 1 and entries[0].kind == KIND_AI and entries[0].style == "Aquarell"
     assert entries[0].back_file and version.entry.id == entries[0].id
+    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    dialog.done(0)
+
+
+def test_ai_back_survives_gallery_clicks(tmp_path, monkeypatch):
+    """Die erzeugte KI-Rueckseite bleibt die Rueckseite, egal welches Bild angeklickt wird"""
+    pytest.importorskip("PyQt6")
+    from PyQt6.QtWidgets import QApplication
+    from core.metadata import MetadataManager
+    from gui import cover_manager_dialog as cm
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+    folder = tmp_path / "sd" / "01"
+    folder.mkdir(parents=True)
+    (folder / "001.mp3").write_bytes(b"x")
+    sd = SDCard(str(tmp_path / "sd"))
+    sd.scan()
+    monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "Eule", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+    front = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes(color=(0, 0, 200)), KIND_ONLINE)
+    with_back = cm.Candidate(cm.SECTION_ONLINE, "MB", png_bytes(), KIND_ONLINE, back_data=png_bytes(color=(9, 9, 9)))
+    dialog._add_candidate(front, select=True)
+    dialog._add_candidate(with_back)
+    dialog._pick_source(back=False)
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_AI)
+    assert dialog._needs_ai_back()
+
+    dialog._back_front = dialog.front_source
+    dialog._on_back_generated(Image.new("RGB", (400, 600), (7, 7, 7)))
+    assert dialog.ai_back is not None and not dialog._needs_ai_back()
+    dialog.gallery.setCurrentRow(1)  # Cover mit eigener Rueckseite anklicken
+    assert dialog.selected is with_back
+    assert not dialog._needs_ai_back() and dialog._ai_back_source() is dialog.ai_back
+    assert "wird wiederverwendet" in dialog.sides_label.text()
+    assert dialog._back_source_image(dialog.selected).getpixel((0, 0)) == (7, 7, 7)
+    # Verwerfen der KI-Version: Rueckseite muss neu erzeugt werden
+    dialog._remove_candidate(dialog.ai_back.candidate)
+    assert dialog.ai_back is None and dialog._needs_ai_back()
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
