@@ -31,7 +31,7 @@ from core.card_text import derive_card_text, describe_work
 from core.card_layout import (
     BACK_MODE_AI, BACK_MODE_BLUR, BACK_MODE_GRADIENT, BACK_MODE_IMAGE, BACK_MODE_NONE, BACK_MODE_TRACKLIST,
     CardSpec, ORIENTATION_PORTRAIT, TextStyle, album_cover_jpeg, blur_background, gradient_background,
-    prepare_card_art,
+    fits_card_format, prepare_card_art,
 )
 from core.cover_archive import (
     KIND_AI, KIND_FILE, KIND_LOCAL, KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER, ROLE_SERIES_ANCHOR,
@@ -597,6 +597,7 @@ class CoverManagerDialog(QDialog):
         _select_data(self.orientation_combo,
                      QSettings().value(ai_settings.SETTINGS_ORIENTATION, ORIENTATION_PORTRAIT, type=str))
         self.orientation_combo.currentIndexChanged.connect(self._render_preview)
+        self.orientation_combo.currentIndexChanged.connect(self._update_apply_note)
         form.addRow("Ausrichtung:", self.orientation_combo)
         self.number_check = QCheckBox("Ordnernummer klein oben rechts anzeigen")
         self.number_check.setChecked(True)
@@ -2018,16 +2019,27 @@ class CoverManagerDialog(QDialog):
     def _update_apply_note(self, *_):
         if not hasattr(self, "btn_apply"):
             return
-        jobs = []
+        jobs, skipped = [], []
         if self.front_extend_check.isChecked():
-            jobs.append("Rand der Vorderseite ergänzen")
+            if self._extension_fits(back=False):
+                skipped.append("Vorderseite")
+            else:
+                jobs.append("Rand der Vorderseite ergänzen")
         if hasattr(self, "back_tracklist_check") and self._needs_ai_back():
             jobs.append("KI-Rückseite erzeugen")
         if self.back_extend_check.isChecked() and self.back_mode_combo.currentData() == BACK_MODE_IMAGE:
-            jobs.append("Rand der Rückseite ergänzen")
+            if self._extension_fits(back=True):
+                skipped.append("Rückseite")
+            else:
+                jobs.append("Rand der Rückseite ergänzen")
+        skip_note = (f" {' und '.join(skipped)} hat schon das Kartenformat – Randergänzung entfällt (kein Aufruf)."
+                     if skipped else "")
         if jobs:
             self.apply_note.setText(f"Beim Übernehmen per KI: {', '.join(jobs)} "
-                                    f"(ca. {len(jobs) * ESTIMATED_COST_PER_IMAGE:.2f} USD), dann speichern.")
+                                    f"(ca. {len(jobs) * ESTIMATED_COST_PER_IMAGE:.2f} USD), dann speichern."
+                                    + skip_note)
+        elif skipped:
+            self.apply_note.setText("Beim Übernehmen wird direkt gespeichert." + skip_note)
         else:
             self.apply_note.setText("Beim Übernehmen werden Vorder- und Rückseite im Archiv gespeichert und beim "
                                     "Übertragen auf die SD-Karte geschrieben." if self.library_mode else
@@ -2152,6 +2164,14 @@ class CoverManagerDialog(QDialog):
         self._render_preview()
         self._run_next_extension()
 
+    def _extension_fits(self, back: bool) -> bool:
+        """Hat das Motiv der Seite schon das Kartenformat? Dann entfaellt der KI-Aufruf."""
+        source = self._extension_source(back)
+        if source is None:
+            return False
+        image = source.image()
+        return image is not None and fits_card_format(image, self.orientation_combo.currentData())
+
     def _extension_source(self, back: bool) -> Optional[SideSource]:
         if back:
             if self.back_mode_combo.currentData() != BACK_MODE_IMAGE:
@@ -2173,6 +2193,10 @@ class CoverManagerDialog(QDialog):
             back = job == "extend_back"
             source = self._extension_source(back)
             if source is None or source.image() is None:
+                continue
+            if fits_card_format(source.image(), self.orientation_combo.currentData()):
+                side = "Rückseite" if back else "Vorderseite"
+                self._flash(f"{side} hat schon das Kartenformat – Randergänzung übersprungen (kein Aufruf).")
                 continue
             self._extend_source, self._extend_back = source, back
             self.status_label.setText(f"Rand wird per KI ergänzt ({'Rückseite' if back else 'Vorderseite'}) …")

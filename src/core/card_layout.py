@@ -222,17 +222,23 @@ def ambient_blur(cover: Image.Image, size) -> Image.Image:
     return background
 
 
+def fits_card_format(image: Image.Image, orientation: str, tolerance: float = 0.15) -> bool:
+    """Hat das Bild (ungefaehr) schon das Seitenverhaeltnis der Karte? Dann
+    braucht es weder Ambient Blur noch eine KI-Randergaenzung."""
+    size = CardSpec().size_px(orientation)
+    target = size[0] / size[1]
+    actual = image.width / image.height
+    return abs(actual - target) / target <= tolerance
+
+
 def prepare_card_art(image: Image.Image, orientation: str, tolerance: float = 0.15) -> Image.Image:
     """Macht aus einem beliebigen Bild ein Kartenmotiv: passt das
     Seitenverhaeltnis ungefaehr, bleibt es (Zuschnitt beim Rendern);
     sonst - typisch fuer quadratische Album-Cover - Ambient Blur, damit nichts
     Wichtiges abgeschnitten wird."""
-    size = CardSpec().size_px(orientation)
-    target = size[0] / size[1]
-    actual = image.width / image.height
-    if abs(actual - target) / target <= tolerance:
+    if fits_card_format(image, orientation, tolerance):
         return image.convert("RGB")
-    return ambient_blur(image, size)
+    return ambient_blur(image, CardSpec().size_px(orientation))
 
 
 def album_cover_jpeg(image: Image.Image, size: int = 600) -> bytes:

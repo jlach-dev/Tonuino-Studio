@@ -400,3 +400,45 @@ def test_clicking_generated_version_keeps_ai_back(qt_app, tmp_path, monkeypatch)
     assert dialog._needs_ai_back()
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
+
+
+def test_extension_skipped_when_art_already_fits(tmp_path, monkeypatch):
+    pytest.importorskip("PyQt6")
+    from PyQt6.QtWidgets import QApplication
+    from core.metadata import MetadataManager
+    from gui import cover_manager_dialog as cm
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+    folder = tmp_path / "sd" / "01"
+    folder.mkdir(parents=True)
+    (folder / "001.mp3").write_bytes(b"x")
+    sd = SDCard(str(tmp_path / "sd"))
+    sd.scan()
+    monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "Eule", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+    cm._select_data(dialog.orientation_combo, ORIENTATION_PORTRAIT)
+    square = cm.Candidate(cm.SECTION_ONLINE, "quadratisch", png_bytes(), KIND_ONLINE)
+    tall = cm.Candidate(cm.SECTION_ONLINE, "hochkant", png_bytes(size=(400, 600)), KIND_ONLINE)
+    dialog._add_candidate(square, select=True)
+    dialog._add_candidate(tall)
+
+    calls = []
+    monkeypatch.setattr(cm, "CoverExtendWorker", lambda *a: calls.append(a) or (_ for _ in ()).throw(AssertionError))
+    saved = []
+    monkeypatch.setattr(dialog, "_set_card_cover", lambda: saved.append(True))
+
+    dialog.front_extend_check.setChecked(True)
+    assert "Rand der Vorderseite ergänzen" in dialog.apply_note.text()  # quadratisch: Aufruf noetig
+    dialog.gallery.setCurrentRow(1)
+    assert dialog.selected is tall
+    dialog._update_apply_note()
+    assert "Vorderseite hat schon das Kartenformat" in dialog.apply_note.text()
+    assert "USD" not in dialog.apply_note.text()
+
+    dialog._apply()
+    assert calls == [] and saved == [True]
+    assert "übersprungen" in dialog.status_label.text()
+    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    dialog.done(0)
