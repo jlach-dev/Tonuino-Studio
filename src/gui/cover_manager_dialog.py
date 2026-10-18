@@ -1453,10 +1453,18 @@ class CoverManagerDialog(QDialog):
 
     def _keep_marked(self):
         marked = [c for c in self._marked_candidates() if not c.kept]
+        kept, errors = 0, []
         for candidate in marked:
-            self._keep(candidate)
+            try:
+                self._keep(candidate)
+                kept += 1
+            except Exception as e:  # ein Fehler darf nicht die ganze Anwendung beenden
+                log.exception("Bild konnte nicht im Archiv gespeichert werden: %s", candidate.label)
+                errors.append(f"{candidate.label}: {e}")
         self._set_all_marks(False)
-        self._flash(f"✓ {len(marked)} Bild(er) im Archiv gespeichert.")
+        self._flash(f"✓ {kept} Bild(er) im Archiv gespeichert.")
+        if errors:
+            QMessageBox.warning(self, "Behalten fehlgeschlagen", chr(10).join(errors[:5]))
 
     def _toggle_reference_marked(self):
         marked = self._marked_candidates()
@@ -1680,7 +1688,9 @@ class CoverManagerDialog(QDialog):
             entry = self.archive.add_cover(self.album_id, self._full_resolution(candidate), KIND_ONLINE,
                                            source=candidate.online.full_url, provider=candidate.online.source)
         elif candidate.kind == KIND_AI:
-            entry = self.archive.add_cover(self.album_id, candidate.image(), KIND_AI, **candidate.meta)
+            # meta["kind"] ("ai_back") ist nur ein Marker fuer den Dialog, kein Archivfeld
+            meta = {k: v for k, v in candidate.meta.items() if k != "kind"}
+            entry = self.archive.add_cover(self.album_id, candidate.image(), KIND_AI, **meta)
         else:
             entry = self.archive.add_cover(self.album_id, candidate.data, candidate.kind, source=candidate.label)
         candidate.entry = entry

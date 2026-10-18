@@ -442,3 +442,37 @@ def test_extension_skipped_when_art_already_fits(tmp_path, monkeypatch):
     assert "übersprungen" in dialog.status_label.text()
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
+
+
+def test_keep_ai_back_version_with_ai_front(tmp_path, monkeypatch):
+    """Absturz beim Behalten: meta["kind"] = "ai_back" kollidierte mit dem Archiv-Parameter kind"""
+    pytest.importorskip("PyQt6")
+    from PyQt6.QtWidgets import QApplication
+    from core.cover_archive import KIND_AI
+    from core.metadata import MetadataManager
+    from gui import cover_manager_dialog as cm
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+    folder = tmp_path / "sd" / "01"
+    folder.mkdir(parents=True)
+    (folder / "001.mp3").write_bytes(b"x")
+    sd = SDCard(str(tmp_path / "sd"))
+    sd.scan()
+    monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    archive = CoverArchive(str(tmp_path / "data"))
+    dialog = cm.CoverManagerDialog(sd.folders[1], "Eule", MetadataManager(), archive)
+    version = cm.Candidate(cm.SECTION_NEW, "KI-Rückseite · Front #1", png_bytes(), KIND_AI,
+                           meta={"kind": "ai_back", "style": "Aquarell", "model": "m", "prompt": "p"},
+                           back_data=png_bytes(color=(9, 9, 9)))
+    dialog._add_candidate(version, select=True)
+    from PyQt6.QtCore import Qt
+    item = next(i for i in dialog._items() if i.data(Qt.ItemDataRole.UserRole) is version)
+    item.setCheckState(Qt.CheckState.Checked)
+    dialog._keep_marked()
+    entries = archive.covers(dialog.album_id)
+    assert len(entries) == 1 and entries[0].kind == KIND_AI and entries[0].style == "Aquarell"
+    assert entries[0].back_file and version.entry.id == entries[0].id
+    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    dialog.done(0)
