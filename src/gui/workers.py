@@ -606,29 +606,31 @@ class AlbumTracksWorker(QThread):
             self.done.emit(self.album.path, tracks)
 
 
-class EmbedCoversWorker(QThread):
-    """Stapellauf: Album-Cover aus dem Archiv in Bibliotheksalben ohne Cover einbetten"""
+class CoverProposalWorker(QThread):
+    """Cover-Stapelsuche: Vorschlaege fuer alle Bibliotheksalben ohne Cover"""
     progress = pyqtSignal(int, int, str)
-    done = pyqtSignal(object)  # EmbedResult
+    done = pyqtSignal(object)  # list[AlbumProposal]
     failed = pyqtSignal(str)
 
-    def __init__(self, index, archive):
+    def __init__(self, index, archive, sources: list):
         super().__init__()
         self.index = index
         self.archive = archive
+        self.sources = list(sources)
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
     def run(self):
-        from core.library_import import embed_archive_covers
+        from core.cover_batch import propose_all
         try:
-            result = embed_archive_covers(self.index, self.archive, progress=self.progress.emit,
-                                          cancelled=lambda: self._cancelled)
-            self.done.emit(result)
+            proposals = propose_all(self.index, self.archive, self.sources, progress=self.progress.emit,
+                                    cancelled=lambda: self._cancelled)
+            if not self._cancelled:
+                self.done.emit(proposals)
         except Exception as e:
-            log.exception("Cover nachtragen fehlgeschlagen")
+            log.exception("Cover-Stapelsuche fehlgeschlagen")
             self.failed.emit(str(e))
 
 

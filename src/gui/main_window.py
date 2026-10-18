@@ -36,7 +36,7 @@ from gui.workers import (
     LibraryScanWorker,
 )
 from gui.card_cover_dialog import AiSettingsDialog, gemini_client, image_model, text_model
-from gui.workers import EmbedCoversWorker, RecognizeWorker
+from gui.workers import CoverProposalWorker, RecognizeWorker
 from gui.cover_manager_dialog import CoverManagerDialog, SETTINGS_DATA_DIR, get_archive
 from gui.library_dnd import DropArea, FolderListWidget
 from gui.library_settings_dialog import LibrarySourcesDialog, library_sources
@@ -2242,48 +2242,61 @@ class MainWindow(QMainWindow):
             self._refresh_library_album(album.path)
 
     def _library_embed_covers(self):
-        """Stapellauf: Album-Cover aus dem Archiv in alle Bibliotheksalben ohne Cover einbetten"""
+        """Cover-Stapelsuche: Vorschlaege fuer alle Bibliotheksalben ohne Cover (Archiv,
+        Release-ID, Online-Suche mit Bewertung), dann Pruefdialog"""
+        from core import cover_batch
+        from gui.cover_manager_dialog import SETTINGS_SOURCES
         if self._library is None or not self._library_index.albums:
             QMessageBox.information(self, "Cover nachtragen", "Die Bibliothek ist leer.")
             return
         archive = get_archive(self)
         if archive is None:
             return
-        todo = [a for a in self._library_index.albums if not a.offline and not a.has_cover and a.album_id]
+        todo = cover_batch.albums_without_cover(self._library_index)
         if not todo:
-            QMessageBox.information(self, "Cover nachtragen",
-                                    "Alle verknüpften Alben haben bereits ein Cover. Alben ohne Verknüpfung zum "
-                                    "Archiv bekommen ihr Cover über „Cover …“ im geöffneten Album.")
+            QMessageBox.information(self, "Cover nachtragen", "Alle erreichbaren Alben haben bereits ein Cover.")
             return
+        chosen = QSettings().value(SETTINGS_SOURCES, list(cover_batch.SEARCH_SOURCES), type=list)
+        sources = [s for s in cover_batch.SEARCH_SOURCES if s in chosen] or list(cover_batch.SEARCH_SOURCES)
         if not confirm_action(self, "Cover nachtragen",
-                              f"{len(todo)} Album/Alben ohne Cover werden geprüft. Wo das Archiv ein Album-Cover "
-                              "hat, wird es in die Dateien eingebettet und als cover.jpg abgelegt.\n\nFortfahren?",
+                              f"Für {len(todo)} Album/Alben ohne Cover werden Vorschläge gesucht: aus dem Archiv, "
+                              "zur MusicBrainz-Release-ID in den Tags oder per Online-Suche "
+                              f"({', '.join(sources)}). Geschrieben wird erst nach deiner Prüfung.\n\nFortfahren?",
                               default_no=False):
             return
         self.player_bar.stop()
         self._release_files()
-        dialog = QProgressDialog("Album-Cover werden nachgetragen …", "Abbrechen", 0, len(todo), self)
+        dialog = QProgressDialog("Cover-Vorschläge werden gesucht …", "Abbrechen", 0, len(todo), self)
         dialog.setWindowTitle("Cover nachtragen")
         dialog.setWindowModality(Qt.WindowModality.WindowModal)
         dialog.setMinimumDuration(0)
         dialog.setValue(0)
-        worker = EmbedCoversWorker(self._library_index, archive)
-        self._embed_job = {"worker": worker, "dialog": dialog}
+        worker = CoverProposalWorker(self._library_index, archive, sources)
+        self._embed_job = {"worker": worker, "dialog": dialog, "archive": archive}
         worker.progress.connect(lambda cur, total, name: self._on_import_progress(dialog, cur, total, name))
-        worker.done.connect(lambda result: self._on_covers_embedded(dialog, result))
+        worker.done.connect(lambda proposals: self._on_cover_proposals(dialog, archive, proposals))
         worker.failed.connect(lambda m: (dialog.close(), QMessageBox.warning(self, "Cover nachtragen", m)))
         dialog.canceled.connect(worker.cancel)
         worker.start()
 
-    def _on_covers_embedded(self, dialog, result):
-        dialog.close()
+    def _on_cover_proposals(self, progress, archive, proposals):
+        from gui.cover_proposal_dialog import CoverProposalDialog
+        progress.close()
         self._embed_job = None
-        text = f"{result.albums} Album/Alben mit Cover versehen ({result.tracks} Datei(en))"
-        if result.skipped:
-            text += f", {result.skipped} ohne Album-Cover im Archiv übersprungen"
-        self.status_bar.showMessage(text)
-        QMessageBox.information(self, "Cover nachtragen", text + ".")
-        self._start_library_scan(force=True)
+        if not proposals:
+            QMessageBox.information(self, "Cover nachtragen", "Keine Vorschläge gefunden.")
+            return
+        dialog = CoverProposalDialog(proposals, archive, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        if accepted and dialog.result is not None:
+            result = dialog.result
+            text = f"{result.albums} Album/Alben mit Cover versehen ({result.tracks} Datei(en))"
+            if result.skipped:
+                text += f", {result.skipped} übersprungen"
+            self.status_bar.showMessage(text)
+            self._start_library_scan(force=True)
+        elif dialog.open_requested is not None:
+            self._library_cover(dialog.open_requested)
 
     def _library_organize(self, album, paths):
         """Dateien eines Bibliotheksalbums nach Tags in Interpret/Album-Ordner verschieben"""

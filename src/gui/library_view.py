@@ -319,11 +319,11 @@ class LibraryView(QWidget):
         self.btn_rescan.clicked.connect(self.rescan_requested)
         head.addWidget(self.btn_rescan)
 
-        self.btn_embed = QPushButton(" Cover nachtragen")
+        self.btn_embed = QPushButton(" Cover nachtragen …")
         self.btn_embed.setObjectName("ghostButton")
         self.btn_embed.setIcon(icon_from_glyph("\ue3f4", color=theme.TEXT))  # Image
-        self.btn_embed.setToolTip("Alben ohne Cover: das im Cover-Manager gesetzte Album-Cover aus dem Archiv in "
-                                  "die Dateien einbetten und als cover.jpg ablegen")
+        self.btn_embed.setToolTip("Alben ohne Cover: Album-Cover aus dem Archiv, zur MusicBrainz-Release-ID oder "
+                                  "per Online-Suche vorschlagen – mit Prüfung, bevor etwas geschrieben wird")
         self.btn_embed.clicked.connect(self.embed_covers_requested)
         head.addWidget(self.btn_embed)
 
