@@ -24,6 +24,7 @@ from core.sd_card import Folder
 from core.tag_lookup import FIELDS, FIELD_MB_IDS, LocalTrack, ReleaseCandidate, TrackDiff
 from gui import theme
 from gui.common import confirm_action
+from gui.workers import retire_worker
 
 log = logging.getLogger(__name__)
 
@@ -150,11 +151,11 @@ class TagDiffDialog(QDialog):
         form = QFormLayout()
         self.title_edit = QLineEdit(title)
         self.title_edit.setPlaceholderText("Album- bzw. Folgentitel (leer = aus den Tags ableiten)")
-        self.title_edit.returnPressed.connect(self._start_search)
+        self.title_edit.returnPressed.connect(self._search_from_enter)
         form.addRow("Titel:", self.title_edit)
         self.artist_edit = QLineEdit(artist)
         self.artist_edit.setPlaceholderText("Interpret / Hörspielreihe (optional)")
-        self.artist_edit.returnPressed.connect(self._start_search)
+        self.artist_edit.returnPressed.connect(self._search_from_enter)
         form.addRow("Interpret:", self.artist_edit)
         layout.addLayout(form)
 
@@ -242,13 +243,24 @@ class TagDiffDialog(QDialog):
     def _selected_sources(self) -> List[str]:
         return [s for s, check in self.source_checks.items() if check.isChecked()]
 
+    def _search_from_enter(self):
+        """Enter in den Suchfeldern - waehrend einer laufenden Suche ignoriert
+        (der Suchen-Knopf ist dann ohnehin gesperrt)"""
+        if self._search_worker is not None and self._search_worker.isRunning():
+            return
+        self._start_search()
+
     def _start_search(self):
         sources = self._selected_sources()
         if not sources:
             self.status_label.setText("Bitte mindestens eine Quelle wählen.")
             return
         QSettings().setValue(SETTINGS_SOURCES, sources)
-        self._stop_workers()
+        # Laufende Worker nicht verwerfen, sondern ausmustern (laufen ohne
+        # Wirkung zu Ende)
+        retire_worker(self._search_worker)
+        retire_worker(self._tracks_worker)
+        self._search_worker = self._tracks_worker = None
         self.release_combo.clear()
         self.candidates = []
         self.candidate = None
@@ -298,8 +310,7 @@ class TagDiffDialog(QDialog):
         if candidate.tracks_loaded:
             self._show_candidate(candidate)
             return
-        if self._tracks_worker is not None and self._tracks_worker.isRunning():
-            self._tracks_worker.wait(3000)
+        retire_worker(self._tracks_worker)
         self.status_label.setText(f"Trackliste wird geladen ({candidate.source}) …")
         self._tracks_worker = TagTracksWorker(candidate)
         self._tracks_worker.completed.connect(self._on_tracks_loaded)
@@ -461,6 +472,10 @@ class TagDiffDialog(QDialog):
                 if hasattr(worker, "cancel"):
                     worker.cancel()
                 worker.wait(3000)
+            # Haengt er noch (Netzwerk), am Leben halten statt mit dem Dialog zu zerstoeren
+            if worker is not None and worker.isRunning():
+                retire_worker(worker)
+        self._search_worker = self._tracks_worker = None
 
     def done(self, result):
         self._stop_workers()

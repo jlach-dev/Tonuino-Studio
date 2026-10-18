@@ -98,6 +98,7 @@ class CoverEntry:
     width: int = 0
     height: int = 0
     created: str = ""
+    data_sha1: str = ""  # SHA-1 der gespeicherten Bilddatei (Duplikaterkennung)
 
     @classmethod
     def from_dict(cls, data: dict) -> "CoverEntry":
@@ -204,18 +205,36 @@ class CoverArchive:
             data, ext = bytes(image), _sniff_extension(image)
             with Image.open(io.BytesIO(data)) as img:
                 size = img.size
-        if meta.get("source"):
-            existing = [e for e in self.covers(album_id) if e.source == meta["source"] and e.kind == kind]
-            if existing:
-                return existing[0]
+        # Duplikate an den Bilddaten erkennen, nicht an der Herkunft: zwei
+        # verschiedene Bilder mit gleichem source-Text (z.B. zweimal "Frueheres
+        # Album-Cover") muessen beide ins Archiv
+        digest = sha1(data)
+        existing = self.find_cover_by_sha1(album_id, digest)
+        if existing is not None:
+            return existing
 
         entry = CoverEntry(id=cover_id, file=cover_id + ext, kind=kind, width=size[0], height=size[1],
-                           created=_now(), **{k: v for k, v in meta.items() if k in CoverEntry.__dataclass_fields__})
+                           created=_now(), data_sha1=digest,
+                           **{k: v for k, v in meta.items() if k in CoverEntry.__dataclass_fields__})
         path = self.cover_path(album_id, entry)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         self._save_covers(album_id, self.covers(album_id) + [entry])
         return entry
+
+    def find_cover_by_sha1(self, album_id: str, digest: str) -> Optional[CoverEntry]:
+        """Cover des Albums mit genau diesen Bilddaten. Eintraege aus aelteren
+        Versionen ohne gespeicherten Hash werden aus der Datei nachberechnet."""
+        for entry in self.covers(album_id):
+            known = entry.data_sha1
+            if not known:
+                try:
+                    known = sha1(self.cover_path(album_id, entry).read_bytes())
+                except OSError:
+                    continue
+            if known == digest:
+                return entry
+        return None
 
     def back_path(self, album_id: str, entry: CoverEntry) -> Optional[Path]:
         return self._album_dir(album_id) / "covers" / entry.back_file if entry.back_file else None

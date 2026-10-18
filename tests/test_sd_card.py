@@ -99,6 +99,47 @@ def test_purge_removes_foreign_items_and_empty_folders(tmp_path):
     assert names(tmp_path / "02") == ["001.mp3"]
 
 
+def test_purge_keeps_trackless_folders_with_relevant_files(tmp_path):
+    card = make_card(tmp_path, {
+        "01": ["001.mp3"],
+        "02": ["01 - Titel.mp3", "notes.txt"],  # MP3s mit anderem Namen
+        "03": ["card.png", "card.json"],  # nur Kartencover
+        "04": [".tmp_001.mp3"],  # Rest eines abgebrochenen Umnummerierens
+        "05": ["notes.txt", "._001.mp3"],  # nur Fremddateien
+        "06": [],
+    })
+    (tmp_path / "07").mkdir()
+    (tmp_path / "07" / ".tmp_import").mkdir()  # Rest eines abgebrochenen Ersetzens
+    (tmp_path / "07" / ".tmp_import" / "001.mp3").write_bytes(b"neu")
+
+    preview = card.preview_purge()
+    assert [(f.name, f.file_count, f.has_card) for f in preview.folders_to_delete] == [
+        ("05", 2, False), ("06", 0, False)]
+    assert [(f.name, f.has_card) for f in preview.folders_kept_without_tracks] == [
+        ("02", False), ("03", True), ("04", False), ("07", False)]
+
+    card.purge()
+
+    assert names(tmp_path) == ["01", "02", "03", "04", "07"]
+    assert names(tmp_path / "02") == ["01 - Titel.mp3"]
+    assert names(tmp_path / "03") == ["card.json", "card.png"]
+    assert names(tmp_path / "04") == [".tmp_001.mp3"]
+    assert (tmp_path / "07" / ".tmp_import" / "001.mp3").read_bytes() == b"neu"
+
+
+def test_purge_confirmation_lists_deleted_and_kept_folders(tmp_path):
+    pytest.importorskip("PyQt6")
+    from core.sd_card import PurgeFolderInfo, PurgePreview
+    from gui.main_window import MainWindow
+
+    preview = PurgePreview(folders_to_delete=[PurgeFolderInfo("05", 2), PurgeFolderInfo("06")],
+                           folders_kept_without_tracks=[PurgeFolderInfo("03", 2, has_card=True)])
+    text = MainWindow._purge_confirmation_text(MainWindow, preview)
+    assert "2 Ordner ohne Tracks werden gelöscht: 05 (2 Datei(en)), 06 (leer)" in text
+    assert "03 (2 Datei(en), mit Kartencover)" in text
+    assert "Keine Fremddateien" not in text
+
+
 def test_purge_keeps_folder_numbers_but_closes_track_gaps(tmp_path):
     card = make_card(tmp_path, {"01": ["001.mp3"], "03": ["002.mp3", "005.mp3"], "07": ["001.mp3"]})
 

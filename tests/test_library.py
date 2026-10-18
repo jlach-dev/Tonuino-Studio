@@ -1,6 +1,7 @@
 import io
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -220,6 +221,62 @@ def test_import_album_copies_tags_links_and_writes_card(tmp_path, sd):
                           mode=MODE_REPLACE)
     assert result.added == 2 and len(folder.tracks) == 2
     assert sorted(p.name for p in (sd.path / "01").glob("*.mp3")) == ["001.mp3", "002.mp3"]
+    assert [t.filepath for t in folder.tracks] == [str(sd.path / "01" / "001.mp3"), str(sd.path / "01" / "002.mp3")]
+    assert not (sd.path / "01" / ".tmp_import").exists() and card_store.has_card(folder.path)
+
+
+def test_replace_keeps_old_tracks_when_nothing_was_copied(tmp_path, sd):
+    from core.audio_converter import AudioConverter
+    from core.library_import import MODE_REPLACE, import_album
+
+    sd.create_folder(2)
+    for name in ("001.mp3", "002.mp3"):
+        (sd.path / "02" / name).write_bytes(name.encode())
+    sd.scan()
+    folder = sd.folders[2]
+    album = read_album(str(make_album(tmp_path / "Musik", "Neu", count=1)))
+
+    # Alle Quelldateien unlesbar: Kopieren scheitert komplett
+    result = import_album(sd, folder, album, AudioConverter(), MetadataManager(), None, write_library_tags=False,
+                          mode=MODE_REPLACE, tracks=[str(tmp_path / "fehlt.mp3")])
+
+    assert result.added == 0 and result.errors
+    assert sorted(p.name for p in (sd.path / "02").iterdir()) == ["001.mp3", "002.mp3"]
+    assert (sd.path / "02" / "001.mp3").read_bytes() == b"001.mp3"
+    assert [t.filename for t in folder.tracks] == ["001.mp3", "002.mp3"]
+
+
+def test_staged_replace_discard_and_commit(tmp_path, sd):
+    from core import library_import
+    from core.sd_card import Track
+
+    sd.create_folder(4)
+    for name in ("001.mp3", "002.mp3", "003.mp3"):
+        (sd.path / "04" / name).write_bytes(b"alt")
+    sd.scan()
+    folder = sd.folders[4]
+
+    # Abgebrochen: Zwischenordner weg, alte Tracks unveraendert
+    staging = library_import.create_staging_folder(folder)
+    (Path(staging.path) / "001.mp3").write_bytes(b"neu")
+    library_import.discard_staging_folder(staging)
+    assert sorted(p.name for p in (sd.path / "04").iterdir()) == ["001.mp3", "002.mp3", "003.mp3"]
+
+    # Leerer Zwischenordner: nichts ersetzen
+    staging = library_import.create_staging_folder(folder)
+    assert library_import.commit_staged_replace(sd, folder, staging) is False
+    assert len(folder.tracks) == 3 and not Path(staging.path).exists()
+
+    # Zwei neue Tracks ersetzen drei alte
+    staging = library_import.create_staging_folder(folder)
+    for index in (1, 2):
+        path = Path(staging.path) / f"{index:03d}.mp3"
+        path.write_bytes(b"neu%d" % index)
+        staging.tracks.append(Track(index=index, filename=path.name, filepath=str(path)))
+    assert library_import.commit_staged_replace(sd, folder, staging) is True
+    assert sorted(p.name for p in (sd.path / "04").iterdir()) == ["001.mp3", "002.mp3"]
+    assert (sd.path / "04" / "002.mp3").read_bytes() == b"neu2"
+    assert [t.filepath for t in folder.tracks] == [str(sd.path / "04" / "001.mp3"), str(sd.path / "04" / "002.mp3")]
 
 
 def test_import_without_archive_and_without_permission_leaves_library_untouched(tmp_path, sd):

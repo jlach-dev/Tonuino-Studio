@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from core.sd_card import SDCard, Folder, Track, MAX_TRACKS_PER_FOLDER
 from core.audio_converter import AudioConverter
@@ -17,6 +17,85 @@ from core.rfid import RFIDReader, RfidStatus
 from core.tonuino_serial import TonuinoSerial, TonuinoSerialError, TonuinoWriteCancelled
 
 log = logging.getLogger(__name__)
+
+
+class _WorkerReaper(QObject):
+    """Haelt ausgemusterte, noch laufende Worker am Leben, bis sie fertig
+    sind. Ein QThread, dessen letzte Python-Referenz verschwindet, waehrend
+    er noch laeuft, reisst die App mit "QThread: Destroyed while thread is
+    still running" herunter. Lebt im GUI-Thread; finished kommt deshalb
+    per Queued Connection hier an."""
+
+    def __init__(self):
+        super().__init__()
+        self._workers = set()
+
+    def adopt(self, worker: QThread):
+        self._workers.add(worker)
+        worker.finished.connect(self._release)
+        if worker.isFinished():
+            # finished kam womoeglich schon vor dem connect
+            self._discard(worker)
+
+    def _release(self):
+        self._discard(self.sender())
+
+    def _discard(self, worker):
+        if worker in self._workers:
+            worker.wait()  # kehrt nach finished sofort zurueck
+            self._workers.discard(worker)
+
+    def wait_all(self, msecs: int):
+        for worker in list(self._workers):
+            worker.wait(msecs)
+
+    @property
+    def count(self) -> int:
+        return len(self._workers)
+
+
+_reaper: Optional[_WorkerReaper] = None
+
+
+def _worker_signals(worker: QThread) -> set:
+    """Namen der eigenen Signale eines Workers (ohne die von QThread/QObject)"""
+    names = {"finished"}
+    for cls in type(worker).__mro__:
+        if cls is QThread:
+            break
+        names.update(name for name, value in vars(cls).items() if isinstance(value, pyqtSignal))
+    return names
+
+
+def retire_worker(worker: Optional[QThread]):
+    """Worker ausmustern, der durch einen neuen ersetzt wird (oder dessen
+    Fenster schliesst), ohne den GUI-Thread mit wait() zu blockieren:
+    abbrechen, alle Signale trennen (spaete Ergebnisse sollen nichts mehr
+    ueberschreiben) und eine Referenz halten, bis der Thread wirklich endet."""
+    global _reaper
+    if worker is None:
+        return
+    if hasattr(worker, "cancel"):
+        worker.cancel()
+    for name in _worker_signals(worker):
+        try:
+            getattr(worker, name).disconnect()
+        except (TypeError, RuntimeError):
+            pass  # keine Verbindungen
+    if worker.isRunning():
+        if _reaper is None:
+            _reaper = _WorkerReaper()
+        _reaper.adopt(worker)
+
+
+def wait_for_retired_workers(msecs: int = 3000):
+    """Beim Beenden der App: ausgemusterte Worker noch auslaufen lassen"""
+    if _reaper is not None:
+        _reaper.wait_all(msecs)
+
+
+def retired_worker_count() -> int:
+    return _reaper.count if _reaper is not None else 0
 
 
 class SDCardScanner(QThread):
@@ -63,6 +142,10 @@ class TrackAddWorker(QThread):
 
     def cancel(self):
         self._cancelled = True
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._cancelled
 
     def run(self):
         added = 0

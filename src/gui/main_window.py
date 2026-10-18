@@ -17,7 +17,7 @@ from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint, QRect
 from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup, QKeySequence, QShortcut
 
 from core import __version__
-from core.sd_card import SDCard, Folder, Track, PurgePreview, MAX_TRACKS_PER_FOLDER
+from core.sd_card import SDCard, Folder, Track, PurgeFolderInfo, PurgePreview, MAX_TRACKS_PER_FOLDER
 from core.drive_check import get_total_size, is_removable_drive, MAX_SD_CARD_BYTES
 from core.audio_converter import AudioConverter
 from core.metadata import MetadataManager
@@ -33,7 +33,7 @@ from gui.common import resource_path, heading_font, confirm_action, icon_from_gl
 from gui.track_list import HoverListWidget, reorder_with_selection
 from gui.workers import (
     SDCardScanner, TrackAddWorker, FolderNameWorker, TrackMetaWorker, PurgeWorker, CoverBatchWorker,
-    LibraryScanWorker,
+    LibraryScanWorker, wait_for_retired_workers,
 )
 from gui.card_cover_dialog import AiSettingsDialog, gemini_client, image_model, text_model
 from gui.workers import CoverProposalWorker, RecognizeWorker
@@ -1136,6 +1136,14 @@ class MainWindow(QMainWindow):
             shown += f", … (+{len(names) - limit} weitere)"
         return shown
 
+    @staticmethod
+    def _purge_folder_label(info: PurgeFolderInfo) -> str:
+        """Ordner fuer die Bestaetigungsabfrage, z.B. 05 (3 Datei(en), mit Kartencover)"""
+        details = [f"{info.file_count} Datei(en)"] if info.file_count else ["leer"]
+        if info.has_card:
+            details.append("mit Kartencover")
+        return f"{info.name} ({', '.join(details)})"
+
     def _purge_confirmation_text(self, preview: PurgePreview) -> str:
         """Baut die Bestaetigungsabfrage-Nachricht aus einer PurgePreview,
         damit vor dem unwiderruflichen Loeschen konkret sichtbar ist, was
@@ -1157,14 +1165,28 @@ class MainWindow(QMainWindow):
                 f"• {preview.foreign_items_in_folders} Fremddatei(en)/-ordner "
                 "innerhalb von 01-99/mp3/advert"
             )
+        if preview.folders_to_delete:
+            lines.append(
+                f"• {len(preview.folders_to_delete)} Ordner ohne Tracks werden gelöscht: "
+                f"{self._format_name_list([self._purge_folder_label(f) for f in preview.folders_to_delete])}"
+            )
         if preview.is_empty:
             lines.append("• Keine Fremddateien oder -ordner gefunden.")
 
+        if preview.folders_kept_without_tracks:
+            lines.append("")
+            lines.append(
+                f"{len(preview.folders_kept_without_tracks)} Ordner ohne gültige Tracks (001.mp3 …) bleiben "
+                "erhalten, weil sie anders benannte MP3s, ein Kartencover oder Reste eines abgebrochenen "
+                "Kopiervorgangs enthalten – bitte selbst prüfen: "
+                f"{self._format_name_list([self._purge_folder_label(f) for f in preview.folders_kept_without_tracks])}"
+            )
+
         lines.append("")
         lines.append(
-            "Außerdem werden leere Ordner gelöscht und die Tracks in jedem "
-            "Ordner lückenlos neu nummeriert. Die Ordnernummern bleiben "
-            "unverändert, programmierte RFID-Karten bleiben also gültig."
+            "Außerdem werden die Tracks in jedem Ordner lückenlos neu "
+            "nummeriert. Die Ordnernummern bleiben unverändert, programmierte "
+            "RFID-Karten bleiben also gültig."
         )
         lines.append("")
         lines.append("Fortfahren?")
@@ -2413,14 +2435,18 @@ class MainWindow(QMainWindow):
                 return
             self._populate_folder_list()
         self._release_files()
+        # Ersetzen: erst in einen Zwischenordner kopieren, die alten Tracks
+        # werden erst nach dem Kopieren ausgetauscht (_on_import_copied)
+        staging = None
         if mode == library_import.MODE_REPLACE:
             try:
-                library_import.clear_folder_tracks(self.sd_card, folder)
+                staging = library_import.create_staging_folder(folder)
             except OSError as e:
-                QMessageBox.warning(self, "Fehler", f"Vorhandene Tracks konnten nicht entfernt werden: {e}")
+                QMessageBox.warning(self, "Fehler", f"Zwischenordner für das Ersetzen nicht anlegbar: {e}")
                 self._start_next_import()
                 return
-        free_slots = MAX_TRACKS_PER_FOLDER - folder.track_count
+        target = staging or folder
+        free_slots = MAX_TRACKS_PER_FOLDER - target.track_count
         files = [f for f in only_tracks if f in album.tracks] or list(only_tracks) if only_tracks else list(album.tracks)
         if len(files) > free_slots:
             QMessageBox.warning(self, "Zu viele Tracks",
@@ -2434,12 +2460,12 @@ class MainWindow(QMainWindow):
         dialog.setWindowModality(Qt.WindowModality.WindowModal)
         dialog.setMinimumDuration(0)
         dialog.setValue(0)
-        worker = TrackAddWorker(folder, files, self.audio_converter, self.metadata_manager)
+        worker = TrackAddWorker(target, files, self.audio_converter, self.metadata_manager)
         job = {"album": album, "folder": folder, "mode": mode, "worker": worker, "dialog": dialog,
-               "errors": [], "write_tags": write_tags}
+               "errors": [], "write_tags": write_tags, "staging": staging}
         self._import_job = job
         worker.progress.connect(lambda cur, total, name: self._on_import_progress(dialog, cur, total, name))
-        worker.track_added.connect(lambda track: folder.tracks.append(track))
+        worker.track_added.connect(lambda track: target.tracks.append(track))
         worker.error.connect(lambda name, msg: job["errors"].append(f"{name}: {msg}"))
         worker.completed.connect(self._on_import_copied)
         dialog.canceled.connect(worker.cancel)
@@ -2458,6 +2484,11 @@ class MainWindow(QMainWindow):
         folder, album = job["folder"], job["album"]
         if self.sd_card is None:
             return  # Karte wurde waehrend des Kopierens entfernt
+        staging = job["staging"]
+        if staging is not None and not self._commit_replace(job, added):
+            if self._import_queue:
+                self._start_next_import()
+            return
         folder.tracks.sort(key=lambda t: t.index)
         result = library_import.ImportResult(added=added, errors=list(job["errors"]))
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -2483,6 +2514,40 @@ class MainWindow(QMainWindow):
         elif self._library is not None:
             self.library_view.set_library(self._library, self._library_index, get_archive(self, ask=False))
             self.library_view.set_sd_map(self._sd_album_map)
+
+    def _commit_replace(self, job: dict, added: int) -> bool:
+        """Ersetzen nach dem Kopieren abschliessen. Abgebrochen oder nichts
+        kopiert: Zwischenordner verwerfen, die alten Tracks bleiben. Gibt
+        zurueck, ob ersetzt wurde (nur dann folgt der Album-Abgleich)."""
+        folder, staging = job["folder"], job["staging"]
+        self._release_files()
+        if job["worker"].is_cancelled or added == 0:
+            library_import.discard_staging_folder(staging)
+            reason = "abgebrochen" if job["worker"].is_cancelled else "keine Tracks kopiert"
+            self.status_bar.showMessage(f"Ordner {folder.index:02d}: Ersetzen {reason} – die bisherigen Tracks "
+                                        "bleiben erhalten")
+            if job["errors"]:
+                QMessageBox.warning(self, "Ersetzen fehlgeschlagen",
+                                    "Es wurde nichts ersetzt, die bisherigen Tracks bleiben erhalten.\n\n"
+                                    + "\n".join(job["errors"]))
+            return False
+        try:
+            library_import.commit_staged_replace(self.sd_card, folder, staging)
+        except OSError as e:
+            QMessageBox.warning(self, "Ersetzen fehlgeschlagen",
+                                f"Die Tracks konnten nicht ausgetauscht werden: {e}\n\nDie neu kopierten Tracks "
+                                f"liegen ggf. noch in {staging.path}.")
+            self._rescan_after_failed_replace()
+            return False
+        return True
+
+    def _rescan_after_failed_replace(self):
+        """Nach einem halb ausgefuehrten Austausch den Kartenstand neu einlesen"""
+        try:
+            self.sd_card.scan()
+        except OSError:
+            log.exception("Neu-Einlesen nach fehlgeschlagenem Ersetzen")
+        self._populate_folder_list()
 
     def closeEvent(self, event):
         """Wird beim Schliessen aufgerufen"""
@@ -2513,6 +2578,9 @@ class MainWindow(QMainWindow):
         if job is not None and job["worker"].isRunning():
             job["worker"].cancel()
             job["worker"].wait(3000)
+        if job is not None and job["staging"] is not None and not job["worker"].isRunning():
+            # Abgebrochenes Ersetzen: alte Tracks sind noch da, Zwischenordner weg
+            library_import.discard_staging_folder(job["staging"])
 
         # Scan und Bereinigung sind nicht abbrechbar - kurz auslaufen lassen
         if self._cover_batch_worker is not None and self._cover_batch_worker.isRunning():
@@ -2522,3 +2590,6 @@ class MainWindow(QMainWindow):
         for worker in (self.scanner, self._purge_worker):
             if worker is not None and worker.isRunning():
                 worker.wait(3000)
+
+        # Ersetzte, noch laufende Worker (Suchen in Dialogen usw.)
+        wait_for_retired_workers(3000)

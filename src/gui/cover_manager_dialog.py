@@ -52,7 +52,7 @@ from gui import theme
 from gui.tag_diff_dialog import TagDiffDialog
 from gui.workers import (
     BackIdeasWorker, CharacterSheetWorker, CoverBackGenerateWorker, CoverExtendWorker, CoverGenerateWorker,
-    CoverResearchWorker, SeriesDetectWorker, StyleBibleWorker,
+    CoverResearchWorker, SeriesDetectWorker, StyleBibleWorker, retire_worker,
 )
 
 log = logging.getLogger(__name__)
@@ -507,11 +507,11 @@ class CoverManagerDialog(QDialog):
         form = QFormLayout()
         self.search_title_edit = QLineEdit()
         self.search_title_edit.setPlaceholderText("Album- bzw. Folgentitel")
-        self.search_title_edit.returnPressed.connect(self._start_search)
+        self.search_title_edit.returnPressed.connect(self._search_from_enter)
         form.addRow("Titel:", self.search_title_edit)
         self.search_artist_edit = QLineEdit()
         self.search_artist_edit.setPlaceholderText("Interpret / Hörspielreihe (optional)")
-        self.search_artist_edit.returnPressed.connect(self._start_search)
+        self.search_artist_edit.returnPressed.connect(self._search_from_enter)
         form.addRow("Interpret:", self.search_artist_edit)
         layout.addLayout(form)
 
@@ -1513,6 +1513,13 @@ class CoverManagerDialog(QDialog):
     def _selected_sources(self) -> List[str]:
         return [s for s, check in self.source_checks.items() if check.isChecked() and check.isEnabled()]
 
+    def _search_from_enter(self):
+        """Enter in den Suchfeldern - waehrend einer laufenden Suche ignoriert
+        (der Suchen-Knopf ist dann ohnehin gesperrt)"""
+        if self._search_worker is not None and self._search_worker.isRunning():
+            return
+        self._start_search()
+
     def _start_search(self):
         title = self.search_title_edit.text().strip()
         if not title:
@@ -1520,9 +1527,10 @@ class CoverManagerDialog(QDialog):
             return
         sources = self._selected_sources()
         QSettings().setValue(SETTINGS_SOURCES, sources)
-        if self._search_worker is not None and self._search_worker.isRunning():
-            self._search_worker.cancel()
-            self._search_worker.wait(3000)
+        # Laufende Suche nicht verwerfen, sondern ausmustern (laeuft ohne
+        # Wirkung zu Ende) - ein zerstoerter laufender QThread wuerde die App beenden
+        retire_worker(self._search_worker)
+        self._search_worker = None
         for candidate in [c for c in self.candidates if c.section == SECTION_ONLINE]:
             self._remove_candidate(candidate)
         self._search_started = True
@@ -1736,6 +1744,8 @@ class CoverManagerDialog(QDialog):
 
     def _archive_previous(self, current: Candidate, label: str):
         entry = self.archive.add_cover(self.album_id, current.data, KIND_LOCAL, source=label)
+        if any(c.entry is not None and c.entry.id == entry.id for c in self.candidates):
+            return  # genau dieses Bild liegt schon im Archiv und in der Galerie
         archived = Candidate(SECTION_ARCHIVE, entry.label, current.data, KIND_LOCAL, entry=entry)
         self._add_candidate(archived)
 
@@ -2463,4 +2473,7 @@ class CoverManagerDialog(QDialog):
                 if hasattr(worker, "cancel"):
                     worker.cancel()
                 worker.wait(1000)
+            # Haengt er noch (Netzwerk, KI), am Leben halten statt mit dem Dialog zu zerstoeren
+            if worker is not None and worker.isRunning():
+                retire_worker(worker)
         super().done(result)

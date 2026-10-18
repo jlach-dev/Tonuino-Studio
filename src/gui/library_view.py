@@ -23,7 +23,7 @@ from core.library import (
 from gui import theme
 from gui.common import icon_from_glyph
 from gui.library_dnd import make_album_mime, make_tracks_mime
-from gui.workers import AlbumTracksWorker
+from gui.workers import AlbumTracksWorker, retire_worker
 
 TILE_WIDTH = 176
 COVER_SIZE = 150
@@ -376,9 +376,9 @@ class LibraryView(QWidget):
             return
         self.album_panel.show_album(album, self._pixmap(album), self.badges_for(album))
         self.pages.setCurrentWidget(self.album_panel)
-        if self._tracks_worker is not None and self._tracks_worker.isRunning():
-            self._tracks_worker.cancel()
-            self._tracks_worker.wait(1000)
+        # Vorigen Lesevorgang nicht verwerfen, sondern ausmustern (laeuft ohne
+        # Wirkung zu Ende, ohne den GUI-Thread zu blockieren)
+        retire_worker(self._tracks_worker)
         self._tracks_worker = AlbumTracksWorker(album)
         self._tracks_worker.done.connect(self._on_tracks_read)
         self._tracks_worker.start()
@@ -400,6 +400,8 @@ class LibraryView(QWidget):
         if self._tracks_worker is not None and self._tracks_worker.isRunning():
             self._tracks_worker.cancel()
             self._tracks_worker.wait(2000)
+        retire_worker(self._tracks_worker)
+        self._tracks_worker = None
 
     # --- Daten ---
 

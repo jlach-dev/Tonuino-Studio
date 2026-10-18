@@ -14,7 +14,9 @@ Ablauf (siehe import_album / finish_import):
 """
 
 import logging
+import shutil
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, List, Optional
 
 from core import album_identity, card_store
@@ -60,9 +62,51 @@ def library_album_for(path: str, index=None) -> LibraryAlbum:
 
 
 def clear_folder_tracks(sd_card: SDCard, folder: Folder):
-    """Ersetzen: alle Tracks des Ordners loeschen (Kartencover-Dateien bleiben)"""
+    """Alle Tracks des Ordners loeschen (Kartencover-Dateien bleiben)"""
     if folder.tracks:
         sd_card.delete_tracks(folder, list(folder.tracks))
+
+
+# Ersetzen kopiert erst in diesen Unterordner des SD-Ordners und tauscht die
+# Tracks erst danach aus - so bleiben die alten Tracks erhalten, wenn das
+# Kopieren abgebrochen wird oder komplett scheitert. Der Name beginnt mit
+# .tmp_, damit SDCard.purge() Reste davon nie loescht.
+STAGING_DIR_NAME = ".tmp_import"
+
+
+def create_staging_folder(folder: Folder) -> Folder:
+    """Leerer Zwischenordner fuer den Modus Ersetzen (Reste eines frueheren,
+    abgebrochenen Imports werden verworfen - die alten Tracks liegen dann
+    noch unangetastet im Ordner)"""
+    path = Path(folder.path) / STAGING_DIR_NAME
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+    path.mkdir()
+    return Folder(index=folder.index, path=str(path))
+
+
+def discard_staging_folder(staging: Folder):
+    shutil.rmtree(staging.path, ignore_errors=True)
+
+
+def commit_staged_replace(sd_card: SDCard, folder: Folder, staging: Folder) -> bool:
+    """Ersetzen abschliessen: alte Tracks loeschen und die kopierten aus dem
+    Zwischenordner als 001.mp3, 002.mp3, ... in den Ordner holen. Ohne
+    kopierte Tracks bleibt alles beim Alten (Rueckgabe False)."""
+    staged = sorted(staging.tracks, key=lambda t: t.index)
+    if not staged:
+        discard_staging_folder(staging)
+        return False
+    clear_folder_tracks(sd_card, folder)
+    moved = []
+    for position, track in enumerate(staged, start=1):
+        target = Path(folder.path) / f"{position:03d}.mp3"
+        Path(track.filepath).rename(target)
+        track.index, track.filename, track.filepath = position, target.name, str(target)
+        moved.append(track)
+    folder.tracks = moved
+    discard_staging_folder(staging)
+    return True
 
 
 def resolve_album_id(album: LibraryAlbum, archive: Optional[CoverArchive]) -> str:
@@ -250,13 +294,12 @@ def import_album(sd_card: SDCard, folder: Folder, album: LibraryAlbum, audio_con
     danach finish_import. tracks = nur diese Dateien des Albums (Teilimport)."""
     from gui.workers import TrackAddWorker
     result = ImportResult()
-    if mode == MODE_REPLACE:
-        clear_folder_tracks(sd_card, folder)
-    worker = TrackAddWorker(folder, list(tracks) if tracks else list(album.tracks), audio_converter,
+    target = create_staging_folder(folder) if mode == MODE_REPLACE else folder
+    worker = TrackAddWorker(target, list(tracks) if tracks else list(album.tracks), audio_converter,
                             metadata_manager)
 
     def on_added(track):
-        folder.tracks.append(track)
+        target.tracks.append(track)
         result.added += 1
 
     worker.track_added.connect(on_added)
@@ -264,6 +307,8 @@ def import_album(sd_card: SDCard, folder: Folder, album: LibraryAlbum, audio_con
     if progress is not None:
         worker.progress.connect(progress)
     worker.run()  # synchron im aufrufenden Thread
+    if target is not folder and not commit_staged_replace(sd_card, folder, target):
+        return result  # nichts kopiert - alte Tracks bleiben, kein Album-Abgleich
     folder.tracks.sort(key=lambda t: t.index)
     return finish_import(sd_card, folder, album, archive, metadata_manager, write_library_tags, orientation, result)
 

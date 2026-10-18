@@ -37,6 +37,32 @@ def silent_mp3(tmp_path):
     return path
 
 
+def test_archive_detects_duplicates_by_image_data_not_source(tmp_path):
+    archive = CoverArchive(str(tmp_path))
+    archive.ensure_album("a1", "Hexe")
+    first = archive.add_cover("a1", png_bytes(color=(255, 0, 0)), "local", source="Früheres Album-Cover")
+    # Zweites, anderes Bild mit gleicher Herkunft: muss ebenfalls archiviert werden
+    second = archive.add_cover("a1", png_bytes(color=(0, 255, 0)), "local", source="Früheres Album-Cover")
+    assert second.id != first.id
+    assert len(archive.covers("a1")) == 2
+    # Gleiche Bilddaten unter anderer Herkunft: kein Duplikat
+    again = archive.add_cover("a1", png_bytes(color=(255, 0, 0)), KIND_MUSICBRAINZ, source="https://x/1.png")
+    assert again.id == first.id and len(archive.covers("a1")) == 2
+    # Gleiches PIL-Bild zweimal
+    image = Image.new("RGB", (40, 60), (1, 2, 3))
+    assert archive.add_cover("a1", image, KIND_AI).id == archive.add_cover("a1", image, KIND_AI).id
+
+    # Eintraege aus aelteren Versionen ohne gespeicherten Hash: aus der Datei nachberechnen
+    import json
+    covers_json = tmp_path / "albums" / "a1" / "covers.json"
+    data = json.loads(covers_json.read_text(encoding="utf-8"))
+    for item in data:
+        item.pop("data_sha1")
+    covers_json.write_text(json.dumps(data), encoding="utf-8")
+    assert archive.add_cover("a1", png_bytes(color=(0, 255, 0)), "local").id == second.id
+    assert len(archive.covers("a1")) == 3
+
+
 def test_archive_add_roles_and_delete(tmp_path):
     archive = CoverArchive(str(tmp_path))
     archive.ensure_album("abc", "Die kleine Hexe", "Preußler", path="E:/01")

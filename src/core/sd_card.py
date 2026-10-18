@@ -56,16 +56,29 @@ class Folder:
 
 
 @dataclass
+class PurgeFolderInfo:
+    """Ein nummerierter Ordner ohne gueltige Tracks (NNN.mp3) in der PurgePreview"""
+    name: str
+    file_count: int = 0  # Dateien im Ordner (rekursiv)
+    has_card: bool = False  # Kartencover-Dateien (card.png usw.) vorhanden
+
+
+@dataclass
 class PurgePreview:
     """Vorschau dessen, was SDCard.purge() entfernen wuerde - fuer die
     Bestaetigungsabfrage vor dem eigentlichen (unwiderruflichen) Bereinigen."""
     root_files: List[str] = field(default_factory=list)
     root_dirs: List[str] = field(default_factory=list)
     foreign_items_in_folders: int = 0
+    # Ordner 01-99 ohne Tracks: ohne relevante Dateien werden sie geloescht,
+    # mit anders benannten MP3s, Kartencover oder .tmp_*-Resten bleiben sie stehen
+    folders_to_delete: List[PurgeFolderInfo] = field(default_factory=list)
+    folders_kept_without_tracks: List[PurgeFolderInfo] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
-        return not self.root_files and not self.root_dirs and not self.foreign_items_in_folders
+        return (not self.root_files and not self.root_dirs and not self.foreign_items_in_folders
+                and not self.folders_to_delete)
 
 
 class SDCard:
@@ -357,17 +370,58 @@ class SDCard:
                 if self._is_foreign_in_folder(item.name, child):
                     preview.foreign_items_in_folders += 1
 
+        # Wie purge() nach seinem scan(): direkt auf der Karte nachsehen statt
+        # self.folders zu nutzen, das seit dem letzten Scan veraltet sein kann
+        for folder_path in sorted(self.path.iterdir()):
+            if not folder_path.is_dir() or not self.FOLDER_PATTERN.match(folder_path.name):
+                continue
+            if any(c.is_file() and self.TRACK_PATTERN.match(c.name) for c in folder_path.iterdir()):
+                continue
+            info = PurgeFolderInfo(
+                name=folder_path.name,
+                file_count=sum(1 for p in folder_path.rglob("*") if p.is_file()),
+                has_card=any(c.is_file() and c.name.lower() in CARD_FILES for c in folder_path.iterdir()),
+            )
+            if self._has_relevant_files(folder_path):
+                preview.folders_kept_without_tracks.append(info)
+            else:
+                preview.folders_to_delete.append(info)
+
         return preview
+
+    def _has_relevant_files(self, folder_path: Path) -> bool:
+        """True, wenn ein Ordner ohne NNN.mp3-Tracks trotzdem etwas enthaelt,
+        das nicht verloren gehen darf: MP3s mit anderem Namen (z.B.
+        "01 - Titel.mp3"), Kartencover-Dateien oder .tmp_*-Reste eines
+        abgebrochenen Umbenennens/Imports. Solche Ordner loescht purge() nie."""
+        for child in folder_path.iterdir():
+            if self._is_temp_leftover(child.name):
+                return True
+            if not child.is_file() or self._is_appledouble(child.name):
+                continue
+            if child.suffix.lower() == ".mp3" or child.name.lower() in CARD_FILES:
+                return True
+        return False
 
     def _is_foreign_in_folder(self, folder_name: str, child: Path) -> bool:
         """True fuer alles in einem erlaubten Ordner, was keine echte mp3 ist.
         Ausnahme: die Kartencover-Dateien (card.png usw.) in den nummerierten
-        Ordnern 01-99 - die legt der Manager selbst an."""
+        Ordnern 01-99 - die legt der Manager selbst an. .tmp_*-Reste (abgebrochenes
+        Umbenennen/Import) bleiben ebenfalls stehen, darin koennen die einzigen
+        Kopien von Tracks liegen."""
+        if self._is_temp_leftover(child.name):
+            return False
         if child.is_dir() or self._is_appledouble(child.name):
             return True
         if child.name.lower() in CARD_FILES and self.FOLDER_PATTERN.match(folder_name):
             return False
         return child.suffix.lower() != ".mp3"
+
+    @staticmethod
+    def _is_temp_leftover(name: str) -> bool:
+        """True fuer temporaere Eintraege des Managers (.tmp_001.mp3 beim
+        Umnummerieren, .tmp_import beim Ersetzen)"""
+        return name.startswith(".tmp_")
 
     @staticmethod
     def _is_appledouble(name: str) -> bool:
@@ -429,9 +483,11 @@ class SDCard:
                 continue
 
             for child in item.iterdir():
+                if not self._is_foreign_in_folder(item.name, child):
+                    continue
                 if child.is_dir():
                     self._force_rmtree(child)
-                elif self._is_foreign_in_folder(item.name, child):
+                else:
                     self._force_unlink(child)
 
     def purge(self):
@@ -446,11 +502,14 @@ class SDCard:
         #    AppleDouble-Dateien, keine Unterordner).
         self.scan()
 
-        # 2. Numerierte Ordner ohne Tracks entfernen (samt Fremdinhalt); die
-        #    uebrigen Ordner behalten ihre Nummer, auch wenn dadurch Luecken
+        # 2. Numerierte Ordner ohne Tracks entfernen (samt Fremdinhalt) - aber
+        #    nur, wenn darin nichts Relevantes liegt (anders benannte MP3s,
+        #    Kartencover, .tmp_*-Reste eines abgebrochenen Umbenennens/Imports).
+        #    Die uebrigen Ordner behalten ihre Nummer, auch wenn dadurch Luecken
         #    entstehen
         for idx in list(self.folders.keys()):
-            if self.folders[idx].track_count == 0:
+            folder = self.folders[idx]
+            if folder.track_count == 0 and not self._has_relevant_files(Path(folder.path)):
                 self.delete_folder(idx)
 
         # 3. Verbleibende mp3s je numeriertem Ordner luecken- und kollisionsfrei

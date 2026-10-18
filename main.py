@@ -26,11 +26,15 @@ if src_dir not in sys.path:
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon, QFontDatabase
 from core import __version__
+from core.app_log import setup_logging
+from gui.crash_handler import install_exception_hooks
 from gui.main_window import MainWindow
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    # Log zusaetzlich in eine rotierende Datei - die EXE hat keine Konsole
+    log_file = setup_logging(logging.INFO)
+    logging.getLogger(__name__).info("Tonuino-Manager %s startet", __version__)
 
     # High DPI Skalierung aktivieren
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
@@ -40,6 +44,10 @@ def main():
     app.setApplicationName("Tonuino-Manager")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("TonuinoManager")
+
+    # Unbehandelte Ausnahmen (auch in Threads) loggen und melden, statt die
+    # App kommentarlos zu beenden
+    install_exception_hooks(log_file)
 
     icon_path = os.path.join(src_dir, "resources", "icon.ico")
     if os.path.exists(icon_path):
