@@ -12,6 +12,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from core.sd_card import SDCard, Folder, Track, MAX_TRACKS_PER_FOLDER
 from core.audio_converter import AudioConverter
+from core import loudness
 from core.metadata import MetadataManager
 from core.rfid import RFIDReader, RfidStatus
 from core.tonuino_serial import TonuinoSerial, TonuinoSerialError, TonuinoWriteCancelled
@@ -149,6 +150,10 @@ class TrackAddWorker(QThread):
 
     def run(self):
         added = 0
+        # Hat der Ordner einen manuell vergebenen Namen (steht im ersten Track),
+        # erben ihn die neuen Tracks; sonst bleibt der Ordner unberuehrt
+        first = min(self.folder.tracks, key=lambda t: t.index, default=None)
+        folder_name = self.metadata_manager.read_metadata(first.filepath).folder_name if first else ""
         for i, filepath in enumerate(self.filepaths, start=1):
             if self._cancelled:
                 break
@@ -177,8 +182,12 @@ class TrackAddWorker(QThread):
                 # uebernommen, bei MP3 mitkopiert) - dort lesen statt in der Quelle,
                 # die ggf. kein MP3 ist und von mutagen.mp3 nicht gelesen werden kann.
                 metadata = self.metadata_manager.read_metadata(str(dest_path))
-                if metadata.title:
-                    self.metadata_manager.write_metadata(str(dest_path), track_number=next_number)
+                if metadata.title or folder_name:
+                    self.metadata_manager.write_metadata(
+                        str(dest_path),
+                        track_number=next_number if metadata.title else None,
+                        folder_name=folder_name or None,
+                    )
 
                 new_track = Track(
                     index=next_number,
@@ -194,6 +203,114 @@ class TrackAddWorker(QThread):
                 self.error.emit(os.path.basename(filepath), str(e))
 
         self.completed.emit(added)
+
+
+class FolderRenameWorker(QThread):
+    """Schreibt den manuell vergebenen Ordnernamen (leer = entfernen) in die Tags
+    aller Tracks des Ordners; bei vielen Dateien auf der SD-Karte dauert das."""
+    progress = pyqtSignal(int, int)  # aktueller Index, Gesamtzahl
+    completed = pyqtSignal(int, str)  # Ordnernummer, Fehlertext (leer bei Erfolg)
+
+    def __init__(self, folder: Folder, name: str, metadata_manager: MetadataManager):
+        super().__init__()
+        self.folder_index = folder.index
+        self.filepaths = [t.filepath for t in folder.tracks]
+        self.name = name
+        self.metadata_manager = metadata_manager
+
+    def run(self):
+        failed = 0
+        for i, filepath in enumerate(self.filepaths, start=1):
+            self.progress.emit(i, len(self.filepaths))
+            if not self.metadata_manager.write_metadata(filepath, folder_name=self.name):
+                failed += 1
+        error = f"{failed} von {len(self.filepaths)} Dateien konnten nicht beschrieben werden." if failed else ""
+        self.completed.emit(self.folder_index, error)
+
+
+class LoudnessAnalysisWorker(QThread):
+    """Misst die Lautheit aller Tracks eines Ordners (nur lesend), damit die UI
+    waehrend der FFmpeg-Aufrufe nicht einfriert."""
+    progress = pyqtSignal(int, int, str)  # aktueller Index, Gesamtzahl, Dateiname
+    # Track, gemessene Lautheit in LUFS (None bei Stille/Fehler), Fehlertext (leer bei Erfolg)
+    measured = pyqtSignal(object, object, str)
+    completed = pyqtSignal()
+
+    def __init__(self, tracks: list, audio_converter: AudioConverter):
+        super().__init__()
+        self.tracks = list(tracks)
+        self.audio_converter = audio_converter
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    @property
+    def was_cancelled(self) -> bool:
+        return self._cancelled
+
+    def run(self):
+        for i, track in enumerate(self.tracks, start=1):
+            if self._cancelled:
+                break
+            self.progress.emit(i, len(self.tracks), track.filename)
+            try:
+                result = self.audio_converter.measure_loudness(track.filepath)
+                self.measured.emit(track, result.integrated, "")
+            except Exception as e:
+                log.warning("Lautheitsmessung fehlgeschlagen (%s): %s", track.filename, e)
+                self.measured.emit(track, None, str(e))
+        self.completed.emit()
+
+
+class LoudnessApplyWorker(QThread):
+    """Gleicht die Lautstaerke der uebergebenen Tracks an. Jede Datei wird zuerst
+    in eine temporaere Datei im selben Ordner geschrieben und ersetzt das Original
+    erst bei Erfolg - ein Fehler oder Abbruch laesst die Originaldatei unberuehrt."""
+    progress = pyqtSignal(int, int, str)  # aktueller Index, Gesamtzahl, Dateiname
+    error = pyqtSignal(str, str)  # Dateiname, Fehlermeldung
+    completed = pyqtSignal(int)  # Anzahl angepasster Tracks
+
+    def __init__(self, items: list, audio_converter: AudioConverter):
+        super().__init__()
+        self.items = list(items)  # [(Track, Verstaerkung in dB)]
+        self.audio_converter = audio_converter
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    @staticmethod
+    def _source_bitrate(filepath: str) -> Optional[int]:
+        try:
+            from mutagen.mp3 import MP3
+            return int(MP3(filepath).info.bitrate)
+        except Exception:
+            return None
+
+    def run(self):
+        done = 0
+        for i, (track, gain_db) in enumerate(self.items, start=1):
+            if self._cancelled:
+                break
+            self.progress.emit(i, len(self.items), track.filename)
+
+            source = Path(track.filepath)
+            temp = source.with_name(f".tmp_norm_{source.name}")
+            try:
+                bitrate = loudness.pick_bitrate_kbps(self._source_bitrate(track.filepath))
+                self.audio_converter.apply_gain(str(source), str(temp), gain_db, bitrate)
+                os.replace(temp, source)
+                done += 1
+            except Exception as e:
+                log.warning("Lautstaerke-Anpassung fehlgeschlagen (%s): %s", track.filename, e)
+                self.error.emit(track.filename, str(e))
+            finally:
+                try:
+                    temp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        self.completed.emit(done)
 
 
 class RfidPoller(QThread):
@@ -260,12 +377,14 @@ class FolderNameWorker(QThread):
 
     def run(self):
         for folder in self.folders:
-            for track in sorted(folder.tracks, key=lambda t: t.index):
+            for position, track in enumerate(sorted(folder.tracks, key=lambda t: t.index)):
                 if self._cancelled:
                     return
-                album = self.metadata_manager.read_metadata(track.filepath).album
-                if album:
-                    self.name_found.emit(folder.index, album)
+                metadata = self.metadata_manager.read_metadata(track.filepath)
+                # Ein manuell vergebener Name steht in allen Tracks - der erste genuegt
+                name = (metadata.folder_name if position == 0 else "") or metadata.album
+                if name:
+                    self.name_found.emit(folder.index, name)
                     break
         self.completed.emit()
 

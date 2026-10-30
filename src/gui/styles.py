@@ -128,7 +128,7 @@ QLabel#sidebarTitle {
 QPushButton {
     background-color: @SURFACE0@;
     color: @TEXT@;
-    border: 1px solid @SURFACE1@;
+    border: 1px solid @BORDER@;
     border-radius: 6px;
     padding: 8px 16px;
     min-height: 20px;
@@ -144,7 +144,7 @@ QPushButton:checked {
 
 QPushButton:hover {
     background-color: @SURFACE1@;
-    border-color: @SURFACE2@;
+    border-color: @BORDER_HOVER@;
 }
 
 QPushButton:pressed {
@@ -153,14 +153,14 @@ QPushButton:pressed {
 
 QPushButton:disabled {
     background-color: @BASE@;
-    color: @SURFACE2@;
+    color: @DISABLED@;
     border-color: @SURFACE0@;
 }
 
 /* === Slider (Player: Fortschritt, Lautstaerke) === */
 QSlider::groove:horizontal {
     height: 4px;
-    background: @SURFACE1@;
+    background: @BORDER@;
     border-radius: 2px;
 }
 
@@ -178,7 +178,7 @@ QSlider::handle:horizontal {
 }
 
 QSlider::handle:horizontal:hover {
-    background: @WHITE@;
+    background: @TEXT_HOVER@;
 }
 
 /* deaktiviert: nichts gefuellt, Griff abgedunkelt */
@@ -201,7 +201,7 @@ QSlider#volumeSlider {
 
 QSlider#volumeSlider::groove:horizontal {
     height: 3px;
-    background: @SURFACE1@;
+    background: @BORDER@;
     border-radius: 1px;
 }
 
@@ -221,12 +221,12 @@ QSlider#volumeSlider::handle:horizontal {
 /* "hovered" setzt ClickSlider beim Ueberfahren/Ziehen (die Pseudo-Klasse :hover
    vor ::handle versteht Qt nicht und faerbt sonst den ganzen Slider) */
 QSlider#volumeSlider[hovered="true"]::handle:horizontal {
-    background: @WHITE@;
+    background: @TEXT_HOVER@;
 }
 
 /* stumm: Leiste abgedunkelt */
 QSlider#volumeSlider[muted="true"]::sub-page:horizontal {
-    background: @SURFACE2@;
+    background: @DISABLED@;
 }
 
 QSlider#volumeSlider[muted="true"][hovered="true"]::handle:horizontal {
@@ -234,7 +234,7 @@ QSlider#volumeSlider[muted="true"][hovered="true"]::handle:horizontal {
 }
 
 QLabel:disabled {
-    color: @SURFACE2@;
+    color: @DISABLED@;
 }
 
 /* Flache Player-Steuerelemente (Zurueck/Play/Weiter) ohne Button-Hintergrund */
@@ -260,7 +260,7 @@ QPushButton#primaryButton:hover {
 
 QPushButton#primaryButton:disabled {
     background-color: @BASE@;
-    color: @SURFACE2@;
+    color: @DISABLED@;
     border-color: @SURFACE0@;
 }
 
@@ -276,7 +276,7 @@ QPushButton#dangerButton:hover {
 
 QPushButton#dangerButton:disabled {
     background-color: @BASE@;
-    color: @SURFACE2@;
+    color: @DISABLED@;
     border-color: @SURFACE0@;
 }
 
@@ -363,19 +363,19 @@ QPushButton#ghostButton:checked:hover {
 }
 
 QPushButton#softDangerButton {
-    background-color: rgba(243, 139, 168, 30);
+    background-color: rgba(@RED_RGB@, 30);
     color: @RED@;
-    border: 1px solid rgba(243, 139, 168, 70);
+    border: 1px solid rgba(@RED_RGB@, 70);
 }
 
 QPushButton#softDangerButton:hover {
-    background-color: rgba(243, 139, 168, 60);
-    border-color: rgba(243, 139, 168, 120);
+    background-color: rgba(@RED_RGB@, 60);
+    border-color: rgba(@RED_RGB@, 120);
 }
 
 QPushButton#softDangerButton:disabled {
     background-color: @BASE@;
-    color: @SURFACE2@;
+    color: @DISABLED@;
     border-color: @SURFACE0@;
 }
 QPushButton#successButton {
@@ -386,7 +386,7 @@ QPushButton#successButton {
 
 QPushButton#successButton:disabled {
     background-color: @BASE@;
-    color: @SURFACE2@;
+    color: @DISABLED@;
     border-color: @SURFACE0@;
 }
 
@@ -405,7 +405,8 @@ QListWidget::item {
 }
 
 /* Auswahlkreise der Mehrfachauswahl (wie in Apple Mail) */
-QListWidget::indicator {
+QListWidget::indicator,
+QTreeWidget#trackList::indicator {
     width: 16px;
     height: 16px;
     border-radius: 9px;
@@ -415,7 +416,8 @@ QListWidget::indicator {
 
 /* markiert: grauer Ring bleibt, innen sitzt ein deutlich kleinerer blauer Punkt
    (wie ein Radiobutton) */
-QListWidget::indicator:checked {
+QListWidget::indicator:checked,
+QTreeWidget#trackList::indicator:checked {
     background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
         stop:0 @BLUE@, stop:0.38 @BLUE@, stop:0.5 transparent, stop:1 transparent);
 }
@@ -431,17 +433,30 @@ QListWidget#coverGallery::indicator:checked {
 }
 
 /* Track-Liste: schlanke Zeilen ohne Rahmen */
-QListWidget#trackList {
+QTreeWidget#trackList {
     background: transparent;
     border: none;
     padding: 0px;
     outline: none;
 }
 
-QListWidget#trackList::item {
-    padding: 4px 10px;
-    margin: 1px 0px;
-    border-radius: 8px;
+QTreeWidget#trackList::item {
+    padding: 4px 6px;
+    border-radius: 0px;
+}
+
+QTreeWidget#trackList QHeaderView {
+    background: transparent;
+    border: none;
+}
+
+QTreeWidget#trackList QHeaderView::section {
+    background-color: transparent;
+    color: @OVERLAY0@;
+    padding: 4px 6px;
+    border: none;
+    border-bottom: 1px solid @SURFACE0@;
+    font-weight: normal;
 }
 
 QListWidget::item:selected {
@@ -478,8 +493,8 @@ QLabel#folderNameLabel {
 /* Read-only Ordnerliste: mp3/advert Tonuio-Systemordner */
 QLabel#folderBadgeSpecial {
     background-color: @BASE@;
-    color: @SURFACE2@;
-    border: 1px solid @SURFACE0@;
+    color: @SYSTEM_TEXT@;
+    border: 1px solid @SYSTEM_BORDER@;
     border-radius: 6px;
     font-weight: bold;
     font-size: 9pt;
@@ -487,7 +502,7 @@ QLabel#folderBadgeSpecial {
 }
 
 QLabel#folderNameLabelSpecial {
-    color: @SURFACE2@;
+    color: @SYSTEM_TEXT@;
     font-size: 10pt;
     font-style: italic;
 }
@@ -536,7 +551,7 @@ QHeaderView::section {
     color: @TEXT@;
     padding: 8px;
     border: none;
-    border-right: 1px solid @SURFACE1@;
+    border-right: 1px solid @BORDER@;
     font-weight: bold;
 }
 
@@ -548,13 +563,13 @@ QScrollBar:vertical {
 }
 
 QScrollBar::handle:vertical {
-    background-color: @SURFACE1@;
+    background-color: @BORDER@;
     border-radius: 6px;
     min-height: 20px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background-color: @SURFACE2@;
+    background-color: @BORDER_HOVER@;
 }
 
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
@@ -568,20 +583,20 @@ QScrollBar:horizontal {
 }
 
 QScrollBar::handle:horizontal {
-    background-color: @SURFACE1@;
+    background-color: @BORDER@;
     border-radius: 6px;
     min-width: 20px;
 }
 
 QScrollBar::handle:horizontal:hover {
-    background-color: @SURFACE2@;
+    background-color: @BORDER_HOVER@;
 }
 
 /* === Line Edit === */
 QLineEdit {
     background-color: @SURFACE0@;
     color: @TEXT@;
-    border: 1px solid @SURFACE1@;
+    border: 1px solid @BORDER@;
     border-radius: 6px;
     padding: 8px;
     selection-background-color: @BLUE@;
@@ -608,7 +623,7 @@ QPlainTextEdit:focus, QTextEdit:focus {
 QTextEdit {
     background-color: @SURFACE0@;
     color: @TEXT@;
-    border: 1px solid @SURFACE1@;
+    border: 1px solid @BORDER@;
     border-radius: 6px;
     padding: 8px;
     selection-background-color: @BLUE@;
@@ -622,14 +637,14 @@ QTextEdit:focus {
 QComboBox {
     background-color: @SURFACE0@;
     color: @TEXT@;
-    border: 1px solid @SURFACE1@;
+    border: 1px solid @BORDER@;
     border-radius: 6px;
     padding: 8px;
     min-width: 100px;
 }
 
 QComboBox:hover {
-    border-color: @SURFACE2@;
+    border-color: @BORDER_HOVER@;
 }
 
 QComboBox::drop-down {
@@ -640,7 +655,7 @@ QComboBox::drop-down {
 QComboBox QAbstractItemView {
     background-color: @SURFACE0@;
     color: @TEXT@;
-    border: 1px solid @SURFACE1@;
+    border: 1px solid @BORDER@;
     selection-background-color: @SURFACE1@;
 }
 
@@ -648,7 +663,7 @@ QComboBox QAbstractItemView {
 QSpinBox {
     background-color: @SURFACE0@;
     color: @TEXT@;
-    border: 1px solid @SURFACE1@;
+    border: 1px solid @BORDER@;
     border-radius: 6px;
     padding: 8px;
 }
@@ -757,6 +772,18 @@ QLabel#folderTitle {
     color: @TEXT@;
 }
 
+QToolButton#inlineEditIcon {
+    background: transparent;
+    border: none;
+    padding: 2px;
+}
+
+QLineEdit#folderTitleEdit {
+    font-size: 24pt;
+    font-weight: bold;
+    padding: 0px 6px;
+}
+
 QLabel#folderSubtitle {
     font-size: 15pt;
     color: @BLUE@;
@@ -823,7 +850,7 @@ QPushButton#playButton:pressed {
 }
 
 QPushButton#playButton:hover {
-    background-color: @WHITE@;
+    background-color: @TEXT_HOVER@;
 }
 
 QPushButton#playButton:disabled {
@@ -856,7 +883,7 @@ QFrame#cardFrame {
 QLabel#statusIcon {
     font-family: "Material Icons";
     font-size: 22pt;
-    color: @SURFACE2@;
+    color: @DISABLED@;
 }
 
 QLabel#statusIcon[state="ok"] {
@@ -872,7 +899,7 @@ QLabel#statusIcon[state="error"] {
 }
 
 QLabel#statusIcon[state="neutral"] {
-    color: @SURFACE2@;
+    color: @DISABLED@;
 }
 
 QLabel#statusCaption {

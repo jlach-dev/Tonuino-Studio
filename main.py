@@ -23,12 +23,13 @@ else:
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
+from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon, QFontDatabase
 from core import __version__
 from core.app_log import setup_logging
+# crash_handler liest keine Farben - darf vor set_theme() importiert werden
 from gui.crash_handler import install_exception_hooks
-from gui.main_window import MainWindow
 
 
 def main():
@@ -61,8 +62,12 @@ def main():
     if os.path.exists(icon_font_path):
         QFontDatabase.addApplicationFont(icon_font_path)
 
-    # Stylesheet laden
+    # Design waehlen, bevor die gui-Module importiert werden (sie lesen Farben schon
+    # beim Import), dann Stylesheet laden
+    from gui import theme
+    theme.set_theme(QSettings().value(theme.SETTINGS_KEY, theme.DEFAULT_THEME, type=str))
     from gui.styles import MAIN_STYLESHEET
+    from gui.main_window import MainWindow
     app.setStyleSheet(MAIN_STYLESHEET)
 
     window = MainWindow()
