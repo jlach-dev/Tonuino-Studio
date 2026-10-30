@@ -172,6 +172,10 @@ class MainWindow(QMainWindow):
         # zieht die Sidebar selbst (border-right).
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(4)
+        # Beim Ziehen nur eine Linie zeigen und erst beim Loslassen neu layouten:
+        # live kostet jeder Schritt mit der Bibliothek ~50 ms (Kacheln neu verteilen
+        # und zeichnen) - das ruckelt
+        splitter.setOpaqueResize(False)
         self._main_splitter = splitter
         
         main_layout.addWidget(splitter)

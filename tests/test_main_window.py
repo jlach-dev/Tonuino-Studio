@@ -23,6 +23,7 @@ def test_main_window_full_screen_and_state(app):
     window.show()
     app.processEvents()
     assert window.minimumSize().width() <= 900
+    assert not window._main_splitter.opaqueResize()  # Trenner zieht nur eine Linie, kein Live-Layout
 
     window.toggle_full_screen()
     app.processEvents()
