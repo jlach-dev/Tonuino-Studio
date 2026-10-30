@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from PyQt6.QtCore import QMimeData, QPoint, QRect, QRectF, QUrl, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QListWidget, QWidget
 
 from gui import theme
@@ -150,6 +150,38 @@ class DropHighlight(QWidget):
         painter.drawRoundedRect(pill, height / 2, height / 2)
         painter.setPen(QColor(theme.BASE))
         painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, text)
+
+
+DRAG_IMAGE_WIDTH = 120
+
+
+def drag_pixmap(source: QPixmap, count: int = 1) -> QPixmap:
+    """Drag-Bild aus einer gerenderten Kachel: verkleinert, leicht transparent,
+    bei mehreren Alben mit Anzahl-Abzeichen oben rechts"""
+    ratio = source.devicePixelRatio() or 1.0
+    scaled = source.scaledToWidth(int(DRAG_IMAGE_WIDTH * ratio), Qt.TransformationMode.SmoothTransformation)
+    result = QPixmap(scaled.size())
+    result.setDevicePixelRatio(ratio)
+    result.fill(Qt.GlobalColor.transparent)
+    scaled.setDevicePixelRatio(ratio)
+    painter = QPainter(result)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setOpacity(0.85)
+    painter.drawPixmap(0, 0, scaled)
+    if count > 1:
+        painter.setOpacity(1.0)
+        size = 26
+        badge = QRectF(result.width() / ratio - size - 4, 4, size, size)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(theme.BLUE))
+        painter.drawEllipse(badge)
+        font = painter.font()
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor(theme.BASE))
+        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, str(count))
+    painter.end()
+    return result
 
 
 def _folder_label(identity) -> str:

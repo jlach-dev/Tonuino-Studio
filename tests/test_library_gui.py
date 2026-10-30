@@ -5,7 +5,7 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
-from PyQt6.QtCore import QCoreApplication, QPoint, QPointF, QSettings, Qt, QUrl, QMimeData
+from PyQt6.QtCore import QCoreApplication, QPoint, QPointF, QSettings, QSize, Qt, QUrl, QMimeData
 from PyQt6.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PyQt6.QtWidgets import QApplication
 
@@ -124,6 +124,62 @@ def test_folder_list_highlights_drop_target(app, tmp_path):
     widget.dragLeaveEvent(QDragLeaveEvent())
     assert not highlight.isVisible()
     widget.close()
+
+
+def test_drag_pixmap_scales_tile_and_counts_albums(app):
+    from PyQt6.QtGui import QColor, QPixmap
+    from gui.library_dnd import DRAG_IMAGE_WIDTH, drag_pixmap
+
+    tile = QPixmap(176, 246)
+    tile.fill(QColor("#ff0000"))
+    single = drag_pixmap(tile)
+    assert single.width() == DRAG_IMAGE_WIDTH and single.height() == round(246 * DRAG_IMAGE_WIDTH / 176)
+    assert single.toImage().pixelColor(5, single.height() // 2).alpha() < 255  # leicht transparent
+
+    several = drag_pixmap(tile, 3).toImage()
+    badge = several.pixelColor(DRAG_IMAGE_WIDTH - 4 - 13, 4 + 13)
+    assert badge.blue() > badge.red()  # blaues Abzeichen statt roter Kachel
+
+
+def test_library_grid_drag_uses_tile_as_image(app, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QLabel, QListWidgetItem
+    from gui import library_view
+
+    started = {}
+
+    class FakeDrag:
+        def __init__(self, source):
+            started["source"] = source
+
+        def setMimeData(self, mime):
+            started["mime"] = mime
+
+        def setPixmap(self, pixmap):
+            started["pixmap"] = pixmap
+
+        def setHotSpot(self, point):
+            started["hotspot"] = point
+
+        def exec(self, action):
+            started["action"] = action
+
+    monkeypatch.setattr(library_view, "QDrag", FakeDrag)
+    grid = library_view.LibraryGrid()
+    for name in ("A", "B"):
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, str(tmp_path / name))
+        item.setSizeHint(QSize(176, 246))
+        grid.addItem(item)
+        tile = QLabel(name)
+        tile.resize(176, 246)
+        grid.setItemWidget(item, tile)
+    grid.item(0).setSelected(True)
+    grid.item(1).setSelected(True)
+
+    grid.startDrag(Qt.DropAction.CopyAction)
+
+    assert album_paths_from_mime(started["mime"]) == [str(tmp_path / "A"), str(tmp_path / "B")]
+    assert not started["pixmap"].isNull() and started["action"] == Qt.DropAction.CopyAction
 
 
 def test_drop_area_highlight_follows_drag(app, tmp_path):

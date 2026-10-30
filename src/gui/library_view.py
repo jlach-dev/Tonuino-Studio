@@ -9,8 +9,8 @@ ziehen (gui/library_dnd.py).
 
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import QPoint, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QDrag, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QPushButton, QStackedWidget, QVBoxLayout, QWidget,
@@ -22,7 +22,7 @@ from core.library import (
 )
 from gui import theme
 from gui.common import icon_from_glyph
-from gui.library_dnd import make_album_mime, make_tracks_mime
+from gui.library_dnd import drag_pixmap, make_album_mime, make_tracks_mime
 from gui.workers import AlbumTracksWorker, retire_worker
 
 TILE_WIDTH = 176
@@ -59,6 +59,23 @@ class LibraryGrid(QListWidget):
         paths = [item.data(Qt.ItemDataRole.UserRole) for item in items
                  if item.flags() & Qt.ItemFlag.ItemIsDragEnabled]
         return make_album_mime(paths)
+
+    def startDrag(self, supported_actions):
+        """Eigenes Drag-Bild: die Kachel selbst. QListView zeichnet Item-Widgets
+        nicht mit, sonst zoege man nur einen leeren grauen Rahmen."""
+        items = [i for i in self.selectedItems() if i.flags() & Qt.ItemFlag.ItemIsDragEnabled]
+        if not items:
+            return
+        drag = QDrag(self)
+        drag.setMimeData(self.mimeData(items))
+        current = self.currentItem() if self.currentItem() in items else items[0]
+        tile = self.itemWidget(current)
+        if tile is not None:
+            pixmap = drag_pixmap(tile.grab(), len(items))
+            ratio = pixmap.devicePixelRatio() or 1.0
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(QPoint(int(pixmap.width() / ratio / 2), int(pixmap.height() / ratio / 2)))
+        drag.exec(Qt.DropAction.CopyAction)
 
 
 class TrackListWidget(QListWidget):
