@@ -262,9 +262,11 @@ def albums_without_cover(index: LibraryIndex) -> List[LibraryAlbum]:
 # --- Uebernehmen -----------------------------------------------------------------------------
 
 def apply_proposals(proposals: Iterable[AlbumProposal], archive: Optional[CoverArchive],
-                    progress: Optional[Callable[[int, int, str], None]] = None) -> EmbedResult:
+                    progress: Optional[Callable[[int, int, str], None]] = None,
+                    write_album_ids: bool = False) -> EmbedResult:
     """Schreibt die Cover der uebergebenen (angehakten) Vorschlaege: in die
-    Dateien, als cover.jpg und ins Archiv (Rolle Album-Cover)"""
+    Dateien, als cover.jpg und ins Archiv (Rolle Album-Cover). Die Album-ID
+    kommt nur mit write_album_ids (Erlaubnis des Nutzers) in die Dateien."""
     import io
     from PIL import Image
     from core.card_layout import album_cover_jpeg
@@ -291,18 +293,21 @@ def apply_proposals(proposals: Iterable[AlbumProposal], archive: Optional[CoverA
         album.has_cover = True
         if archive is not None and proposal.hit is not None and proposal.hit.source != SOURCE_ARCHIVE:
             try:
-                _archive_cover(archive, album, proposal, jpeg)
+                _archive_cover(archive, album, proposal, jpeg, write_album_ids)
             except Exception as e:
                 log.warning("Cover von %s konnte nicht archiviert werden: %s", album.name, e)
     return result
 
 
-def _archive_cover(archive: CoverArchive, album: LibraryAlbum, proposal: AlbumProposal, jpeg: bytes):
+def _archive_cover(archive: CoverArchive, album: LibraryAlbum, proposal: AlbumProposal, jpeg: bytes,
+                   write_album_ids: bool = False):
     from core import album_identity
     album_id = album.album_id
     if not album_id:
         album_id = album_identity.new_album_id()
-        write_album_id_to_album(album, album_id)
+        if write_album_ids:
+            write_album_id_to_album(album, album_id)
+        # ohne Tag haelt der Bibliothekspfad im Archiv-Eintrag die Verknuepfung
     archive.ensure_album(album_id, album.title, album.artist, path=album.path)
     hit = proposal.hit
     entry = archive.add_cover(album_id, proposal.data, KIND_ONLINE, source=hit.image_url or hit.page_url,

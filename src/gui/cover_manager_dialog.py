@@ -50,6 +50,8 @@ from gui.common import confirm_action, icon_from_glyph
 from gui.text_style_dialog import TextStylesPopup
 from gui import theme
 from gui.tag_diff_dialog import TagDiffDialog
+from gui.crash_handler import guarded_slot
+from gui.library_settings_dialog import library_id_tags_allowed
 from gui.workers import (
     BackIdeasWorker, CharacterSheetWorker, CoverBackGenerateWorker, CoverExtendWorker, CoverGenerateWorker,
     CoverResearchWorker, SeriesDetectWorker, StyleBibleWorker, retire_worker,
@@ -1020,6 +1022,7 @@ class CoverManagerDialog(QDialog):
         self._rebuild_series_combo()
         self._assign_series(profile)
 
+    @guarded_slot("Serie zuordnen")
     def _on_series_detected(self, name: str, mb_series_id: str):
         self._detected_series = (name, mb_series_id)
         store = self._series_store()
@@ -1045,6 +1048,7 @@ class CoverManagerDialog(QDialog):
         if not self._series_loading and self.series_profile is not None:
             self._series_save_timer.start()
 
+    @guarded_slot("Serie speichern")
     def _save_series_profile(self):
         store = self._series_store()
         profile = self.series_profile
@@ -1112,6 +1116,7 @@ class CoverManagerDialog(QDialog):
         else:
             self.series_status.setText("")
 
+    @guarded_slot("Anker setzen")
     def _add_anchor_from_preview(self):
         profile, source = self.series_profile, self._preview_source()
         if profile is None or source is None or self.archive is None:
@@ -1205,6 +1210,7 @@ class CoverManagerDialog(QDialog):
         self._sheet_worker.finished.connect(self._update_series_ui)
         self._sheet_worker.start()
 
+    @guarded_slot("Charakterblatt speichern")
     def _on_character_sheet(self, image: Image.Image):
         """Im Archiv speichern, als Anker setzen und in der Galerie zeigen"""
         profile = self.series_profile
@@ -1273,7 +1279,9 @@ class CoverManagerDialog(QDialog):
         self.archive.ensure_album(self.album_id, title, self.info.artist, path=self.folder.path)
         if self.series_profile is not None:
             self.archive.assign_album(self.album_id, self.series_profile.id)
-        if not self._album_tagged and self.folder.tracks:
+        # In der Bibliothek sind die Tracks die Originaldateien: dort nur mit der
+        # beim ersten Import erteilten Erlaubnis taggen (sonst Verknuepfung ueber Pfad)
+        if not self._album_tagged and self.folder.tracks and (not self.library_mode or library_id_tags_allowed()):
             self._release_player()
             album_identity.write_album_id(self._track_paths(), self.album_id)
             self._album_tagged = True
@@ -1286,8 +1294,14 @@ class CoverManagerDialog(QDialog):
     # --- Galerie ------------------------------------------------------------------------------
 
     def _add_candidate(self, candidate: Candidate, select: bool = False):
+        # Erst dekodieren, dann aufnehmen: ein kaputtes Bild (abgeschnittenes
+        # eingebettetes Cover, halb synchronisierte Archivdatei) wird uebersprungen
+        try:
+            thumb = candidate.image().copy()
+        except (OSError, ValueError) as e:
+            log.warning("Bild %s nicht lesbar, uebersprungen: %s", candidate.label, e)
+            return
         self.candidates.append(candidate)
-        thumb = candidate.image().copy()
         thumb.thumbnail((self.THUMB * 2, self.THUMB * 2))
         item = QListWidgetItem(QIcon(pil_to_pixmap(thumb)), self._item_text(candidate))
         item.setData(Qt.ItemDataRole.UserRole, candidate)
@@ -1484,6 +1498,7 @@ class CoverManagerDialog(QDialog):
         self._set_all_marks(False)
         self._flash(f"{len(marked)} Bild(er) {'als KI-Vorlage markiert' if new_state else 'keine Vorlage mehr'}.")
 
+    @guarded_slot("Verwerfen")
     def _discard_marked(self):
         marked = [c for c in self._marked_candidates() if c.section != SECTION_CURRENT]
         archived = [c for c in marked if c.kept]
@@ -1749,6 +1764,7 @@ class CoverManagerDialog(QDialog):
         archived = Candidate(SECTION_ARCHIVE, entry.label, current.data, KIND_LOCAL, entry=entry)
         self._add_candidate(archived)
 
+    @guarded_slot("Album-Cover setzen")
     def _set_album_cover(self):
         candidate = self.selected
         if candidate is None or not self.folder.tracks or candidate.is_album_cover:
@@ -1828,6 +1844,7 @@ class CoverManagerDialog(QDialog):
             series_style=self.series_style.to_dict(),
         )
 
+    @guarded_slot("Kartencover übernehmen")
     def _set_card_cover(self):
         front = self.front_source or (SideSource(self.selected) if self.selected is not None else None)
         if front is None:
@@ -2011,6 +2028,7 @@ class CoverManagerDialog(QDialog):
         self.side_bar.setCurrentIndex(1)
         self._render_preview()
 
+    @guarded_slot("Rückseite hinzufügen")
     def _add_back_file(self):
         """Datei vom PC als Rueckseite des angeklickten Covers"""
         if self.selected is None:
@@ -2357,6 +2375,7 @@ class CoverManagerDialog(QDialog):
                 candidate.entry.roles = roles[candidate.entry.id]
         self._refresh_item_texts()
 
+    @guarded_slot("Bild hinzufügen")
     def _add_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Bild auswählen", "", "Bilder (*.jpg *.jpeg *.png *.webp);;Alle (*)")
         if not path:

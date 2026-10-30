@@ -90,11 +90,17 @@ def test_cover_manager_library_mode(tmp_path, monkeypatch):
     archived = next(c for c in dialog.candidates if c.entry is not None and c.entry.id == entry.id)
     dialog.selected = archived
 
+    QSettings().setValue("library/write_id_tags", "no")  # ohne Erlaubnis bleiben die Originale ohne ID
+    dialog._persist_album()
+    assert album_identity.read_album_id([str(flac)]) is None
+    QSettings().setValue("library/write_id_tags", "yes")
+
     dialog._set_album_cover()
     assert (folder_path / "cover.jpg").exists()
     for path in paths:
         assert MetadataManager().get_cover_bytes(path)
     assert album_identity.read_album_id([str(flac)]) == "lib1"
+    QSettings().remove("library/write_id_tags")
     assert ROLE_ALBUM_COVER in archive.covers("lib1")[0].roles
 
     dialog.title_edit.setPlainText("Die kleine Hexe")

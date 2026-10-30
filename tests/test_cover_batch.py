@@ -82,7 +82,7 @@ def test_propose_all_and_apply(tmp_path, monkeypatch):
                             progress=lambda i, n, name: seen.append(name), download=lambda url: png_bytes())
     assert seen == ["Die kleine Hexe"] and len(proposals) == 1 and proposals[0].certain
 
-    result = cover_batch.apply_proposals(proposals, archive)
+    result = cover_batch.apply_proposals(proposals, archive, write_album_ids=True)
     assert (result.albums, result.tracks, result.skipped) == (1, 2, 0)
     assert (folder / "cover.jpg").exists()
     assert MetadataManager().get_cover_bytes(str(folder / "02.mp3"))[:3] == b"\xff\xd8\xff"

@@ -172,3 +172,9 @@ class LibrarySourcesDialog(QDialog):
     def accept(self):
         save_library_sources(self.sources)
         super().accept()
+
+
+def library_id_tags_allowed() -> bool:
+    """Darf die Album-ID in die Originaldateien der Bibliothek geschrieben werden?
+    Nur nach ausdruecklicher Zustimmung (gefragt beim ersten Import)."""
+    return QSettings().value(SETTINGS_WRITE_ID_TAGS, "", type=str) == "yes"

@@ -7,6 +7,7 @@ kommentarlos. Stattdessen: Traceback ins Log (siehe core/app_log.py), Meldung
 im GUI-Thread anzeigen, App weiterlaufen lassen.
 """
 
+import functools
 import logging
 import sys
 import threading
@@ -84,6 +85,26 @@ def _threading_hook(args):
         return
     handle_exception(args.exc_type, args.exc_value, args.exc_traceback,
                      args.thread.name if args.thread is not None else "")
+
+
+def guarded_slot(title: str):
+    """Fuer Slots, die Dateien oder das Archiv aendern: ein Datei- oder
+    Formatfehler (z.B. Google Drive sperrt gerade covers.json, SD-Karte gezogen,
+    kaputtes Bild) wird als Warnung gemeldet statt als "unerwarteter Fehler".
+    Uebergibt nur so viele Signal-Argumente, wie der Slot annimmt."""
+    def decorate(method):
+        accepted = method.__code__.co_argcount - 1  # ohne self
+
+        @functools.wraps(method)
+        def wrapper(self, *args):
+            try:
+                return method(self, *args[:accepted])
+            except (OSError, ValueError) as e:
+                log.warning("%s fehlgeschlagen", title, exc_info=True)
+                QMessageBox.warning(self, title, f"{title} hat nicht geklappt:\n{e}")
+                return None
+        return wrapper
+    return decorate
 
 
 def install_exception_hooks(log_file: Optional[Path] = None):

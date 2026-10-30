@@ -1740,6 +1740,7 @@ class MainWindow(QMainWindow):
             self._show_folder(folder)
         if dialog.card_changed:
             self.status_bar.showMessage(f"Kartencover für Ordner {folder.index:02d} gespeichert")
+        dialog.deleteLater()  # sonst bleibt jeder Dialog samt aller Bilder bis zum Programmende im Speicher
 
     def _open_tag_lookup_dialog(self):
         """Tags des gewaehlten Ordners aus MusicBrainz (bzw. Deezer/iTunes) uebernehmen"""
@@ -2612,6 +2613,7 @@ class MainWindow(QMainWindow):
             if dialog.album_cover_changed:
                 self.status_bar.showMessage(f"Album-Cover von „{album.name}“ in die Bibliothek geschrieben")
             self._refresh_library_album(album.path)
+        dialog.deleteLater()  # siehe _open_card_cover_dialog
 
     def _library_embed_covers(self):
         """Cover-Stapelsuche: Vorschlaege fuer alle Bibliotheksalben ohne Cover (Archiv,

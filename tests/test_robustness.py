@@ -177,3 +177,25 @@ def test_failed_copy_leaves_no_half_track(tmp_path, monkeypatch):
 
     assert not added and errors and "NAS" in errors[0]
     assert list((tmp_path / "01").iterdir()) == []
+
+
+def test_guarded_slot_reports_file_errors_and_ignores_extra_signal_args(app, monkeypatch):
+    from PyQt6.QtWidgets import QWidget
+    from gui import crash_handler
+
+    shown = []
+    monkeypatch.setattr(crash_handler.QMessageBox, "warning", lambda parent, title, text: shown.append(title))
+
+    class Dialog(QWidget):
+        @crash_handler.guarded_slot("Speichern")
+        def save(self):
+            raise PermissionError(5, "Zugriff verweigert")
+
+        @crash_handler.guarded_slot("Zählen")
+        def count(self, value):
+            return value + 1
+
+    dialog = Dialog()
+    assert dialog.save(True) is None  # clicked(bool) liefert ein Argument mehr
+    assert shown == ["Speichern"]
+    assert dialog.count(1, "extra") == 2

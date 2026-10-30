@@ -213,8 +213,9 @@ class CoverProposalDialog(QDialog):
         progress.setMinimumDuration(0)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
+            from gui.library_settings_dialog import library_id_tags_allowed
             self.result = cover_batch.apply_proposals(
-                chosen, self.archive,
+                chosen, self.archive, write_album_ids=library_id_tags_allowed(),
                 progress=lambda cur, total, name: (progress.setLabelText(f"({cur}/{total}) {name}"),
                                                    progress.setValue(cur), QApplication.processEvents()))
         finally:
