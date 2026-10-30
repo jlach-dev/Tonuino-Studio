@@ -27,7 +27,7 @@ from gui.workers import AlbumTracksWorker, retire_worker
 
 TILE_WIDTH = 176
 COVER_SIZE = 150
-TILE_HEIGHT = COVER_SIZE + 96
+TILE_HEIGHT = COVER_SIZE + 96  # Mindesthoehe; tatsaechlich so hoch, wie Schrift und Abzeichen brauchen
 
 SERIES_ALL = "__all__"
 SERIES_NONE = "__none__"
@@ -229,7 +229,6 @@ class AlbumTile(QFrame):
     def __init__(self, album: LibraryAlbum, cover: Optional[QPixmap], badges: List[tuple]):
         super().__init__()
         self.setObjectName("libraryTile")
-        self.setFixedSize(TILE_WIDTH, TILE_HEIGHT)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 10)
         layout.setSpacing(4)
@@ -273,6 +272,9 @@ class AlbumTile(QFrame):
         layout.addLayout(badge_row)
         if album.offline:
             self.setProperty("offline", True)
+        # Hoehe aus dem echten Platzbedarf (Schriftgroessen je System verschieden) -
+        # mit fester Hoehe rutschte der Titel unter Windows ins Cover
+        self.setFixedSize(TILE_WIDTH, max(TILE_HEIGHT, layout.sizeHint().height()))
 
 
 def _elide(text: str, limit: int) -> str:
@@ -503,17 +505,21 @@ class LibraryView(QWidget):
     def _refresh(self, *_):
         self.grid.clear()
         albums = self.visible_albums()
-        for album in albums:
+        tiles = [AlbumTile(album, self._pixmap(album), self.badges_for(album)) for album in albums]
+        # Alle Kacheln gleich hoch (das Gitter nutzt einheitliche Groessen): die hoechste zaehlt
+        height = max((tile.height() for tile in tiles), default=TILE_HEIGHT)
+        for album, tile in zip(albums, tiles):
+            tile.setFixedHeight(height)
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, album.path)
-            item.setSizeHint(QSize(TILE_WIDTH + 4, TILE_HEIGHT + 4))
+            item.setSizeHint(QSize(TILE_WIDTH + 4, height + 4))
             item.setToolTip(album.path)
             flags = item.flags() | Qt.ItemFlag.ItemIsDragEnabled
             if album.offline:
                 flags &= ~Qt.ItemFlag.ItemIsDragEnabled
             item.setFlags(flags)
             self.grid.addItem(item)
-            self.grid.setItemWidget(item, AlbumTile(album, self._pixmap(album), self.badges_for(album)))
+            self.grid.setItemWidget(item, tile)
 
         total = len(self.index.albums)
         self.count_label.setText(f"{len(albums)} von {total} Alben" if len(albums) != total else
