@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+import weakref
 
 import pytest
 
@@ -32,27 +33,29 @@ class BlockingWorker(QThread):
 
 
 def test_retired_worker_stays_alive_and_delivers_nothing(app):
-    from gui.workers import retire_worker, retired_worker_count
+    from gui import workers
 
     release = threading.Event()
     received = []
     worker = BlockingWorker(release)
     worker.result.connect(received.append)
     worker.start()
-    before = retired_worker_count()
 
-    retire_worker(worker)
+    workers.retire_worker(worker)
     assert worker.cancelled
+    # Nur diesen Worker verfolgen, nicht die Gesamtzahl - ausgemusterte Worker
+    # frueherer GUI-Tests koennen waehrenddessen ebenfalls enden
+    ref = weakref.ref(worker)
     del worker  # nur noch der Reaper haelt ihn - ohne ihn: "QThread: Destroyed while thread is still running"
-    assert retired_worker_count() == before + 1
+    assert ref() is not None and ref() in workers._reaper._workers
 
     release.set()
     deadline = time.monotonic() + 5
-    while retired_worker_count() > before and time.monotonic() < deadline:
+    while ref() is not None and ref() in workers._reaper._workers and time.monotonic() < deadline:
         app.processEvents()
         time.sleep(0.01)
     app.processEvents()
-    assert retired_worker_count() == before
+    assert ref() is None or ref() not in workers._reaper._workers
     assert received == []
 
 

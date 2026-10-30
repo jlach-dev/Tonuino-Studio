@@ -1,3 +1,6 @@
+import os
+import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -125,6 +128,31 @@ def test_purge_keeps_trackless_folders_with_relevant_files(tmp_path):
     assert names(tmp_path / "03") == ["card.json", "card.png"]
     assert names(tmp_path / "04") == [".tmp_001.mp3"]
     assert (tmp_path / "07" / ".tmp_import" / "001.mp3").read_bytes() == b"neu"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Nur-Lesen-Attribut auf Ordnern gibt es nur unter Windows")
+def test_purge_deletes_read_only_folders(tmp_path):
+    # Google Drive/OneDrive (und macOS auf FAT-Karten) setzen das Nur-Lesen-
+    # Attribut auf Ordnern - os.rmdir() scheitert daran mit WinError 5
+    card = make_card(tmp_path, {"01": ["001.mp3"], "05": [], "06": ["notes.txt"]})
+    for name in ("05", "06", "06/notes.txt"):
+        os.chmod(tmp_path / name, stat.S_IREAD)
+
+    card.purge()
+
+    assert names(tmp_path) == ["01"]
+
+
+def test_delete_folder_reports_failure_and_keeps_folder_entry(tmp_path, monkeypatch):
+    card = make_card(tmp_path, {"01": ["001.mp3"]})
+
+    def fail(path):
+        raise PermissionError(5, "Zugriff verweigert", str(path))
+
+    monkeypatch.setattr(os, "rmdir", fail)
+    with pytest.raises(PermissionError):
+        card.delete_folder(1)
+    assert 1 in card.folders
 
 
 def test_purge_confirmation_lists_deleted_and_kept_folders(tmp_path):

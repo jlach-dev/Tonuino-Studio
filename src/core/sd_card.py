@@ -236,7 +236,7 @@ class SDCard:
         if not folder:
             raise ValueError(f"Ordner {folder_index:02d} nicht gefunden")
 
-        shutil.rmtree(folder.path)
+        shutil.rmtree(folder.path, onerror=self._clear_readonly_or_raise)
         del self.folders[folder_index]
 
     def delete_tracks(self, folder: Folder, tracks_to_delete: List[Track]):
@@ -441,6 +441,15 @@ class SDCard:
             func(path)
         except OSError:
             pass
+
+    @staticmethod
+    def _clear_readonly_or_raise(func, path, exc_info):
+        """Wie _clear_readonly_and_retry, aber ein erneuter Fehler wird
+        weitergereicht - fuer delete_folder(), das einen nicht geloeschten
+        Ordner melden muss. Google Drive/OneDrive setzen das Nur-Lesen-Attribut
+        auf jedem Ordner, os.rmdir() scheitert daran unter Windows."""
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
 
     @classmethod
     def _force_unlink(cls, path: Path):
