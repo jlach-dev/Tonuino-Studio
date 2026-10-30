@@ -77,13 +77,26 @@ def test_download_with_wrong_digest_is_rejected_and_removed(monkeypatch):
     assert not done and errors and "Pruefsumme" in errors[0]
 
 
-def test_download_without_digest_still_works(monkeypatch):
+def test_download_without_digest_is_not_started(monkeypatch):
+    # Ohne Pruefsumme kein automatischer Start - nur manuell von der Release-Seite
     done, errors = run_download(monkeypatch, b"data", "")
-    assert len(done) == 1 and not errors
-    os.remove(done[0])
-    os.rmdir(os.path.dirname(done[0]))
+    assert not done and errors and "Prüfsumme" in errors[0]
+
+
+def test_release_without_installer_for_this_system_is_reported(monkeypatch):
+    import json
+
+    release = {"tag_name": "v99.0.0", "html_url": "https://example.invalid/r", "assets": [{"name": "andere.zip"}]}
+    monkeypatch.setattr(updater.urllib.request, "urlopen",
+                        lambda request, timeout=None: FakeResponse(json.dumps(release).encode(), None))
+    checker = updater.UpdateChecker("2.0.0")
+    failed, none = [], []
+    checker.check_failed.connect(failed.append)
+    checker.no_update.connect(lambda: none.append(True))
+    checker.run()
+    assert not none and failed and "99.0.0" in failed[0]
 
 
 def test_truncated_download_is_rejected(monkeypatch):
-    done, errors = run_download(monkeypatch, b"abc", "", content_length=100)
+    done, errors = run_download(monkeypatch, b"abc", "sha256:" + "0" * 64, content_length=100)
     assert not done and errors and "unvollstaendig" in errors[0]

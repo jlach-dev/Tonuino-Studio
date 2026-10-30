@@ -1,5 +1,6 @@
 """Stuecke erkennen: fpcalc-Aufruf, AcoustID-Antwort, Gruppierung, Tag-Zuordnung (C2)"""
 
+import io
 import json
 from types import SimpleNamespace
 
@@ -192,3 +193,50 @@ def test_lookup_reports_acoustid_error(monkeypatch):
     with pytest.raises(RuntimeError) as info:
         acoustid.lookup("falsch", 12.0, "AQAA")
     assert "Application-Key" in str(info.value) and "HTTP" not in str(info.value)
+
+
+class _Download(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def _zip_with_fpcalc(content=b"MZ-fpcalc"):
+    import zipfile
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("chromaprint-fpcalc-1.5.1-windows-x86_64/fpcalc.exe", content)
+        archive.writestr("../../evil.exe", b"nein")  # wird nie ausgepackt
+    return buffer.getvalue()
+
+
+def test_download_fpcalc_checks_size_and_only_writes_fpcalc(tmp_path, monkeypatch):
+    payload = _zip_with_fpcalc()
+    monkeypatch.setattr(acoustid.urllib.request, "urlopen", lambda request, timeout=0: _Download(payload))
+    monkeypatch.setattr(acoustid, "FPCALC_SIZES", {"win32": len(payload)})
+
+    path = acoustid.download_fpcalc(str(tmp_path), platform="win32")
+
+    assert open(path, "rb").read() == b"MZ-fpcalc"
+    assert sorted(p.name for p in (tmp_path / "tools").iterdir()) == ["fpcalc.exe"]
+    assert not (tmp_path.parent / "evil.exe").exists()
+
+
+def test_download_fpcalc_rejects_wrong_size_checksum_and_unknown_system(tmp_path, monkeypatch):
+    payload = _zip_with_fpcalc()
+    monkeypatch.setattr(acoustid.urllib.request, "urlopen", lambda request, timeout=0: _Download(payload))
+
+    monkeypatch.setattr(acoustid, "FPCALC_SIZES", {"win32": len(payload) + 1})
+    with pytest.raises(RuntimeError, match="groß oder unvollständig"):
+        acoustid.download_fpcalc(str(tmp_path), platform="win32")
+
+    monkeypatch.setattr(acoustid, "FPCALC_SIZES", {"win32": len(payload)})
+    monkeypatch.setattr(acoustid, "FPCALC_SHA256", {"win32": "0" * 64})
+    with pytest.raises(RuntimeError, match="Prüfsumme"):
+        acoustid.download_fpcalc(str(tmp_path), platform="win32")
+
+    with pytest.raises(RuntimeError, match="kein fertiges fpcalc"):
+        acoustid.download_fpcalc(str(tmp_path), platform="sunos5")
+    assert not (tmp_path / "tools" / "fpcalc.exe").exists()

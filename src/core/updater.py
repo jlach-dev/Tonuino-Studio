@@ -132,7 +132,10 @@ class UpdateChecker(QThread):
 
             asset = select_asset(data.get("assets", []))
             if asset is None:
-                self.no_update.emit()
+                # Nicht "kein Update" melden: es gibt eine neuere Version, nur ohne
+                # Installer fuer dieses System (bei der manuellen Pruefung sichtbar)
+                self.check_failed.emit(f"Version {tag.lstrip('v')} ist erschienen, aber ohne Installer für "
+                                       f"dieses System. Siehe {data.get('html_url', GITHUB_RELEASES_PAGE)}")
                 return
 
             info = UpdateInfo(
@@ -196,17 +199,22 @@ class UpdateDownloader(QThread):
                 self._cleanup(dest_path)
                 return
 
-            if total and read != total:
-                raise RuntimeError(f"Download unvollstaendig ({read} von {total} Bytes)")
+            expected_size = total or self.info.asset_size
+            if expected_size and read != expected_size:
+                raise RuntimeError(f"Download unvollstaendig ({read} von {expected_size} Bytes)")
 
-            if expected:
-                if sha256.hexdigest() != expected:
-                    raise RuntimeError(
-                        "Die Pruefsumme (SHA-256) des Downloads stimmt nicht mit der von "
-                        "GitHub gemeldeten ueberein - der Installer wird nicht gestartet."
-                    )
-            else:
-                log.warning("GitHub lieferte keine Pruefsumme fuer %s - nicht geprueft", self.info.asset_name)
+            # Ohne Pruefsumme wird kein heruntergeladenes Programm automatisch
+            # gestartet - dann bleibt nur die manuelle Installation von der Release-Seite
+            if not expected:
+                raise RuntimeError(
+                    "GitHub hat für diese Datei keine Prüfsumme gemeldet - der Installer wird "
+                    "deshalb nicht automatisch gestartet."
+                )
+            if sha256.hexdigest() != expected:
+                raise RuntimeError(
+                    "Die Pruefsumme (SHA-256) des Downloads stimmt nicht mit der von "
+                    "GitHub gemeldeten ueberein - der Installer wird nicht gestartet."
+                )
 
             self.completed.emit(dest_path)
         except Exception as e:

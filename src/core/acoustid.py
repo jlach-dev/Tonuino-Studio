@@ -42,6 +42,12 @@ FPCALC_DOWNLOADS = {
     "linux": f"https://github.com/acoustid/chromaprint/releases/download/v{FPCALC_VERSION}/"
              f"chromaprint-fpcalc-{FPCALC_VERSION}-linux-x86_64.tar.gz",
 }
+# Exakte Groessen der offiziellen Archive (GitHub-Release v1.5.1) - schuetzt vor
+# abgebrochenen und vertauschten Downloads. GitHub liefert fuer diese alten
+# Assets keine Pruefsumme; ist eine SHA-256 bekannt, wird sie zusaetzlich geprueft.
+FPCALC_SIZES = {"win32": 1548264, "darwin": 2400481, "linux": 2752946}
+FPCALC_SHA256 = {}
+FPCALC_MAX_BYTES = 10 * 1024 * 1024
 
 _last_request = 0.0
 _lock = threading.Lock()
@@ -86,13 +92,26 @@ def download_fpcalc(data_dir: str, platform: Optional[str] = None,
     import sys
     import tarfile
     import zipfile
+    import hashlib
     platform = platform or sys.platform
-    url = FPCALC_DOWNLOADS.get(platform) or FPCALC_DOWNLOADS["linux"]
+    if platform.startswith("linux"):
+        platform = "linux"
+    url = FPCALC_DOWNLOADS.get(platform)
+    if url is None:
+        raise RuntimeError(f"Für dieses System ({platform}) gibt es kein fertiges fpcalc - "
+                           "bitte Chromaprint selbst installieren und den Pfad eintragen.")
     if progress:
         progress(f"Lade {url} …")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=120) as response:
-        payload = response.read()
+        payload = response.read(FPCALC_MAX_BYTES + 1)
+    expected_size = FPCALC_SIZES.get(platform)
+    if len(payload) > FPCALC_MAX_BYTES or (expected_size and len(payload) != expected_size):
+        raise RuntimeError(f"Download unerwartet groß oder unvollständig ({len(payload)} Bytes) - "
+                           "fpcalc wird nicht installiert.")
+    expected_sha = FPCALC_SHA256.get(platform)
+    if expected_sha and hashlib.sha256(payload).hexdigest() != expected_sha:
+        raise RuntimeError("Prüfsumme des Downloads stimmt nicht - fpcalc wird nicht installiert.")
     target_dir = os.path.join(data_dir, "tools")
     os.makedirs(target_dir, exist_ok=True)
     target = os.path.join(target_dir, fpcalc_name())
@@ -106,13 +125,16 @@ def download_fpcalc(data_dir: str, platform: Optional[str] = None,
     else:
         with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
             for member in archive.getmembers():
-                if os.path.basename(member.name) == "fpcalc":
+                if os.path.basename(member.name) == "fpcalc" and member.isfile():
                     blob = archive.extractfile(member).read()
                     break
     if blob is None:
         raise RuntimeError("fpcalc nicht im heruntergeladenen Archiv gefunden")
-    with open(target, "wb") as handle:
+    # Nur die eine Datei, an einen festen Pfad, erst temporaer und dann ersetzen
+    tmp = target + ".tmp"
+    with open(tmp, "wb") as handle:
         handle.write(blob)
+    os.replace(tmp, target)
     if platform != "win32":
         os.chmod(target, 0o755)
     return target
