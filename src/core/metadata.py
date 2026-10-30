@@ -9,6 +9,8 @@ import importlib.util
 import logging
 import time
 
+from core.tag_save import save_audio
+
 log = logging.getLogger(__name__)
 
 # Benutzerdefinierter ID3-Frame (TXXX) fuer den manuell vergebenen Ordnernamen
@@ -196,7 +198,7 @@ class MetadataManager:
                 else:
                     tags.delall(FOLDER_NAME_KEY)
 
-            audio.save()
+            save_audio(audio)  # ID3v2.3 bleibt v2.3
             return True
 
         except Exception as e:
@@ -264,7 +266,7 @@ class MetadataManager:
                 data=cover_data
             )
 
-            audio.save()
+            save_audio(audio)  # ID3v2.3 bleibt v2.3
             return True
 
         except Exception as e:

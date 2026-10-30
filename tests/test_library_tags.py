@@ -102,3 +102,27 @@ def test_tag_dialog_accepts_file_list(tmp_path, monkeypatch):
     dialog._stop_workers()
     dialog.done(0)
     QSettings().clear()
+
+
+def test_tag_writes_keep_id3v23_and_other_pictures(tmp_path):
+    """Dateien der Sammlung bleiben ID3v2.3; beim Cover wird nur das Front-Cover
+    ersetzt, Rueckseite und Booklet bleiben"""
+    from mutagen.id3 import APIC, ID3
+    from core.library import write_cover_any
+
+    folder = make_album(tmp_path, "Album", count=1, album="Alt")
+    path = str(folder / "01.mp3")
+    tags = ID3(path)
+    tags.add(APIC(encoding=3, mime="image/jpeg", type=4, desc="Rueckseite", data=b"\xff\xd8back"))
+    tags.save(path, v2_version=3)
+    assert ID3(path).version[:2] == (2, 3)
+
+    assert write_tags_any(path, {"album": "Neu"})
+    assert album_identity.write_album_id([path], "id-1")
+    assert MetadataManager().write_metadata(path, title="Titel")
+    assert write_cover_any(path, b"\xff\xd8front")
+
+    tags = ID3(path)
+    assert tags.version[:2] == (2, 3)
+    pictures = {frame.type: frame.data for frame in tags.getall("APIC")}
+    assert pictures == {3: b"\xff\xd8front", 4: b"\xff\xd8back"}

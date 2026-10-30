@@ -58,12 +58,13 @@ def write_txxx(filepath: str, desc: str, value: str) -> bool:
         from core.library import write_tags_any
         return write_tags_any(filepath, {}, {desc: value})
     from mutagen.id3 import TXXX
+    from core.tag_save import save_audio
     try:
         audio = _open(filepath)
         if audio.tags is None:
             audio.add_tags()
         audio.tags.setall(f"TXXX:{desc}", [TXXX(encoding=3, desc=desc, text=[value])])
-        audio.save()
+        save_audio(audio)
         return True
     except Exception as e:
         log.warning("Tag %s konnte nicht geschrieben werden (%s): %s", desc, filepath, e)

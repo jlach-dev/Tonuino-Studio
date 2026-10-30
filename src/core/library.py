@@ -27,6 +27,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from core.tag_save import save_audio
+
 log = logging.getLogger(__name__)
 
 AUDIO_EXTENSIONS = (".mp3", ".flac", ".m4a", ".ogg", ".wav", ".opus")
@@ -386,7 +388,7 @@ def write_tags_any(path: str, fields: Dict[str, object], custom: Optional[Dict[s
                     raw[key] = [value]
                 elif key in raw:
                     del raw[key]
-        audio.save()
+        save_audio(audio)
         return True
     except Exception as e:
         log.warning("Tags konnten nicht geschrieben werden (%s): %s", path, e)
@@ -410,7 +412,9 @@ def write_cover_any(path: str, data: bytes, mime: str = "image/jpeg") -> bool:
             audio.add_tags()
         raw = audio.tags
         if isinstance(raw, ID3):
-            raw.delall("APIC")
+            # Nur das Front-Cover (Typ 3) ersetzen - Rueckseite, Booklet usw. bleiben
+            for key in [k for k, frame in raw.items() if k.startswith("APIC") and frame.type == 3]:
+                del raw[key]
             raw.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=data))
         elif isinstance(raw, MP4Tags):
             fmt = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
@@ -419,11 +423,14 @@ def write_cover_any(path: str, data: bytes, mime: str = "image/jpeg") -> bool:
             picture = Picture()
             picture.type, picture.mime, picture.desc, picture.data = 3, mime, "Cover", data
             if isinstance(audio, FLAC):
+                others = [p for p in audio.pictures if p.type != 3]  # nur das Front-Cover ersetzen
                 audio.clear_pictures()
+                for other in others:
+                    audio.add_picture(other)
                 audio.add_picture(picture)
             else:  # OGG/Opus: Picture base64-kodiert als Vorbis-Kommentar
                 raw["metadata_block_picture"] = [base64.b64encode(picture.write()).decode("ascii")]
-        audio.save()
+        save_audio(audio)
         return True
     except Exception as e:
         log.warning("Cover konnte nicht geschrieben werden (%s): %s", path, e)

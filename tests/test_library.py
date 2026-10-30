@@ -212,6 +212,8 @@ def test_import_album_copies_tags_links_and_writes_card(tmp_path, sd):
     record = archive.load_album("id-hexe")
     assert str(album_dir) in record.paths and folder.path in record.paths and record.fingerprint == album.fingerprint
     assert result.cover_embedded == 2 and manager.get_cover_bytes(str(sd.path / "01" / "001.mp3"))
+    with Image.open(io.BytesIO(manager.get_cover_bytes(str(sd.path / "01" / "001.mp3")))) as embedded:
+        assert embedded.format == "JPEG" and max(embedded.size) <= 600  # nicht das PNG aus dem Archiv
     assert result.card_written and result.back_written
     assert card_store.has_card(folder.path) and card_store.has_back(folder.path)
     meta = card_store.load_meta(folder.path)

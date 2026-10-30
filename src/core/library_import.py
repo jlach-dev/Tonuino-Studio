@@ -144,10 +144,17 @@ def _embed_album_cover(folder: Folder, album_id: str, archive: CoverArchive, met
         return 0
     try:
         data = archive.load_bytes(album_id, entry)
-    except OSError:
+        # Wie im Cover-Manager auf ein 600-px-JPEG verkleinern: Archivbilder sind
+        # oft 1200 px oder mehrere MB grosse KI-PNGs - in jedem Track der SD-Karte
+        import io
+        from PIL import Image
+        from core.card_layout import album_cover_jpeg
+        with Image.open(io.BytesIO(data)) as img:
+            img.load()
+            data = album_cover_jpeg(img)
+    except (OSError, ValueError):
         return 0
-    mime = "image/png" if entry.file.lower().endswith(".png") else "image/jpeg"
-    return sum(1 for t in folder.tracks if metadata_manager.set_cover_bytes(t.filepath, data, mime))
+    return sum(1 for t in folder.tracks if metadata_manager.set_cover_bytes(t.filepath, data, "image/jpeg"))
 
 
 def _write_card(folder: Folder, album: LibraryAlbum, album_id: str, archive: CoverArchive,
