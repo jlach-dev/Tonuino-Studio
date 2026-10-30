@@ -115,3 +115,65 @@ def test_setup_logging_writes_rotating_log_file(tmp_path):
                 root.removeHandler(handler)
                 handler.close()
         root.setLevel(level)
+
+
+class _NoTags:
+    def read_metadata(self, path):
+        from types import SimpleNamespace
+        return SimpleNamespace(title="", folder_name="")
+
+    def write_metadata(self, path, **kwargs):
+        return True
+
+
+class _CopyOnly:
+    def needs_conversion(self, path):
+        return False
+
+
+def _add_tracks(folder, files):
+    from gui.workers import TrackAddWorker
+    worker = TrackAddWorker(folder, files, _CopyOnly(), _NoTags())
+    added, errors = [], []
+    worker.track_added.connect(added.append)
+    worker.error.connect(lambda name, msg: errors.append(msg))
+    worker.run()  # synchron
+    return added, errors
+
+
+def test_track_add_never_overwrites_files_added_outside_the_app(tmp_path):
+    from core.sd_card import SDCard
+    (tmp_path / "01").mkdir()
+    (tmp_path / "01" / "001.mp3").write_bytes(b"eins")
+    card = SDCard(str(tmp_path))
+    card.scan()
+    (tmp_path / "01" / "002.mp3").write_bytes(b"im Explorer kopiert")  # nach dem Scan
+    source = tmp_path / "neu.mp3"
+    source.write_bytes(b"neu")
+
+    added, errors = _add_tracks(card.folders[1], [str(source)])
+
+    assert not errors and [t.filename for t in added] == ["003.mp3"]
+    assert (tmp_path / "01" / "002.mp3").read_bytes() == b"im Explorer kopiert"
+    assert (tmp_path / "01" / "003.mp3").read_bytes() == b"neu"
+
+
+def test_failed_copy_leaves_no_half_track(tmp_path, monkeypatch):
+    from core.sd_card import SDCard
+    from gui import workers
+    (tmp_path / "01").mkdir()
+    card = SDCard(str(tmp_path))
+    card.scan()
+    source = tmp_path / "neu.mp3"
+    source.write_bytes(b"neu")
+
+    def broken_copy(src, dst):
+        with open(dst, "wb") as handle:
+            handle.write(b"halb")
+        raise OSError("NAS nicht erreichbar")
+
+    monkeypatch.setattr(workers.shutil, "copy2", broken_copy)
+    added, errors = _add_tracks(card.folders[1], [str(source)])
+
+    assert not added and errors and "NAS" in errors[0]
+    assert list((tmp_path / "01").iterdir()) == []

@@ -160,34 +160,41 @@ class TrackAddWorker(QThread):
 
             self.progress.emit(i, len(self.filepaths), os.path.basename(filepath))
 
+            # Auch auf der Karte nachsehen: der Ordner kann seit dem letzten Scan
+            # Dateien bekommen haben (z.B. im Explorer kopiert) - nie ueberschreiben
             next_number = 1
-            while next_number in self._used_numbers:
+            while next_number in self._used_numbers or (Path(self.folder.path) / f"{next_number:03d}.mp3").exists():
                 next_number += 1
             if next_number > MAX_TRACKS_PER_FOLDER:
                 break
 
             dest_filename = f"{next_number:03d}.mp3"
             dest_path = Path(self.folder.path) / dest_filename
+            # Erst unter einem Zwischennamen schreiben und taggen, dann umbenennen:
+            # bricht das Kopieren ab (NAS weg, FFmpeg-Fehler), bleibt kein halber
+            # Track als NNN.mp3 liegen, den TonUINO abspielen wuerde
+            part_path = Path(self.folder.path) / f".tmp_add_{dest_filename}"
 
             try:
                 if self.audio_converter.needs_conversion(filepath):
                     if not self.audio_converter.is_available:
                         self.error.emit(os.path.basename(filepath), "FFmpeg ist nicht verfügbar.")
                         continue
-                    self.audio_converter.convert_to_mp3(filepath, str(dest_path))
+                    self.audio_converter.convert_to_mp3(filepath, str(part_path))
                 else:
-                    shutil.copy2(filepath, dest_path)
+                    shutil.copy2(filepath, part_path)
 
                 # Tags stehen jetzt in der Zieldatei (bei Konvertierung von FFmpeg
                 # uebernommen, bei MP3 mitkopiert) - dort lesen statt in der Quelle,
                 # die ggf. kein MP3 ist und von mutagen.mp3 nicht gelesen werden kann.
-                metadata = self.metadata_manager.read_metadata(str(dest_path))
+                metadata = self.metadata_manager.read_metadata(str(part_path))
                 if metadata.title or folder_name:
                     self.metadata_manager.write_metadata(
-                        str(dest_path),
+                        str(part_path),
                         track_number=next_number if metadata.title else None,
                         folder_name=folder_name or None,
                     )
+                os.replace(part_path, dest_path)
 
                 new_track = Track(
                     index=next_number,
@@ -200,6 +207,10 @@ class TrackAddWorker(QThread):
                 added += 1
 
             except Exception as e:
+                try:
+                    part_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 self.error.emit(os.path.basename(filepath), str(e))
 
         self.completed.emit(added)

@@ -67,12 +67,12 @@ class AudioConverter:
             result = subprocess.run(
                 [self.ffmpeg_path, "-version"],
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=10,
                 creationflags=_SUBPROCESS_FLAGS
             )
             self._available = result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except (subprocess.TimeoutExpired, OSError):  # auch gesperrt (Virenscanner) oder kein Programm
             self._available = False
     
     @property
@@ -136,7 +136,7 @@ class AudioConverter:
             process = subprocess.run(
                 cmd,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=300,
                 creationflags=_SUBPROCESS_FLAGS
             )
@@ -166,7 +166,7 @@ class AudioConverter:
         ]
         try:
             process = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300,
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
                 creationflags=_SUBPROCESS_FLAGS
             )
         except subprocess.TimeoutExpired:
@@ -202,7 +202,7 @@ class AudioConverter:
         ]
         try:
             process = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300,
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
                 creationflags=_SUBPROCESS_FLAGS
             )
         except subprocess.TimeoutExpired:

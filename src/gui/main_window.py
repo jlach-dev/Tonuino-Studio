@@ -35,6 +35,7 @@ from gui.track_list import ROW_NOT_CHECKABLE_ROLE, HoverListWidget, InlineLineEd
 from gui.workers import (
     SDCardScanner, TrackAddWorker, FolderNameWorker, FolderRenameWorker, TrackMetaWorker, PurgeWorker,
     LoudnessAnalysisWorker, LoudnessApplyWorker, CoverBatchWorker, LibraryScanWorker, wait_for_retired_workers,
+    retire_worker,
 )
 from gui.card_cover_dialog import AiSettingsDialog, gemini_client, image_model, text_model
 from gui.workers import CoverProposalWorker, RecognizeWorker
@@ -102,6 +103,7 @@ class MainWindow(QMainWindow):
         self.metadata_manager = MetadataManager()
         self.scanner: SDCardScanner = None
         self._add_tracks_worker: TrackAddWorker = None
+        self._add_tracks_folder: Folder = None
         self._purge_worker: PurgeWorker = None
         self._cover_batch_worker: CoverBatchWorker = None
         self._loudness_analysis_worker: LoudnessAnalysisWorker = None
@@ -1537,9 +1539,26 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Fehler", f"Fehler beim Löschen: {e}")
 
+    def _file_job_running(self, include_import: bool = True) -> bool:
+        """Laeuft noch ein Kopier-, Erkennungs- oder Cover-Vorgang? Dann keinen
+        zweiten starten: zwei Kopier-Worker koennten dieselbe Tracknummer belegen.
+        include_import=False erlaubt weitere Alben fuer die Import-Warteschlange
+        (die arbeitet sie nacheinander ab)."""
+        jobs = [getattr(self, "_recognize_job", None), getattr(self, "_embed_job", None)]
+        if include_import:
+            jobs.append(self._import_job)
+        workers = [self._add_tracks_worker] + [job["worker"] for job in jobs if job]
+        if any(worker is not None and worker.isRunning() for worker in workers):
+            QMessageBox.information(self, "Bitte warten",
+                                    "Es läuft noch ein Kopier- oder Suchvorgang. Bitte warten, bis er fertig ist.")
+            return True
+        return False
+
     def _add_tracks(self):
         """Fuegt Tracks zum aktuellen Ordner hinzu (im Hintergrund, mit Fortschrittsanzeige)"""
         if not self.current_folder or self._is_special_folder(self.current_folder):
+            return
+        if self._file_job_running():
             return
 
         files, _ = QFileDialog.getOpenFileNames(
@@ -1573,6 +1592,7 @@ class MainWindow(QMainWindow):
             files = files[:free_slots]
 
         self._add_tracks_errors = []
+        self._add_tracks_folder = self.current_folder  # Ziel bleibt, auch wenn der Nutzer weiterklickt
 
         self._add_tracks_dialog = QProgressDialog(
             "Tracks werden hinzugefügt...", "Abbrechen", 0, len(files), self
@@ -1595,33 +1615,36 @@ class MainWindow(QMainWindow):
 
     def _on_add_tracks_progress(self, current: int, total: int, filename: str):
         self._add_tracks_dialog.setLabelText(f"({current}/{total}) {filename}")
-        self._add_tracks_dialog.setValue(current)
+        self._add_tracks_dialog.setValue(current - 1)  # siehe _on_import_progress
 
     def _on_track_added(self, track: Track):
-        if self.current_folder is None:
+        folder = self._add_tracks_folder
+        if folder is None or self.sd_card is None:
             return
-        self.current_folder.tracks.append(track)
-        self.current_folder.tracks.sort(key=lambda t: t.index)
+        folder.tracks.append(track)
+        folder.tracks.sort(key=lambda t: t.index)
 
     def _on_add_tracks_error(self, filename: str, message: str):
         self._add_tracks_errors.append(f"{filename}: {message}")
 
     def _on_add_tracks_finished(self, added_count: int):
         self._add_tracks_dialog.close()
+        folder = self._add_tracks_folder
 
-        if self.current_folder is None:
+        if self.sd_card is None or folder is None:
             return  # Karte wurde waehrend des Hinzufuegens entfernt (UI ist schon zurueckgesetzt)
 
         # Neue Tracks fuellen die kleinste freie Nummer - verbleibende Luecken
         # (z.B. bereits vorhandene) jetzt schliessen
         try:
             self._release_files()
-            self.sd_card.close_track_gaps(self.current_folder)
+            self.sd_card.close_track_gaps(folder)
         except Exception as e:
             self._add_tracks_errors.append(f"Nummerierung: {e}")
 
-        self._folder_name_cache.pop(self.current_folder.index, None)
-        self._show_folder(self.current_folder)
+        self._folder_name_cache.pop(folder.index, None)
+        if folder is self.current_folder:
+            self._show_folder(folder)
         self._populate_folder_list()
         self.status_bar.showMessage(f"{added_count} Track(s) hinzugefügt")
 
@@ -2474,6 +2497,8 @@ class MainWindow(QMainWindow):
         gefragt: Ersetzen / Anhaengen / Abbrechen."""
         if not self.sd_card or not paths:
             return
+        if self._file_job_running(include_import=False):
+            return
         if isinstance(identity, str):
             QMessageBox.information(self, "Systemordner", "In die Tonuino-Systemordner (mp3/advert) können "
                                                           "keine Alben gelegt werden.")
@@ -2493,6 +2518,8 @@ class MainWindow(QMainWindow):
         """Einzelne Tracks (aus dem Album-Panel oder dem Explorer) auf die Ordnerliste
         bzw. einen Ordner gezogen: je Album ein Import nur dieser Dateien (haengt an)."""
         if not self.sd_card or not paths:
+            return
+        if self._file_job_running(include_import=False):
             return
         if isinstance(identity, str):
             QMessageBox.information(self, "Systemordner", "In die Tonuino-Systemordner (mp3/advert) können "
@@ -2535,7 +2562,7 @@ class MainWindow(QMainWindow):
         """Stuecke eines Bibliotheksalbums (oder nur der markierten) per AcoustID erkennen"""
         from core import ai_settings
         from core.acoustid import find_fpcalc
-        if album is None:
+        if album is None or self._file_job_running():
             return
         files = list(paths) if paths else list(album.tracks)
         if not files:
@@ -2594,6 +2621,8 @@ class MainWindow(QMainWindow):
         if self._library is None or not self._library_index.albums:
             QMessageBox.information(self, "Cover nachtragen", "Die Bibliothek ist leer.")
             return
+        if self._file_job_running():
+            return
         archive = get_archive(self)
         if archive is None:
             return
@@ -2627,7 +2656,9 @@ class MainWindow(QMainWindow):
     def _on_cover_proposals(self, progress, archive, proposals):
         from gui.cover_proposal_dialog import CoverProposalDialog
         progress.close()
-        self._embed_job = None
+        job, self._embed_job = self._embed_job, None
+        if job:
+            retire_worker(job["worker"])  # run() kehrt nach dem Signal erst noch zurueck
         if not proposals:
             QMessageBox.information(self, "Cover nachtragen", "Keine Vorschläge gefunden.")
             return
@@ -2667,6 +2698,7 @@ class MainWindow(QMainWindow):
         job, self._recognize_job = getattr(self, "_recognize_job", None), None
         if job is None:
             return
+        retire_worker(job["worker"])  # run() kehrt nach dem Signal erst noch zurueck
         job["dialog"].close()
         album, files = job["album"], job["files"]
         if result.recognized == 0:
@@ -2797,12 +2829,16 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _on_import_progress(dialog: QProgressDialog, current: int, total: int, name: str):
         dialog.setLabelText(f"({current}/{total}) {name}")
-        dialog.setValue(current)
+        # Das Signal kommt vor dem Element: mit current haette der Dialog beim Start
+        # des letzten Elements sein Maximum erreicht und sich geschlossen, obwohl
+        # noch gearbeitet wird - und das Fenster waere wieder bedienbar
+        dialog.setValue(current - 1)
 
     def _on_import_copied(self, added: int):
         job, self._import_job = self._import_job, None
         if job is None:
             return
+        retire_worker(job["worker"])  # run() kehrt nach dem Signal erst noch zurueck
         job["dialog"].close()
         folder, album = job["folder"], job["album"]
         if self.sd_card is None:

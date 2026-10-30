@@ -76,7 +76,8 @@ def find_fpcalc(configured: str = "", data_dir: str = "") -> Optional[str]:
 
 def fingerprint(path: str, fpcalc: str) -> tuple:
     """(Dauer in Sekunden, Fingerabdruck) ueber `fpcalc -json`"""
-    completed = subprocess.run([fpcalc, "-json", path], capture_output=True, text=True, timeout=120,
+    completed = subprocess.run([fpcalc, "-json", path], capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=120,
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if completed.returncode != 0:
         raise RuntimeError(f"fpcalc: {completed.stderr.strip() or completed.stdout.strip() or 'Fehler'}")
