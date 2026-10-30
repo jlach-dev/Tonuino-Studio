@@ -2827,6 +2827,7 @@ class MainWindow(QMainWindow):
         dialog.setValue(0)
         worker = TrackAddWorker(target, files, self.audio_converter, self.metadata_manager)
         job = {"album": album, "folder": folder, "mode": mode, "worker": worker, "dialog": dialog,
+               "previous": list(folder.tracks) if staging is None else None,
                "errors": [], "write_tags": write_tags, "staging": staging}
         self._import_job = job
         worker.progress.connect(lambda cur, total, name: self._on_import_progress(dialog, cur, total, name))
@@ -2865,7 +2866,8 @@ class MainWindow(QMainWindow):
             self._release_files()
             orientation = QSettings().value(SETTINGS_ORIENTATION, ORIENTATION_PORTRAIT, type=str)
             result = library_import.finish_import(self.sd_card, folder, album, get_archive(self, ask=False),
-                                                  self.metadata_manager, job["write_tags"], orientation, result)
+                                                  self.metadata_manager, job["write_tags"], orientation, result,
+                                                  previous_tracks=job["previous"])
         finally:
             QApplication.restoreOverrideCursor()
         if result.album_id:

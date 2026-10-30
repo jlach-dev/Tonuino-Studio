@@ -39,6 +39,7 @@ class ImportResult:
     cover_embedded: int = 0  # SD-Tracks, die ein Album-Cover aus dem Archiv bekommen haben
     card_written: bool = False
     back_written: bool = False
+    card_kept: bool = False  # Anhaengen: die Karte des Ordners gehoert zu einem anderen Album und bleibt
     errors: List[str] = field(default_factory=list)
 
     @property
@@ -48,6 +49,8 @@ class ImportResult:
             parts.append("Album-Cover eingebettet")
         if self.card_written:
             parts.append("Kartencover übernommen" + (" (mit Rückseite)" if self.back_written else ""))
+        if self.card_kept:
+            parts.append("bisheriges Kartencover des Ordners beibehalten")
         if self.library_tagged:
             parts.append(f"Album-ID in {self.library_tagged} Bibliotheksdatei(en) geschrieben")
         return ", ".join(parts)
@@ -243,9 +246,12 @@ def embed_archive_covers(index: LibraryIndex, archive: CoverArchive,
 
 def finish_import(sd_card: SDCard, folder: Folder, album: LibraryAlbum, archive: Optional[CoverArchive],
                   metadata_manager, write_library_tags: bool, orientation: str = ORIENTATION_PORTRAIT,
-                  result: Optional[ImportResult] = None) -> ImportResult:
+                  result: Optional[ImportResult] = None, previous_tracks: Optional[List] = None) -> ImportResult:
     """Schritte 2-5 nach dem Kopieren (siehe Modul-Doku). folder.tracks muss die
-    kopierten Tracks enthalten."""
+    kopierten Tracks enthalten. previous_tracks: beim Anhaengen die Tracks, die
+    schon vorher im Ordner lagen - sie behalten ihre Album-ID, und eine Karte
+    eines anderen Albums wird nicht ersetzt."""
+    previous_ids = {id(t) for t in previous_tracks or []}
     result = result or ImportResult()
     try:
         sd_card.close_track_gaps(folder)
@@ -254,7 +260,7 @@ def finish_import(sd_card: SDCard, folder: Folder, album: LibraryAlbum, archive:
 
     album_id = resolve_album_id(album, archive)
     result.album_id = album_id
-    sd_paths = [t.filepath for t in folder.tracks]
+    sd_paths = [t.filepath for t in folder.tracks if id(t) not in previous_ids]
     if sd_paths:
         album_identity.write_album_id(sd_paths, album_id)
     if write_library_tags and not album.album_id:
@@ -277,7 +283,11 @@ def finish_import(sd_card: SDCard, folder: Folder, album: LibraryAlbum, archive:
         if changed:
             archive.save_album(record)
         result.cover_embedded = _embed_album_cover(folder, album_id, archive, metadata_manager)
-        _write_card(folder, album, album_id, archive, metadata_manager, orientation, result)
+        existing = card_store.load_meta(folder.path) if previous_ids else None
+        if previous_ids and card_store.has_card(folder.path) and (existing is None or existing.album_id != album_id):
+            result.card_kept = True  # Karte (samt Rueckseite) des bisherigen Ordnerinhalts behalten
+        else:
+            _write_card(folder, album, album_id, archive, metadata_manager, orientation, result)
     except Exception as e:
         log.exception("Archiv-Verknuepfung nach dem Import fehlgeschlagen")
         result.errors.append(f"Archiv: {e}")
@@ -294,6 +304,7 @@ def import_album(sd_card: SDCard, folder: Folder, album: LibraryAlbum, audio_con
     danach finish_import. tracks = nur diese Dateien des Albums (Teilimport)."""
     from gui.workers import TrackAddWorker
     result = ImportResult()
+    previous = list(folder.tracks) if mode != MODE_REPLACE else None
     target = create_staging_folder(folder) if mode == MODE_REPLACE else folder
     worker = TrackAddWorker(target, list(tracks) if tracks else list(album.tracks), audio_converter,
                             metadata_manager)
@@ -310,7 +321,8 @@ def import_album(sd_card: SDCard, folder: Folder, album: LibraryAlbum, audio_con
     if target is not folder and not commit_staged_replace(sd_card, folder, target):
         return result  # nichts kopiert - alte Tracks bleiben, kein Album-Abgleich
     folder.tracks.sort(key=lambda t: t.index)
-    return finish_import(sd_card, folder, album, archive, metadata_manager, write_library_tags, orientation, result)
+    return finish_import(sd_card, folder, album, archive, metadata_manager, write_library_tags, orientation, result,
+                         previous_tracks=previous)
 
 
 def group_tracks_by_album(paths: List[str]) -> List[tuple]:

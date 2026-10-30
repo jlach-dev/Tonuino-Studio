@@ -226,6 +226,19 @@ def test_import_album_copies_tags_links_and_writes_card(tmp_path, sd):
     assert not (sd.path / "01" / ".tmp_import").exists() and card_store.has_card(folder.path)
 
 
+    # Anhaengen eines anderen Albums: die vorhandenen Tracks behalten ihre Album-ID,
+    # Karte und Rueckseite des Ordners bleiben, nur die neuen Tracks werden getaggt
+    other_dir = make_album(source, "Andere", count=1, album="Anderes Album", artist="Jemand")
+    other = Library(str(tmp_path / "data"), [str(source)]).scan().find(str(other_dir))
+    card_before = (Path(folder.path) / "card.png").read_bytes()
+    result = import_album(sd, folder, other, AudioConverter(), manager, archive, write_library_tags=False)
+    assert result.added == 1 and result.card_kept and not result.card_written
+    assert album_identity.read_album_id([str(sd.path / "01" / "001.mp3")]) == "id-hexe"
+    assert album_identity.read_album_id([str(sd.path / "01" / "003.mp3")]) == result.album_id != "id-hexe"
+    assert (Path(folder.path) / "card.png").read_bytes() == card_before and card_store.has_back(folder.path)
+    assert "Kartencover des Ordners beibehalten" in result.summary
+
+
 def test_replace_keeps_old_tracks_when_nothing_was_copied(tmp_path, sd):
     from core.audio_converter import AudioConverter
     from core.library_import import MODE_REPLACE, import_album
