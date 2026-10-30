@@ -78,9 +78,6 @@ class MainWindow(QMainWindow):
 
     # Breite des Fensterrands (px), an dem unter Windows die Groesse geaendert wird
     RESIZE_BORDER = 6
-    # Hit-Test-Code (HTLEFT ... HTBOTTOMRIGHT) -> Windows-Cursor (IDC_SIZE*)
-    RESIZE_CURSORS = {10: 32644, 11: 32644, 12: 32645, 15: 32645,
-                      13: 32642, 17: 32642, 14: 32643, 16: 32643}
 
     def __init__(self):
         super().__init__()
@@ -198,30 +195,38 @@ class MainWindow(QMainWindow):
 
     def nativeEvent(self, event_type, message):
         """Unter Windows: Hit-Test fuer das rahmenlose Fenster. Windows
-        uebernimmt damit Verschieben, Groesse aendern und Einrasten selbst."""
+        uebernimmt damit Verschieben, Groesse aendern und Einrasten selbst
+        (Rahmenstil und Cursor siehe gui/win_frame.py)."""
         if sys.platform == "win32" and self._title_bar is not None and bytes(event_type) == b"windows_generic_MSG":
             from ctypes import wintypes
+            from gui import win_frame
 
             msg = wintypes.MSG.from_address(int(message))
-            if msg.message == 0x0084:  # WM_NCHITTEST
+            if msg.message == win_frame.WM_NCHITTEST:
                 pos = self.mapFromGlobal(QCursor.pos())
                 result = self._hit_test(pos)
                 if result is not None:
                     return True, result
-            elif msg.message == 0x0020:  # WM_SETCURSOR
-                # Qt setzt hier sonst immer den Pfeil, auch am Rand - den
-                # Groessen-Cursor fuer die Hit-Test-Codes selbst setzen
-                cursor = self.RESIZE_CURSORS.get(msg.lParam & 0xFFFF)
-                if cursor is not None:
-                    import ctypes
-                    user32 = ctypes.WinDLL("user32")  # eigene Instanz, argtypes nicht global setzen
-                    user32.LoadCursorW.restype = wintypes.HANDLE
-                    user32.LoadCursorW.argtypes = [wintypes.HINSTANCE, ctypes.c_void_p]
-                    user32.SetCursor.argtypes = [wintypes.HANDLE]
-                    user32.SetCursor(user32.LoadCursorW(None, ctypes.c_void_p(cursor)))
+            elif msg.message == win_frame.WM_SETCURSOR:
+                # Qt setzt hier sonst immer den Pfeil, auch am Rand
+                if win_frame.set_resize_cursor(msg.lParam & 0xFFFF):
                     return True, 1
+            elif msg.message == win_frame.WM_NCCALCSIZE:
+                if win_frame.handle_nc_calc_size(int(msg.hWnd), msg.wParam, msg.lParam, self.isMaximized()):
+                    return True, 0
         # Bewusst kein super().nativeEvent(): der Aufruf stuerzt mit PyQt6 ab
         return False, 0
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._enable_resize_frame()
+
+    def _enable_resize_frame(self):
+        """Ohne WS_THICKFRAME laesst Windows das rahmenlose Fenster nicht an den
+        Raendern ziehen (siehe gui/win_frame.py)"""
+        if sys.platform == "win32" and self._title_bar is not None:
+            from gui import win_frame
+            win_frame.enable_resize_frame(int(self.winId()))
 
     def _hit_test(self, pos: QPoint):
         """Liefert den WM_NCHITTEST-Rueckgabewert fuer pos (Fensterkoordinaten)
@@ -259,6 +264,7 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.WindowStateChange:
             if self._title_bar is not None:
                 self._title_bar.update_maximize_button()
+                self._enable_resize_frame()  # Qt kann den Stil beim Vollbild ersetzen
             if hasattr(self, "action_full_screen"):
                 self.action_full_screen.setChecked(self.isFullScreen())
         super().changeEvent(event)
