@@ -18,7 +18,39 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Bei einem Tag v*: zuerst einen Release-Entwurf anlegen (genau einen - die
+  # vier Build-Jobs haengen ihre Installer danach nur an). Veroeffentlicht wird
+  # von Hand auf GitHub, nachdem die Release-Notes ergaenzt sind.
+  draft:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag passt zur Version im Code
+        run: |
+          VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('src/core/__init__.py').read()).group(1))")
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME passt nicht zu __version__ = $VERSION (src/core/__init__.py)"
+            exit 1
+          fi
+
+      - name: Release-Entwurf anlegen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "Tonuino-Studio ${GITHUB_REF_NAME#v}" \
+            --notes "Entwurf: Release-Notes ergaenzen, Installer pruefen, dann veroeffentlichen."
+
   build:
+    needs: draft
+    # Auch ohne Tag (von Hand gestartet) bauen - dann ist der Entwurf-Job uebersprungen
+    if: ${{ !failure() && !cancelled() }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -133,3 +165,10 @@ jobs:
           name: tonuino-studio-${{ matrix.name }}
           path: ${{ matrix.artifact_glob }}
           if-no-files-found: error
+
+      - name: Installer an den Release-Entwurf haengen
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.artifact_glob }} --clobber
