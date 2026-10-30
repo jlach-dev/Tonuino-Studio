@@ -202,14 +202,15 @@ def _instant_worker(result, calls):
 
 
 def test_ai_back_survives_reopen_and_reaches_sd(tmp_path, monkeypatch):
-    """Rand per KI + KI-Rueckseite -> Uebernehmen -> schliessen -> oeffnen -> Uebernehmen:
-    keine neue Erzeugung, Rueckseite unveraendert, im Archiv am Kartencover, auf der SD-Karte"""
+    """Rand per KI -> Als Vorderseite, KI-Rueckseite -> Als Rueckseite -> schliessen -> oeffnen:
+    beide Seiten sind da, nichts wird neu erzeugt, die Rueckseite haengt im Archiv am
+    Kartencover und kommt beim Uebertragen mit auf die SD-Karte"""
     pytest.importorskip("PyQt6")
     from PIL import Image
     from PyQt6.QtCore import QCoreApplication, QSettings
     from PyQt6.QtWidgets import QApplication
     from core import card_store
-    from core.card_layout import BACK_MODE_AI
+    from core.card_layout import BACK_MODE_IMAGE
     from core.cover_archive import BACK_KIND_AI, KIND_ONLINE
     from core.library_import import ImportResult, _write_card
     from core.sd_card import Folder, Track
@@ -234,57 +235,59 @@ def test_ai_back_survives_reopen_and_reaches_sd(tmp_path, monkeypatch):
     def open_dialog():
         dialog = cm.CoverManagerDialog(folder, "Folge 58", MetadataManager(), archive, library=True,
                                        album_id="lib58")
-        dialog.tabs.setCurrentIndex(1)
         app.processEvents()
         return dialog
+
+    def back_color(card_dir):
+        with Image.open(card_store.back_paths(card_dir)[1]) as img:
+            return img.convert("RGB").getpixel((img.width // 2, img.height // 2))
 
     dialog = open_dialog()
     dialog._add_candidate(cm.Candidate(cm.SECTION_ONLINE, "Spotify", png_bytes(size=(640, 640)), KIND_ONLINE),
                           select=True)
-    dialog.front_extend_check.setChecked(True)
-    cm._select_data(dialog.back_mode_combo, BACK_MODE_AI)
+    dialog.btn_extend.click()          # neue Version "KI-Rand", angeklickt
+    dialog.btn_card_cover.click()      # als Vorderseite -> gespeichert
     dialog.back_wish_edit.setText("Pferdehalfter auf Holzschemel")
-    dialog._apply()
+    dialog.btn_ai_back.click()         # neues Bild "KI-Rückseite", angeklickt
+    dialog.btn_back_cover.click()      # als Rueckseite -> gespeichert
     card_dir = dialog._card_dir
-    assert len(generated) == 1 and card_store.has_back(card_dir)
-    assert card_store.load_meta(card_dir).back_mode == BACK_MODE_AI
-    back_before = card_store.back_paths(card_dir)[0].read_bytes()
+    assert len(generated) == 1 and card_store.has_back(card_dir) and back_color(card_dir) == (200, 10, 10)
+    assert card_store.load_meta(card_dir).back_mode == BACK_MODE_IMAGE
     card_entry = next(e for e in archive.covers("lib58") if ROLE_CARD_COVER in e.roles)
     assert card_entry.back_file and card_entry.back_kind == BACK_KIND_AI
     dialog.done(0)
 
     dialog = open_dialog()
-    assert not dialog._needs_ai_back()
-    assert "KI-Rückseite KI-Rückseite" not in dialog.sides_label.text()
-    assert "wird wiederverwendet" in dialog.sides_label.text()
-    dialog._apply()
+    assert dialog.front_source is not None and dialog.back_source is not None
+    assert "gespeichert ✓" in dialog.sides_label.text()
+    dialog.title_edit.setPlainText("Die Schmugglerpferde")
+    dialog.done(0)  # Autosave beim Schliessen
     assert len(generated) == 1  # nicht neu erzeugt
-    assert card_store.back_paths(card_dir)[0].read_bytes() == back_before
     meta = card_store.load_meta(card_dir)
-    assert meta.back_mode == BACK_MODE_AI and meta.archive_cover_id == card_entry.id
-    dialog.done(0)
+    assert meta.title == "Die Schmugglerpferde" and meta.archive_cover_id == card_entry.id
+    assert back_color(card_dir) == (200, 10, 10)
 
-    # Uebertragen auf die SD-Karte: die gestaltete KI-Rueckseite kommt mit
+    # Uebertragen auf die SD-Karte: die Rueckseite kommt mit
     sd_folder = Folder(index=1, path=str(tmp_path / "sd" / "01"), tracks=[], name="01")
     Path(sd_folder.path).mkdir(parents=True)
     result = ImportResult()
     _write_card(sd_folder, read_album(str(album_dir)), "lib58", archive, MetadataManager(), "landscape", result)
     assert result.card_written and result.back_written
-    assert card_store.load_meta(sd_folder.path).back_mode == BACK_MODE_AI
+    assert card_store.load_meta(sd_folder.path).back_mode == BACK_MODE_IMAGE
     QSettings().clear()
 
 
 @pytest.mark.parametrize("library", [True, False], ids=["bibliothek", "sd"])
 def test_pick_back_after_ai_back_with_real_buttons(tmp_path, monkeypatch, library):
-    """KI-Rueckseite erzeugen, dann ein Bild ohne eigene Rueckseite anklicken und
-    "Als Rueckseite": der Seiten-Umschalter blieb auf "Rueckseite" stehen, der Knopf
-    tat nichts und "Uebernehmen" speicherte weiter die KI-Rueckseite"""
+    """Nur mit den Knoepfen unter der Vorschau: Vorderseite, Rueckseite, KI-Rueckseite und
+    wieder ein Bild als Rueckseite - jede Wahl ist sofort gespeichert, auch wenn der
+    Seiten-Umschalter zwischendurch auf "Rueckseite" stand"""
     pytest.importorskip("PyQt6")
     from PIL import Image
     from PyQt6.QtCore import QCoreApplication, QSettings
     from PyQt6.QtWidgets import QApplication
     from core import card_store
-    from core.card_layout import BACK_MODE_AI, BACK_MODE_IMAGE
+    from core.card_layout import BACK_MODE_IMAGE
     from core.cover_archive import KIND_ONLINE
     from core.sd_card import Folder, SDCard, Track
     from gui import cover_manager_dialog as cm
@@ -299,7 +302,6 @@ def test_pick_back_after_ai_back_with_real_buttons(tmp_path, monkeypatch, librar
     monkeypatch.setattr(cm, "image_model", lambda: "m")
     monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
     monkeypatch.setattr(cm.CoverManagerDialog, "unsaved_variants", lambda self: [])
-    monkeypatch.setattr(cm.CoverManagerDialog, "_ask_archive_previous", lambda self, what: True)
     archive = CoverArchive(str(tmp_path / "data"))
     if library:
         album_dir = make_album(tmp_path / "Musik", "A", count=1, album="Folge 58", artist="Bibi")
@@ -313,7 +315,7 @@ def test_pick_back_after_ai_back_with_real_buttons(tmp_path, monkeypatch, librar
         sd = SDCard(str(tmp_path / "sd"))
         sd.scan()
         dialog = cm.CoverManagerDialog(sd.folders[1], "Folge 58", MetadataManager(), archive)
-    yellow = (230, 220, 0)
+    yellow, red = (230, 220, 0), (200, 10, 10)
     front = cm.Candidate(cm.SECTION_ONLINE, "Front", png_bytes(size=(640, 640), color=(0, 0, 200)), KIND_ONLINE)
     back = cm.Candidate(cm.SECTION_ONLINE, "Back", png_bytes(size=(640, 640), color=yellow), KIND_ONLINE)
     dialog._add_candidate(front)
@@ -333,21 +335,16 @@ def test_pick_back_after_ai_back_with_real_buttons(tmp_path, monkeypatch, librar
     dialog.btn_card_cover.click()
     click(back)
     dialog.btn_back_cover.click()
-    dialog.tabs.setCurrentIndex(1)
-    dialog.btn_apply.click()
     assert saved_back_color() == yellow
 
-    cm._select_data(dialog.back_mode_combo, BACK_MODE_AI)
-    dialog.btn_apply.click()
-    assert card_store.load_meta(dialog._card_dir).back_mode == BACK_MODE_AI
-    assert dialog.side_bar.currentIndex() == 1  # die KI-Erzeugung hat auf "Rueckseite" umgeschaltet
+    dialog.btn_ai_back.click()      # neues Bild, angeklickt
+    dialog.btn_back_cover.click()
+    assert saved_back_color() == red
 
-    dialog.tabs.setCurrentIndex(0)
+    dialog.side_bar.setCurrentIndex(1)  # Umschalter bleibt auf "Rueckseite" stehen
     click(back)
     assert dialog.btn_back_cover.isEnabled() and dialog.btn_back_cover.text() == "Als Rückseite"
     dialog.btn_back_cover.click()
-    dialog.tabs.setCurrentIndex(1)
-    dialog.btn_apply.click()
     assert card_store.load_meta(dialog._card_dir).back_mode == BACK_MODE_IMAGE
     assert saved_back_color() == yellow
     dialog.done(0)

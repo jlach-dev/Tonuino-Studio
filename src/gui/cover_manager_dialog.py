@@ -59,6 +59,8 @@ from gui.workers import (
 
 log = logging.getLogger(__name__)
 
+AUTOSAVE_DELAY_MS = 800  # Text/Layout: so lange nach der letzten Eingabe wird gespeichert
+
 SETTINGS_DATA_DIR = "library/data_dir"
 SETTINGS_SOURCES = "covers/search_sources"
 SETTINGS_TITLE_STYLE = "covers/title_style"
@@ -286,12 +288,14 @@ class CoverManagerDialog(QDialog):
         self.series_profile: Optional[SeriesProfile] = None
         self._detected_series = ("", "")  # Name, MusicBrainz-Serien-ID
         self._anchor_images: List[bytes] = []
-        self._extend_jobs: list = []  # anstehende KI-Schritte beim Uebernehmen
-        # explizit gewaehlte Bildquellen (sonst: angeklicktes Bild bzw. dessen Rueckseite)
+        # Vorder- und Rueckseite der Karte: per "Als Vorderseite" / "Als Rueckseite" gesetzt und
+        # sofort gespeichert; beim Oeffnen die vorhandene Karte. Text- und Layoutaenderungen
+        # speichert ein kurzer Autosave-Timer.
         self.front_source: Optional[SideSource] = None
         self.back_source: Optional[SideSource] = None
-        # zuletzt erzeugte KI-Rueckseite - unabhaengig davon, welches Bild angeklickt ist
-        self.ai_back: Optional[SideSource] = None
+        self._loading = True  # waehrend des Aufbaus kein Autosave
+        self._autosave_timer: Optional[QTimer] = None
+        self._extend_source: Optional[SideSource] = None
 
         # Kartendateien: auf der SD-Karte im Ordner, aus der Bibliothek heraus im Archiv
         self._card_dir = folder.path
@@ -306,7 +310,8 @@ class CoverManagerDialog(QDialog):
         self._load_current()
         self._load_archive()
         self._load_series()
-        self._update_buttons()
+        self._loading = False
+        self._update_side_controls()
         QTimer.singleShot(0, self._start_research)
 
     # --- Aufbau -----------------------------------------------------------------------------
@@ -336,6 +341,7 @@ class CoverManagerDialog(QDialog):
         self.side_bar.addTab("Vorderseite")
         self.side_bar.addTab("Rückseite")
         self.side_bar.currentChanged.connect(self._render_preview)
+        self.side_bar.currentChanged.connect(self._update_buttons)
         side_row.addStretch(1)
         side_row.addWidget(self.side_bar)
         side_row.addStretch(1)
@@ -344,7 +350,7 @@ class CoverManagerDialog(QDialog):
         self.selection_label = QLabel()
         self.selection_label.setWordWrap(True)
         left.addWidget(self.selection_label)
-        # Was beim Uebernehmen gespeichert wird - in jedem Reiter sichtbar
+        # Was gespeichert ist - in jedem Reiter sichtbar
         self.sides_label = QLabel()
         self.sides_label.setObjectName("folderMeta")
         self.sides_label.setWordWrap(True)
@@ -369,18 +375,19 @@ class CoverManagerDialog(QDialog):
 
         card_box = QVBoxLayout()
         card_box.setSpacing(4)
-        card_caption = QLabel("Kartencover (Druck, Tab „Karte“)")
+        card_caption = QLabel("Kartencover (Druck) – speichert sofort")
         card_caption.setObjectName("folderMeta")
-        card_caption.setToolTip("Motiv für die gedruckte RFID-Karte; gespeichert wird im Tab „Karte“ mit „Übernehmen“")
+        card_caption.setToolTip("Motiv für die gedruckte RFID-Karte. Ein Klick auf „Als Vorderseite“ bzw. „Als Rückseite“ "
+                                "speichert die Karte sofort; Text und Layout im Reiter „Karte“ speichern automatisch.")
         card_box.addWidget(card_caption)
         card_buttons = QHBoxLayout()
         self.btn_card_cover = QPushButton("Als Vorderseite")
         self.btn_card_cover.setToolTip("Das angeklickte Bild (bzw. seine Rückseite, wenn „Rückseite“ gewählt ist) "
-                                       "als Motiv der Vorderseite – gespeichert wird im Tab „Karte“ mit „Übernehmen“")
+                                       "als Vorderseite der Karte – wird sofort gespeichert")
         self.btn_card_cover.clicked.connect(lambda: self._pick_source(back=False))
         self.btn_back_cover = QPushButton("Als Rückseite")
-        self.btn_back_cover.setToolTip("Das angeklickte Bild (bzw. seine Rückseite) als Motiv der Rückseite; "
-                                       "der Rückseiten-Modus wechselt dabei auf „Bild“")
+        self.btn_back_cover.setToolTip("Das angeklickte Bild (bzw. seine Rückseite) als Rückseite der Karte – wird "
+                                       "sofort gespeichert; der Rückseiten-Modus wechselt dabei auf „Bild“")
         self.btn_back_cover.clicked.connect(lambda: self._pick_source(back=True))
         card_buttons.addWidget(self.btn_card_cover)
         card_buttons.addWidget(self.btn_back_cover)
@@ -573,28 +580,24 @@ class CoverManagerDialog(QDialog):
         tab_layout = QVBoxLayout(inner)
         tab_layout.setContentsMargins(8, 8, 14, 8)  # rechts Platz fuer die Scrollleiste
         form = QFormLayout()
+        self._card_form = form
         tab_layout.addLayout(form)
         tab_layout.addStretch(1)
-        apply_row = QHBoxLayout()
-        self.apply_note = QLabel()
-        self.apply_note.setObjectName("folderMeta")
-        self.apply_note.setWordWrap(True)
-        apply_row.addWidget(self.apply_note, 1)
-        self.btn_apply = QPushButton("Übernehmen")
-        self.btn_apply.setObjectName("primaryButton")
-        self.btn_apply.setToolTip("Alle Einstellungen übernehmen: Randergänzungen per KI ausführen, "
-                                  "Vorder- und Rückseite auf die SD-Karte speichern")
-        self.btn_apply.clicked.connect(self._apply)
-        apply_row.addWidget(self.btn_apply)
-        tab_layout.addLayout(apply_row)
+        self.save_note = QLabel("Änderungen werden automatisch gespeichert. Vorder- und Rückseite wählst du "
+                                "mit „Als Vorderseite“ / „Als Rückseite“ unter der Vorschau.")
+        self.save_note.setObjectName("folderMeta")
+        self.save_note.setWordWrap(True)
+        tab_layout.addWidget(self.save_note)
         self.series_edit = QLineEdit()
         self.series_edit.setPlaceholderText("z.B. Die Fuchsbande · Folge 39")
         self.series_edit.textChanged.connect(self._render_preview)
+        self.series_edit.textChanged.connect(self._schedule_autosave)
         form.addRow("Reihe (klein):", self._with_gear(self.series_edit))
         self.title_edit = QPlainTextEdit()
         self.title_edit.setPlaceholderText("Eine Zeile je Folge")
         self.title_edit.setFixedHeight(76)
         self.title_edit.textChanged.connect(self._render_preview)
+        self.title_edit.textChanged.connect(self._schedule_autosave)
         form.addRow("Titel:", self.title_edit)
         self.btn_from_tags = QPushButton("Aus Tags übernehmen")
         self.btn_from_tags.setObjectName("ghostButton")
@@ -607,11 +610,12 @@ class CoverManagerDialog(QDialog):
         _select_data(self.orientation_combo,
                      QSettings().value(ai_settings.SETTINGS_ORIENTATION, ORIENTATION_PORTRAIT, type=str))
         self.orientation_combo.currentIndexChanged.connect(self._render_preview)
-        self.orientation_combo.currentIndexChanged.connect(self._update_apply_note)
+        self.orientation_combo.currentIndexChanged.connect(self._schedule_autosave)
         form.addRow("Ausrichtung:", self.orientation_combo)
         self.number_check = QCheckBox("Ordnernummer klein oben rechts anzeigen")
         self.number_check.setChecked(True)
         self.number_check.toggled.connect(self._render_preview)
+        self.number_check.toggled.connect(self._schedule_autosave)
         form.addRow("", self.number_check)
 
         front_title = QLabel("Vorderseite")
@@ -621,25 +625,13 @@ class CoverManagerDialog(QDialog):
         self.front_source_label.setObjectName("folderMeta")
         self.front_source_label.setWordWrap(True)
         form.addRow("", self.front_source_label)
-        front_buttons = QHBoxLayout()
-        self.btn_front_pick = QPushButton("Als Vorderseite")
-        self.btn_front_pick.setObjectName("ghostButton")
-        self.btn_front_pick.setToolTip("Das angeklickte Bild (bzw. seine Rückseite, wenn „Rückseite“ gewählt ist) "
-                                       "als Motiv der Vorderseite")
-        self.btn_front_pick.clicked.connect(lambda: self._pick_source(back=False))
-        self.btn_front_reset = QPushButton("Zurücksetzen")
-        self.btn_front_reset.setObjectName("ghostButton")
-        self.btn_front_reset.setToolTip("Festlegung aufheben – dann gilt wieder das angeklickte Bild")
-        self.btn_front_reset.clicked.connect(lambda: self._set_front_source(None))
-        for button in (self.btn_front_pick, self.btn_front_reset):
-            front_buttons.addWidget(button)
-        front_buttons.addStretch(1)
-        form.addRow("", front_buttons)
-        self.front_extend_check = QCheckBox("Rand per KI ergänzen (1 Bildaufruf)")
-        self.front_extend_check.setToolTip("Das Vorderseiten-Motiv vom Bildmodell aufs Kartenformat erweitern – "
-                                           "das Ergebnis erscheint als neue Version unter „Neu“")
-        self.front_extend_check.toggled.connect(self._update_apply_note)
-        form.addRow("", self.front_extend_check)
+        self.btn_extend = QPushButton("Rand per KI ergänzen (1 Bildaufruf)")
+        self.btn_extend.setObjectName("ghostButton")
+        self.btn_extend.setToolTip("Das angeklickte Bild (bzw. die angezeigte Bild-Rückseite) vom Bildmodell aufs "
+                                   "Kartenformat erweitern. Das Ergebnis erscheint als neue Version unter „Neu“; "
+                                   "zuweisen mit „Als Vorderseite“ bzw. „Als Rückseite“.")
+        self.btn_extend.clicked.connect(self._extend_selected)
+        form.addRow("", self.btn_extend)
 
         back_title = QLabel("Rückseite")
         back_title.setObjectName("sectionTitle")
@@ -647,7 +639,6 @@ class CoverManagerDialog(QDialog):
         self.back_mode_combo = QComboBox()
         self.back_mode_combo.addItem("Keine Rückseite", BACK_MODE_NONE)
         self.back_mode_combo.addItem("Original-Rückseite / gewähltes Bild", BACK_MODE_IMAGE)
-        self.back_mode_combo.addItem("KI-Rückseite passend zur Vorderseite (optional mit Wunsch)", BACK_MODE_AI)
         self.back_mode_combo.addItem("Ambient Blur der Vorderseite (ohne KI)", BACK_MODE_BLUR)
         self.back_mode_combo.addItem("Farbverlauf aus den Coverfarben (ohne KI)", BACK_MODE_GRADIENT)
         self.back_mode_combo.currentIndexChanged.connect(self._on_back_mode_changed)
@@ -666,45 +657,41 @@ class CoverManagerDialog(QDialog):
         wish_row.addWidget(self.btn_back_ideas)
         self.back_wish_row = QWidget()
         self.back_wish_row.setLayout(wish_row)
-        form.addRow("Wunsch:", self.back_wish_row)
+        form.addRow("KI-Wunsch:", self.back_wish_row)
         self.back_wish_label = form.labelForField(self.back_wish_row)
-        self.back_regenerate_check = QCheckBox("Beim Übernehmen neu erzeugen (1 Bildaufruf)")
-        self.back_regenerate_check.setToolTip("Sonst wird die zuletzt erzeugte KI-Rückseite wiederverwendet")
-        self.back_regenerate_check.toggled.connect(self._update_side_controls)
-        form.addRow("", self.back_regenerate_check)
+        self.btn_ai_back = QPushButton("KI-Rückseite erzeugen (1 Bildaufruf)")
+        self.btn_ai_back.setObjectName("ghostButton")
+        self.btn_ai_back.setToolTip("Erzeugt passend zur gewählten Vorderseite (optional nach Wunsch) eine Rückseite. "
+                                    "Sie erscheint als neues Bild unter „Neu“; zuweisen mit „Als Rückseite“.")
+        self.btn_ai_back.clicked.connect(self._generate_ai_back)
+        form.addRow("", self.btn_ai_back)
         self.back_source_label = QLabel()
         self.back_source_label.setObjectName("folderMeta")
         self.back_source_label.setWordWrap(True)
         form.addRow("", self.back_source_label)
         back_buttons = QHBoxLayout()
-        self.btn_back_pick = QPushButton("Als Rückseite")
-        self.btn_back_pick.setObjectName("ghostButton")
-        self.btn_back_pick.setToolTip("Das angeklickte Bild (bzw. seine Rückseite) als Rückseiten-Motiv verwenden")
-        self.btn_back_pick.clicked.connect(lambda: self._pick_source(back=True))
         self.btn_back_file = QPushButton("Aus Datei …")
         self.btn_back_file.setObjectName("ghostButton")
+        self.btn_back_file.setToolTip("Bild vom PC als Rückseite – wird sofort gespeichert")
         self.btn_back_file.clicked.connect(self._add_back_file)
-        self.btn_back_reset = QPushButton("Zurücksetzen")
+        self.btn_back_reset = QPushButton("Keine Rückseite")
         self.btn_back_reset.setObjectName("ghostButton")
-        self.btn_back_reset.setToolTip("Wieder die Rückseite des Vorderseiten-Covers verwenden")
-        self.btn_back_reset.clicked.connect(lambda: self._set_back_source(None))
-        for button in (self.btn_back_pick, self.btn_back_file, self.btn_back_reset):
+        self.btn_back_reset.setToolTip("Rückseite der Karte entfernen – wird sofort gespeichert")
+        self.btn_back_reset.clicked.connect(lambda: _select_data(self.back_mode_combo, BACK_MODE_NONE))
+        for button in (self.btn_back_file, self.btn_back_reset):
             back_buttons.addWidget(button)
         back_buttons.addStretch(1)
         form.addRow("", back_buttons)
-        self.back_extend_check = QCheckBox("Rand per KI ergänzen (1 Bildaufruf)")
-        self.back_extend_check.setToolTip("Das Rückseiten-Motiv vom Bildmodell aufs Kartenformat erweitern – "
-                                          "das Ergebnis erscheint als neue Version unter „Neu“")
-        self.back_extend_check.toggled.connect(self._update_apply_note)
-        form.addRow("", self.back_extend_check)
         self.back_heading_edit = QLineEdit()
         self.back_heading_edit.setPlaceholderText("Überschrift, z.B. Reihe · Titel")
         self.back_heading_edit.textChanged.connect(self._render_preview)
+        self.back_heading_edit.textChanged.connect(self._schedule_autosave)
         form.addRow("Überschrift:", self.back_heading_edit)
         self.back_lines_edit = QPlainTextEdit()
         self.back_lines_edit.setPlaceholderText("Eine Zeile je Track")
         self.back_lines_edit.setFixedHeight(90)
         self.back_lines_edit.textChanged.connect(self._render_preview)
+        self.back_lines_edit.textChanged.connect(self._schedule_autosave)
         form.addRow("Trackliste:", self.back_lines_edit)
         self.btn_back_from_tags = QPushButton("Trackliste aus Tags")
         self.btn_back_from_tags.setObjectName("ghostButton")
@@ -750,6 +737,7 @@ class CoverManagerDialog(QDialog):
     def _on_text_styles_changed(self, series_style: TextStyle, title_style: TextStyle):
         self.series_style, self.title_style = series_style, title_style
         self._render_preview()
+        self._schedule_autosave()
 
     def _persist_text_styles(self):
         settings = QSettings()
@@ -1248,6 +1236,8 @@ class CoverManagerDialog(QDialog):
             _select_data(self.orientation_combo, meta.orientation)
             self.number_check.setChecked(meta.show_number)
             mode = meta.back_mode
+            if mode == BACK_MODE_AI:  # frueherer Modus: die gespeicherte KI-Rueckseite ist jetzt ein Bild
+                mode = BACK_MODE_IMAGE
             if mode == BACK_MODE_TRACKLIST:  # alter eigener Modus -> Flag + Bild/Blur
                 mode = BACK_MODE_IMAGE if card_store.has_back(self._card_dir) else BACK_MODE_BLUR
                 self.back_tracklist_check.setChecked(True)
@@ -1376,7 +1366,7 @@ class CoverManagerDialog(QDialog):
         self.candidates.remove(candidate)
         if self.selected is candidate:
             self.selected = None
-        for attr in ("front_source", "back_source", "ai_back"):
+        for attr in ("front_source", "back_source"):
             source = getattr(self, attr)
             if source is not None and source.candidate is candidate:
                 setattr(self, attr, None)
@@ -1407,8 +1397,10 @@ class CoverManagerDialog(QDialog):
                                       is_sd_card_art=True, back_data=back_data,
                                       meta={"kind": "ai_back"} if ai_back else {})
                 self._add_candidate(candidate, select=True)
-                if ai_back:  # schon erzeugt - beim naechsten Uebernehmen wiederverwenden statt neu erzeugen
-                    self.ai_back = SideSource(candidate, back=True)
+                # die gespeicherte Karte ist der Ausgangszustand beider Seiten
+                self.front_source = SideSource(candidate)
+                if back_data is not None:
+                    self.back_source = SideSource(candidate, back=True)
             except OSError:
                 pass
 
@@ -1863,23 +1855,28 @@ class CoverManagerDialog(QDialog):
 
     @guarded_slot("Kartencover übernehmen")
     def _set_card_cover(self):
-        front = self.front_source or (SideSource(self.selected) if self.selected is not None else None)
+        """Speichert die Karte mit der festgelegten Vorder- und Rueckseite - ohne Rueckfrage.
+        Aufgerufen von "Als Vorderseite"/"Als Rueckseite", "Aus Datei" und dem Autosave."""
+        if self._autosave_timer is not None:
+            self._autosave_timer.stop()
+        if self.front_source is None and self.selected is not None:
+            self.front_source = SideSource(self.selected)
+        front = self.front_source
         if front is None:
-            QMessageBox.information(self, "Keine Vorderseite", "Bitte zuerst ein Bild anklicken oder "
-                                                                "„Als Vorderseite“ wählen.")
+            self._flash("Noch keine Vorderseite – Bild anklicken und „Als Vorderseite“.")
             return
         candidate = front.candidate
-        # das vorhandene SD-Kartenmotiv nur neu rendern (Titel/Ausrichtung),
-        # alles andere wird dabei im Archiv behalten
+        # das vorhandene Kartenmotiv nur neu rendern (Titel/Ausrichtung); ein ersetztes
+        # Motiv, das noch nicht im Archiv liegt, wird ohne Rueckfrage dort abgelegt
         current = self._current_candidate("is_sd_card_art")
         if (current is not None and current is not candidate and self.archive is not None
                 and not self._card_art_archived()):
-            answer = self._ask_archive_previous("Kartenmotiv")
-            if answer is None:
-                return
-            if answer:
-                self._persist_album()
-                self._archive_previous(current, "Früheres Kartenmotiv")
+            self._persist_album()
+            self._archive_previous(current, "Früheres Kartenmotiv")
+        back = self.back_source
+        if (back is not None and self.archive is not None and not back.candidate.kept
+                and not back.candidate.is_sd_card_art):
+            self._keep(back.candidate)  # verwendete Rueckseite im Archiv behalten (wie die Vorderseite)
         entry = None if front.candidate.is_sd_card_art else self._keep(front.candidate)
         if entry:
             self._persist_album()
@@ -1921,25 +1918,54 @@ class CoverManagerDialog(QDialog):
         self.card_changed = True
         self._card_meta = card_store.load_meta(self._card_dir)
         if current is not candidate:
-            # "Aktuell" sofort auf den neuen Stand bringen (inkl. Rueckseite)
+            # "Aktuell" sofort auf den neuen Stand bringen (inkl. Rueckseite); Seiten, die auf das
+            # bisherige Kartenmotiv zeigten, auf das neue umhaengen
+            back_was_current = current is not None and self.back_source is not None \
+                and self.back_source.candidate is current
             if current is not None:
                 self._remove_candidate(current)
             back_raw = card_store.back_paths(self._card_dir)[1]
-            self._add_candidate(Candidate(SECTION_CURRENT, self._card_art_label(),
-                                          card_store.card_paths(self._card_dir)[1].read_bytes(),
-                                          KIND_LOCAL, is_sd_card_art=True,
-                                          back_data=back_raw.read_bytes() if back_raw.exists() else None))
+            new_current = Candidate(SECTION_CURRENT, self._card_art_label(),
+                                    card_store.card_paths(self._card_dir)[1].read_bytes(),
+                                    KIND_LOCAL, is_sd_card_art=True,
+                                    back_data=back_raw.read_bytes() if back_raw.exists() else None)
+            self._add_candidate(new_current)
+            if back_was_current and new_current.has_back:
+                self.back_source = SideSource(new_current, back=True)
+        self._update_side_controls()
         self._render_preview()
         if role_error is not None:
             QMessageBox.warning(self, "Nur teilweise gespeichert",
                                 "Das Kartenbild ist gespeichert, im Cover-Archiv konnte es aber nicht als "
                                 f"Kartencover vermerkt werden:\n\n{role_error}\n\n"
-                                "Bitte „Übernehmen“ noch einmal klicken." + back_note)
+                                "Bitte „Als Vorderseite“ noch einmal klicken." + back_note)
         elif self.library_mode:
-            self._flash("✓ Kartencover im Archiv gespeichert – wird beim Übertragen auf die SD-Karte "
-                        "geschrieben." + back_note)
+            self._flash("✓ Karte gespeichert (Archiv) – wird beim Übertragen auf die SD-Karte geschrieben."
+                        + back_note)
         else:
-            self._flash("✓ Kartencover auf der SD-Karte gespeichert (card.png)." + back_note)
+            self._flash("✓ Karte auf der SD-Karte gespeichert (card.png)." + back_note)
+
+    # --- Autosave fuer Text und Layout --------------------------------------------------------
+
+    def _schedule_autosave(self, *_):
+        """Text-/Layoutaenderung: kurz nach der letzten Eingabe speichern (nur mit Vorderseite)"""
+        if getattr(self, "_loading", True) or self.front_source is None:
+            return
+        if self._autosave_timer is None:
+            self._autosave_timer = QTimer(self)
+            self._autosave_timer.setSingleShot(True)
+            self._autosave_timer.timeout.connect(self._autosave)
+        self._autosave_timer.start(AUTOSAVE_DELAY_MS)
+        self._update_side_controls()
+
+    def _autosave(self):
+        if self.front_source is not None:
+            self._set_card_cover()
+
+    def _flush_autosave(self):
+        if self._autosave_timer is not None and self._autosave_timer.isActive():
+            self._autosave_timer.stop()
+            self._set_card_cover()
 
     # --- Rueckseite ---------------------------------------------------------------------------
 
@@ -1949,19 +1975,16 @@ class CoverManagerDialog(QDialog):
         self.back_tracklist_check.setVisible(mode != BACK_MODE_NONE)
         for widget in (self.back_heading_edit, self.back_lines_edit, self.btn_back_from_tags):
             widget.setVisible(is_list)
-        for widget in (self.btn_back_pick, self.btn_back_file, self.btn_back_reset, self.back_extend_check,
-                       self.back_source_label):
-            widget.setVisible(mode == BACK_MODE_IMAGE)
-        for widget in (self.back_wish_row, self.back_regenerate_check):
-            widget.setVisible(mode == BACK_MODE_AI)
-        if self.back_wish_label is not None:
-            self.back_wish_label.setVisible(mode == BACK_MODE_AI)
-        # Eine gewaehlte Rueckseite bleibt gemerkt, auch wenn zwischendurch Blur,
-        # Verlauf oder KI eingestellt ist; sie wirkt nur im Modus "Bild".
+            label = self._card_form.labelForField(widget)
+            if label is not None:
+                label.setVisible(is_list)
+        # Eine gewaehlte Rueckseite bleibt gemerkt, auch wenn zwischendurch Blur oder
+        # Verlauf eingestellt ist; sie wirkt nur im Modus "Bild".
         if is_list and not self.back_lines_edit.toPlainText().strip():
             self._fill_back_from_tags()
         self._update_side_controls()
         self._render_preview()
+        self._schedule_autosave()
 
     def _fill_back_from_tags(self):
         heading = " · ".join(p for p in (self.series_edit.text().strip(),
@@ -2026,12 +2049,6 @@ class CoverManagerDialog(QDialog):
             return blur_background(front_image, size) if front_image is not None else None
         if mode == BACK_MODE_GRADIENT:
             return gradient_background(front_image, size) if front_image is not None else None
-        if mode == BACK_MODE_AI:
-            source = self._ai_back_source()
-            if source is not None:
-                return source.image()
-            # Platzhalter bis zur Erzeugung beim Uebernehmen
-            return blur_background(front_image, size) if front_image is not None else None
         if self.back_source is not None:
             return self.back_source.image()
         if front is None:
@@ -2041,25 +2058,41 @@ class CoverManagerDialog(QDialog):
         return None
 
     def _pick_source(self, back: bool):
-        """Die angeschaute Seite des angeklickten Bildes als Vorder- bzw. Rueckseiten-Motiv festlegen"""
+        """Die angeschaute Seite des angeklickten Bildes als Vorder- bzw. Rueckseite
+        festlegen und sofort speichern - ohne Reiter "Karte", ohne Rueckfrage"""
         source = self._browse_source()
         if source is None:
-            if self.selected is not None:
-                self._flash("Dieses Bild hat keine Rückseite – bitte „Vorderseite“ wählen oder ein anderes Bild.")
             return
         if back:
-            if self.back_mode_combo.currentData() != BACK_MODE_IMAGE:
-                _select_data(self.back_mode_combo, BACK_MODE_IMAGE)  # Wahl soll sichtbar wirken
-            self._set_back_source(source)
-            self._flash(f"Rückseite: {source.label}")
+            self.back_source = source
+            self._select_back_mode(BACK_MODE_IMAGE)
         else:
-            self._set_front_source(source)
-            self._flash(f"Vorderseite: {source.label}")
+            self.front_source = source
+        self._update_side_controls()
+        if self.front_source is None:
+            self._flash(f"Rückseite gemerkt: {source.label} – gespeichert wird, sobald eine Vorderseite "
+                        "gewählt ist.")
+        else:
+            self._set_card_cover()
         self._highlight_sides()
+        self._render_preview()
+
+    def _select_back_mode(self, mode: str):
+        """Rueckseitenmodus setzen, ohne dabei einen zusaetzlichen Autosave auszuloesen"""
+        if self.back_mode_combo.currentData() == mode:
+            return
+        self.back_mode_combo.blockSignals(True)
+        _select_data(self.back_mode_combo, mode)
+        self.back_mode_combo.blockSignals(False)
+        loading, self._loading = self._loading, True
+        try:
+            self._on_back_mode_changed()
+        finally:
+            self._loading = loading
 
     def _highlight_sides(self):
         """Zustandszeile unter der Vorschau kurz hervorheben - die Statuszeile allein
-        wird von der naechsten Aktion (z.B. Uebernehmen) gleich wieder ueberschrieben"""
+        wird von der naechsten Aktion gleich wieder ueberschrieben"""
         self.sides_label.setStyleSheet(f"color: {theme.GREEN}; font-weight: bold;")
         timer = getattr(self, "_sides_timer", None)
         if timer is None:
@@ -2068,23 +2101,9 @@ class CoverManagerDialog(QDialog):
             timer.timeout.connect(lambda: self.sides_label.setStyleSheet(""))
         timer.start(4000)
 
-    def _set_front_source(self, source: Optional[SideSource]):
-        self.front_source = source
-        self._update_side_controls()
-        self.side_bar.setCurrentIndex(0)
-        self._render_preview()
-
-    def _set_back_source(self, source: Optional[SideSource]):
-        self.back_source = source
-        self._update_side_controls()
-        self.side_bar.setCurrentIndex(1)
-        self._render_preview()
-
     @guarded_slot("Rückseite hinzufügen")
     def _add_back_file(self):
-        """Datei vom PC als Rueckseite des angeklickten Covers"""
-        if self.selected is None:
-            return
+        """Bild vom PC als Rueckseite - als neues Bild in die Galerie und sofort speichern"""
         path, _ = QFileDialog.getOpenFileName(self, "Rückseite auswählen", "", "Bilder (*.jpg *.jpeg *.png *.webp)")
         if not path:
             return
@@ -2094,21 +2113,16 @@ class CoverManagerDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Bild nicht lesbar", str(e))
             return
-        self.selected.back_data = data
-        self.selected._back_image = None
-        if self.selected.entry is not None and self.archive is not None:
-            self.archive.set_back(self.album_id, self.selected.entry.id, data)
-        self.back_source = None
-        self._refresh_item_texts()
-        self._update_side_controls()
-        self.side_bar.setCurrentIndex(1)
-        self._render_preview()
+        candidate = Candidate(SECTION_NEW, os.path.basename(path), data, KIND_FILE)
+        self._add_candidate(candidate, select=True)
+        if self.archive is not None:
+            self._keep(candidate)
+        self.side_bar.setCurrentIndex(0)
+        self._pick_source(back=True)
 
     def _front_state_text(self) -> str:
         if self.front_source is not None:
             return self.front_source.label
-        if self.selected is not None:
-            return f"{self.selected.label} (angeklickt, nicht festgelegt)"
         return "noch keine – Bild anklicken und „Als Vorderseite“"
 
     def _back_state_text(self) -> str:
@@ -2116,16 +2130,6 @@ class CoverManagerDialog(QDialog):
         front = self._front_candidate()
         if mode == BACK_MODE_NONE:
             return "keine"
-        if mode == BACK_MODE_AI:
-            source = self._ai_back_source()
-            if source is not None and not self._needs_ai_back():
-                label = source.candidate.label
-                if not label.startswith("KI-Rückseite"):
-                    label = f"KI-Rückseite von {label}"
-                return f"{label} (wird wiederverwendet)"
-            if source is not None:
-                return "KI-Rückseite wird beim Übernehmen neu erzeugt"
-            return "KI-Rückseite wird beim Übernehmen erzeugt (Vorschau zeigt bis dahin einen Platzhalter)"
         if mode == BACK_MODE_BLUR:
             return "Blur aus der Vorderseite"
         if mode == BACK_MODE_GRADIENT:
@@ -2134,71 +2138,75 @@ class CoverManagerDialog(QDialog):
             return self.back_source.label
         if front is not None and front.has_back:
             return f"Rückseite von {front.label}"
-        return "noch keine – Bild anklicken und „Als Rückseite“ oder „Aus Datei …“"
+        return "noch keine – Bild anklicken und „Als Rückseite“"
+
+    def _save_state_text(self) -> str:
+        if self.front_source is None:
+            return "Vorderseite fehlt noch" if self.back_source is not None else ""
+        if self._autosave_timer is not None and self._autosave_timer.isActive():
+            return "wird gespeichert …"
+        return "gespeichert ✓" if card_store.has_card(self._card_dir) else ""
 
     def _update_side_controls(self):
         front_text, back_text = self._front_state_text(), self._back_state_text()
         self.front_source_label.setText(f"Vorderseiten-Motiv: {front_text}")
         self.back_source_label.setText(f"Rückseiten-Motiv: {back_text}")
-        self.sides_label.setText(f"Karte · Vorderseite: {front_text} · Rückseite: {back_text}")
-        self.btn_front_reset.setEnabled(self.front_source is not None)
-        browse = self._browse_source()
-        self.btn_front_pick.setEnabled(browse is not None)
-        self.btn_back_pick.setEnabled(browse is not None)
-        self.btn_back_reset.setEnabled(self.back_source is not None)
-        self.btn_back_file.setEnabled(self.selected is not None)
+        state = self._save_state_text()
+        self.sides_label.setText(f"Karte · Vorderseite: {front_text} · Rückseite: {back_text}"
+                                 + (f" · {state}" if state else ""))
+        self.btn_back_reset.setEnabled(self.back_mode_combo.currentData() != BACK_MODE_NONE)
         self._update_buttons()
 
-    def _update_apply_note(self, *_):
-        if not hasattr(self, "btn_apply"):
-            return
-        jobs, skipped = [], []
-        if self.front_extend_check.isChecked():
-            if self._extension_fits(back=False):
-                skipped.append("Vorderseite")
-            else:
-                jobs.append("Rand der Vorderseite ergänzen")
-        if hasattr(self, "back_tracklist_check") and self._needs_ai_back():
-            jobs.append("KI-Rückseite erzeugen")
-        if self.back_extend_check.isChecked() and self.back_mode_combo.currentData() == BACK_MODE_IMAGE:
-            if self._extension_fits(back=True):
-                skipped.append("Rückseite")
-            else:
-                jobs.append("Rand der Rückseite ergänzen")
-        skip_note = (f" {' und '.join(skipped)} hat schon das Kartenformat – Randergänzung entfällt (kein Aufruf)."
-                     if skipped else "")
-        if jobs:
-            self.apply_note.setText(f"Beim Übernehmen per KI: {', '.join(jobs)} "
-                                    f"(ca. {len(jobs) * ESTIMATED_COST_PER_IMAGE:.2f} USD), dann speichern."
-                                    + skip_note)
-        elif skipped:
-            self.apply_note.setText("Beim Übernehmen wird direkt gespeichert." + skip_note)
-        else:
-            self.apply_note.setText("Beim Übernehmen werden Vorder- und Rückseite im Archiv gespeichert und beim "
-                                    "Übertragen auf die SD-Karte geschrieben." if self.library_mode else
-                                    "Beim Übernehmen werden Vorder- und Rückseite auf die SD-Karte gespeichert.")
+    # --- KI-Aktionen: erzeugen neue Bilder, zugewiesen wird per Knopf ----------------------------
 
-    # --- Rand per KI ergaenzen --------------------------------------------------------------
-
-    def _apply(self):
-        """Alle Einstellungen uebernehmen: zuerst die angehakten Randergaenzungen
-        nacheinander ausfuehren (Ergebnisse als neue Versionen unter "Neu"),
-        danach Vorder- und Rueckseite speichern."""
-        if self._extend_worker is not None and self._extend_worker.isRunning():
-            return
-        jobs = []
-        if self.front_extend_check.isChecked():
-            jobs.append("extend_front")
-        if self._needs_ai_back():
-            jobs.append("generate_back")
-        if self.back_extend_check.isChecked() and self.back_mode_combo.currentData() == BACK_MODE_IMAGE:
-            jobs.append("extend_back")
-        if jobs and self.client is None:
-            QMessageBox.information(self, "Kein API-Key", "Für KI-Rückseite und Randergänzung bitte zuerst unter "
+    def _ki_ready(self) -> bool:
+        if self.client is None:
+            QMessageBox.information(self, "Kein API-Key", "Für KI-Funktionen bitte zuerst unter "
                                                           "Kartencover → KI & Online-Dienste einen Gemini-API-Key hinterlegen.")
+            return False
+        return not any(w is not None and w.isRunning() for w in (self._extend_worker, self._back_worker))
+
+    @guarded_slot("Rand per KI ergänzen")
+    def _extend_selected(self):
+        """Das angeklickte Bild (bzw. die angezeigte Bild-Rueckseite) aufs Kartenformat erweitern"""
+        if not self._ki_ready():
             return
-        self._extend_jobs = jobs
-        self._run_next_extension()
+        source = self._browse_source()
+        if source is None or source.image() is None:
+            self._flash("Bitte zuerst ein Bild in der Galerie anklicken.")
+            return
+        if fits_card_format(source.image(), self.orientation_combo.currentData()):
+            self._flash("Das Bild hat schon das Kartenformat – keine Randergänzung nötig (kein Aufruf).")
+            return
+        self._extend_source = source
+        self.status_label.setText(f"Rand wird per KI ergänzt: {source.label} …")
+        self._extend_worker = CoverExtendWorker(self.client, image_model(), source.data(),
+                                                self.orientation_combo.currentData())
+        self._extend_worker.done.connect(self._on_extended)
+        self._extend_worker.failed.connect(self._on_extend_failed)
+        self._extend_worker.finished.connect(self._update_buttons)
+        self._extend_worker.start()
+        self._update_buttons()
+
+    def _on_extend_failed(self, message: str):
+        QMessageBox.warning(self, "Rand nicht ergänzt", message)
+
+    def _on_extended(self, image: Image.Image):
+        """Neues Bild unter "Neu"; zugewiesen wird es mit "Als Vorderseite" bzw. "Als Rueckseite"."""
+        source = self._extend_source
+        base = source.candidate
+        number = sum(1 for c in self.candidates if c.section == SECTION_NEW) + 1
+        meta = {"style": "Rand ergänzt", "model": image_model(), "prompt": f"Outpainting von {source.label}"}
+        if base.meta.get("kind") == "ai_back" and (source.back or not base.has_back):
+            meta["kind"] = "ai_back"
+        candidate = Candidate(SECTION_NEW, f"KI-Rand · {base.label} #{number}", _pil_bytes(image), KIND_AI,
+                              meta=meta)
+        candidate._image = image
+        self._add_candidate(candidate, select=True)
+        self.side_bar.setCurrentIndex(0)
+        self._update_side_controls()
+        self._render_preview()
+        self._flash("Rand ergänzt – neues Bild unter „Neu“. Mit „Als Vorderseite“ bzw. „Als Rückseite“ zuweisen.")
 
     def _suggest_back_ideas(self):
         if self.client is None:
@@ -2235,33 +2243,17 @@ class CoverManagerDialog(QDialog):
 
     def _use_back_idea(self, text: str):
         self.back_wish_edit.setText(text)
-        if self._ai_back_source() is not None:
-            self.back_regenerate_check.setChecked(True)  # neue Idee -> beim Uebernehmen neu erzeugen
         self._update_side_controls()
 
-    def _ai_back_source(self) -> Optional[SideSource]:
-        """Die zuletzt erzeugte KI-Rueckseite: explizit gesetzt oder die des angeklickten Bildes"""
-        if self.ai_back is not None and self.ai_back.candidate in self.candidates:
-            return self.ai_back
-        # aus dem Archiv geladene oder zuvor angeklickte KI-Rueckseite als Ersatz
-        for source in (self.back_source, SideSource(self.selected, back=True) if self.selected else None):
-            if (source is not None and source.back and source.candidate.has_back
-                    and source.candidate.meta.get("kind") == "ai_back"):
-                return source
-        return None
-
-    def _needs_ai_back(self) -> bool:
-        """KI-Rueckseite gewaehlt und noch keine erzeugte Version vorhanden (oder Neu-Erzeugen angehakt)"""
-        if self.back_mode_combo.currentData() != BACK_MODE_AI:
-            return False
-        if getattr(self, "back_regenerate_check", None) is not None and self.back_regenerate_check.isChecked():
-            return True
-        return self._ai_back_source() is None
-
-    def _start_back_generation(self) -> bool:
-        front = self.front_source or (SideSource(self.selected) if self.selected else None)
+    @guarded_slot("KI-Rückseite erzeugen")
+    def _generate_ai_back(self):
+        """KI-Rueckseite passend zur gewaehlten Vorderseite als neues Bild erzeugen"""
+        if not self._ki_ready():
+            return
+        front = self.front_source
         if front is None:
-            return False
+            self._flash("Bitte zuerst eine Vorderseite wählen – die KI-Rückseite passt sich ihr an.")
+            return
         request = GenerationRequest(
             info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText(),
             style=self._effective_style(), orientation=self.orientation_combo.currentData(),
@@ -2275,107 +2267,24 @@ class CoverManagerDialog(QDialog):
         self._back_worker.finished.connect(self._update_buttons)
         self._back_worker.start()
         self._update_buttons()
-        return True
 
     def _on_back_failed(self, message: str):
-        QMessageBox.warning(self, "KI-Rückseite nicht erzeugt", f"{message}\n\nEs wird ohne Rückseite gespeichert.")
-        self._run_next_extension()
+        QMessageBox.warning(self, "KI-Rückseite nicht erzeugt", message)
 
     def _on_back_generated(self, image: Image.Image):
-        """Neue Version unter "Neu": Vorderseite der Quelle + erzeugte Rueckseite"""
+        """Neues Bild unter "Neu"; zugewiesen wird es mit "Als Rueckseite"."""
         base = self._back_front.candidate
         number = sum(1 for c in self.candidates if c.section == SECTION_NEW) + 1
         meta = {"kind": "ai_back", "style": self.style_combo.currentText(), "model": image_model(),
                 "prompt": self.back_wish_edit.text().strip() or "passend zur Vorderseite"}
-        candidate = Candidate(SECTION_NEW, f"KI-Rückseite · {base.label} #{number}", self._back_front.data(),
-                              base.kind if base.kind != KIND_LOCAL else KIND_FILE, meta=meta,
-                              back_data=_pil_bytes(image))
-        candidate._image = self._back_front.image()
-        self._add_candidate(candidate)
-        self.ai_back = SideSource(candidate, back=True)
-        self.back_regenerate_check.setChecked(False)
-        self._update_side_controls()
-        self.side_bar.setCurrentIndex(1)
-        self._render_preview()
-        self._run_next_extension()
-
-    def _extension_fits(self, back: bool) -> bool:
-        """Hat das Motiv der Seite schon das Kartenformat? Dann entfaellt der KI-Aufruf."""
-        source = self._extension_source(back)
-        if source is None:
-            return False
-        image = source.image()
-        return image is not None and fits_card_format(image, self.orientation_combo.currentData())
-
-    def _extension_source(self, back: bool) -> Optional[SideSource]:
-        if back:
-            if self.back_mode_combo.currentData() != BACK_MODE_IMAGE:
-                return None  # Blur/Verlauf/KI sind schon im Kartenformat
-            if self.back_source is not None:
-                return self.back_source
-            front = self._front_candidate()
-            if front is not None and front.has_back:
-                return SideSource(front, back=True)
-            return None
-        return self.front_source or (SideSource(self.selected) if self.selected else None)
-
-    def _run_next_extension(self):
-        while self._extend_jobs:
-            job = self._extend_jobs.pop(0)
-            if job == "generate_back":
-                if self._start_back_generation():
-                    return
-                continue
-            back = job == "extend_back"
-            source = self._extension_source(back)
-            if source is None or source.image() is None:
-                continue
-            if fits_card_format(source.image(), self.orientation_combo.currentData()):
-                side = "Rückseite" if back else "Vorderseite"
-                self._flash(f"{side} hat schon das Kartenformat – Randergänzung übersprungen (kein Aufruf).")
-                continue
-            self._extend_source, self._extend_back = source, back
-            self.status_label.setText(f"Rand wird per KI ergänzt ({'Rückseite' if back else 'Vorderseite'}) …")
-            self._extend_worker = CoverExtendWorker(self.client, image_model(), source.data(),
-                                                    self.orientation_combo.currentData())
-            self._extend_worker.done.connect(self._on_extended)
-            self._extend_worker.failed.connect(self._on_extend_failed)
-            self._extend_worker.finished.connect(self._update_buttons)
-            self._extend_worker.start()
-            self._update_buttons()
-            return
-        # alle Erweiterungen fertig (oder keine): speichern
-        self.front_extend_check.setChecked(False)
-        self.back_extend_check.setChecked(False)
-        self._set_card_cover()
-
-    def _on_extend_failed(self, message: str):
-        QMessageBox.warning(self, "Rand nicht ergänzt", f"{message}\n\nDie Seite wird ohne Erweiterung gespeichert.")
-        self._run_next_extension()
-
-    def _on_extended(self, image: Image.Image):
-        """Neue Version unter "Neu" anlegen und als Quelle der jeweiligen Seite setzen"""
-        source, back = self._extend_source, self._extend_back
-        base = source.candidate
-        number = sum(1 for c in self.candidates if c.section == SECTION_NEW) + 1
-        meta = {"style": "Rand ergänzt", "model": image_model(),
-                "prompt": f"Outpainting {'Rückseite' if back else 'Vorderseite'} von {base.label}"}
-        if back:
-            candidate = Candidate(SECTION_NEW, f"KI-Rand · {base.label} #{number}", base.data,
-                                  base.kind if base.kind != KIND_LOCAL else KIND_FILE, meta=meta,
-                                  back_data=_pil_bytes(image))
-            candidate._image = base.image()
-            self._add_candidate(candidate)
-            self.back_source = SideSource(candidate, back=True)
-        else:
-            candidate = Candidate(SECTION_NEW, f"KI-Rand · {base.label} #{number}", _pil_bytes(image), KIND_AI,
-                                  meta=meta, back_data=base.back_data)
-            candidate._image = image
-            self._add_candidate(candidate)
-            self.front_source = SideSource(candidate)
+        candidate = Candidate(SECTION_NEW, f"KI-Rückseite · {base.label} #{number}", _pil_bytes(image), KIND_AI,
+                              meta=meta)
+        candidate._image = image
+        self._add_candidate(candidate, select=True)
+        self.side_bar.setCurrentIndex(0)
         self._update_side_controls()
         self._render_preview()
-        self._run_next_extension()
+        self._flash("KI-Rückseite erzeugt – neues Bild unter „Neu“. Mit „Als Rückseite“ zuweisen.")
 
     def _back_meta(self, meta: card_store.CardMeta, extended: bool) -> card_store.CardMeta:
         meta.back_mode = self.back_mode_combo.currentData()
@@ -2402,9 +2311,6 @@ class CoverManagerDialog(QDialog):
             card_store.delete_back(self._card_dir, meta)
             return " Keine Rückseite gespeichert (kein Rückseiten-Bild vorhanden)."
         extended = bool(self.back_source is not None and self.back_source.candidate.meta.get("style") == "Rand ergänzt")
-        if mode == BACK_MODE_AI and self._ai_back_source() is None:
-            card_store.delete_back(self._card_dir, meta)
-            return " KI-Rückseite wurde nicht erzeugt, daher keine Rückseite gespeichert."
         art = prepare_card_art(source, orientation)
         try:
             card_store.save_back(self._card_dir, art, self._back_meta(meta, extended))
@@ -2427,13 +2333,13 @@ class CoverManagerDialog(QDialog):
         nicht ueberschrieben, nur eine fruehere KI-Rueckseite."""
         if entry is None or self.archive is None:
             return
-        mode = self.back_mode_combo.currentData()
-        if mode == BACK_MODE_AI:
-            source, kind = self._ai_back_source(), BACK_KIND_AI
-        elif mode == BACK_MODE_IMAGE:
-            source, kind = self.back_source, ""
-        else:
+        if self.back_mode_combo.currentData() != BACK_MODE_IMAGE:
             return
+        source = self.back_source
+        if source is None:
+            front = self._front_candidate()
+            source = SideSource(front, back=True) if front is not None and front.has_back else None
+        kind = BACK_KIND_AI if source is not None and source.candidate.meta.get("kind") == "ai_back" else ""
         data = source.data() if source is not None else None
         if not data:
             return
@@ -2496,8 +2402,8 @@ class CoverManagerDialog(QDialog):
                     source = self._back_source_image(self.selected)
                     if source is None:
                         self.preview.clear()
-                        self.preview.setText("Keine Rückseite – unter „Rückseite“ ein Bild wählen oder einen Modus "
-                                             "(Blur, Verlauf, KI) einstellen")
+                        self.preview.setText("Keine Rückseite – Bild anklicken und „Als Rückseite“ oder unter "
+                                             "„Rückseite“ Blur bzw. Verlauf wählen")
                         return
                     meta = self._back_meta(self._card_meta_now(None), False)
                     card = card_store.render_back_from_meta(prepare_card_art(source, orientation), meta)
@@ -2541,13 +2447,13 @@ class CoverManagerDialog(QDialog):
         self.btn_back_cover.setText("Als Rückseite" + side)
         self.btn_generate.setEnabled(not busy)
         self.btn_research.setEnabled(not busy)
-        extending = any(w is not None and w.isRunning() for w in (self._extend_worker, self._back_worker))
-        self.btn_apply.setEnabled(not extending and (self.front_source is not None or selected))
-        if hasattr(self, "back_regenerate_check"):
-            self.back_regenerate_check.setEnabled(self._ai_back_source() is not None)
-        for check in (self.front_extend_check, self.back_extend_check):
-            check.setEnabled(self.client is not None)
-        self._update_apply_note()
+        working = any(w is not None and w.isRunning() for w in (self._extend_worker, self._back_worker))
+        self.btn_extend.setEnabled(self.client is not None and not working and browse is not None)
+        self.btn_ai_back.setEnabled(self.client is not None and not working and self.front_source is not None)
+        self.btn_extend.setText("Rand wird ergänzt …" if self._extend_worker is not None
+                                and self._extend_worker.isRunning() else "Rand per KI ergänzen (1 Bildaufruf)")
+        self.btn_ai_back.setText("KI-Rückseite wird erzeugt …" if self._back_worker is not None
+                                 and self._back_worker.isRunning() else "KI-Rückseite erzeugen (1 Bildaufruf)")
         self.btn_search.setText("Suche läuft …" if searching else "Cover suchen")
         self.btn_search.setEnabled(not searching)
         self._update_mark_bar()
@@ -2556,6 +2462,7 @@ class CoverManagerDialog(QDialog):
         return [c for c in self.candidates if c.section == SECTION_NEW and not c.kept]
 
     def done(self, result):
+        self._flush_autosave()  # eine gerade getippte Aenderung nicht verlieren
         unsaved = self.unsaved_variants()
         if unsaved and self.archive is not None:
             box = QMessageBox(self)

@@ -7,10 +7,10 @@ from PIL import Image
 
 from core import card_store, cover_sources, musicbrainz
 from core.card_layout import (
-    BACK_MODE_AI, BACK_MODE_BLUR, BACK_MODE_GRADIENT, BACK_MODE_IMAGE, BACK_MODE_TRACKLIST, CardSpec,
+    BACK_MODE_BLUR, BACK_MODE_GRADIENT, BACK_MODE_IMAGE, BACK_MODE_TRACKLIST, CardSpec,
     ORIENTATION_LANDSCAPE, ORIENTATION_PORTRAIT, blur_background, gradient_background, render_back_card,
 )
-from core.cover_archive import KIND_ONLINE, CoverArchive
+from core.cover_archive import KIND_ONLINE, ROLE_CARD_COVER, CoverArchive
 from core.cover_generator import GenerationRequest, extend_to_card
 from core.sd_card import SDCard
 
@@ -183,6 +183,8 @@ def test_cover_manager_saves_back_side(qt_app, tmp_path, monkeypatch):
 
 
 def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_path, monkeypatch):
+    """Als Vorderseite / Als Rueckseite speichern sofort; Klicks in der Galerie aendern nichts;
+    "Rand per KI" legt nur eine neue Version an, zugewiesen wird per Knopf"""
     from core.metadata import MetadataManager
     from gui import cover_manager_dialog as cm
 
@@ -192,35 +194,41 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
     sd = SDCard(str(tmp_path / "sd"))
     sd.scan()
     monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm, "image_model", lambda: "m")
     monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+
     dialog = cm.CoverManagerDialog(sd.folders[1], "Eule", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+    card_dir = sd.folders[1].path
 
     with_back = cm.Candidate(cm.SECTION_ONLINE, "MB", png_bytes(color=(10, 10, 10)), KIND_ONLINE,
                              back_data=png_bytes(color=(200, 0, 0)))
     other = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes(color=(0, 0, 200)), KIND_ONLINE)
     dialog._add_candidate(with_back, select=True)
     dialog._add_candidate(other)
-    cm._select_data(dialog.back_mode_combo, BACK_MODE_IMAGE)
+    assert not card_store.has_card(card_dir)
 
     assert blur_background(Image.new("RGB", (300, 300), "red"), (100, 150)).size == (100, 150)
     assert gradient_background(Image.new("RGB", (300, 300), (200, 30, 30)), (100, 150)).size == (100, 150)
 
-    # Vorschau zeigt die Rueckseite von "MB" -> als Vorderseiten-Motiv uebernehmen
+    # Rueckseite von "MB" als Vorderseite: sofort gespeichert, ohne "Uebernehmen"
     dialog.side_bar.setCurrentIndex(1)
     assert dialog._preview_source().back
     dialog._pick_source(back=False)
     assert dialog.front_source.candidate is with_back and dialog.front_source.back
     assert dialog._front_image().getpixel((0, 0)) == (200, 0, 0)
+    assert card_store.has_card(card_dir)
+    assert "gespeichert ✓" in dialog.sides_label.text()
 
-    # anderes Bild anklicken, dessen Vorderseite als Rueckseite waehlen
+    # anderes Bild -> "Als Rueckseite": Modus "Bild", sofort gespeichert
     dialog.gallery.setCurrentRow(1)
     dialog.side_bar.setCurrentIndex(0)
     dialog._pick_source(back=True)
     assert dialog.back_source.candidate is other and not dialog.back_source.back
-    assert dialog._back_source_image(other).getpixel((0, 0)) == (0, 0, 200)
+    assert dialog.back_mode_combo.currentData() == BACK_MODE_IMAGE
+    assert card_store.has_back(card_dir) and card_store.load_meta(card_dir).back_mode == BACK_MODE_IMAGE
+    assert "Rückseite: Deezer (Vorderseite)" in dialog.sides_label.text()
 
-    # Klick auf ein anderes Cover (auch mit eigener Rueckseite) aendert die festgelegten Seiten nicht;
-    # ausserhalb des Karten-Reiters zeigt die Vorschau das angeklickte Bild bzw. dessen Rueckseite
+    # Klick auf ein anderes Cover (auch mit eigener Rueckseite) aendert die Karte nicht
     dialog.gallery.setCurrentRow(0)
     assert dialog.back_source.candidate is other and dialog.front_source.candidate is with_back
     dialog.side_bar.setCurrentIndex(1)
@@ -234,25 +242,9 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
     dialog.side_bar.setCurrentIndex(0)
     cm._select_data(dialog.back_mode_combo, "")
     dialog._render_preview()
-    assert dialog.preview.pixmap() is not None and not dialog.preview.pixmap().isNull()  # auch ohne aktiven Modus
-    # "Als Rueckseite" schaltet den Modus immer auf "Bild"
-    dialog.gallery.setCurrentRow(1)
-    dialog.side_bar.setCurrentIndex(0)
-    dialog._pick_source(back=True)
-    assert dialog.back_source.candidate is other and dialog.back_mode_combo.currentData() == BACK_MODE_IMAGE
-    assert "Rückseite: Deezer (Vorderseite)" in dialog.sides_label.text()
-    # Bild ohne eigene Rueckseite, Umschalter steht auf "Rueckseite": der Umschalter zaehlt
-    # dann nicht, genommen wird das Bild selbst (frueher tat der Knopf stillschweigend nichts)
-    dialog.side_bar.setCurrentIndex(1)
-    dialog._pick_source(back=False)
-    assert dialog.front_source.candidate is other and not dialog.front_source.back
-    dialog.gallery.setCurrentRow(0)
-    dialog.side_bar.setCurrentIndex(1)  # "Als Vorderseite" hat auf "Vorderseite" zurueckgeschaltet
-    dialog._pick_source(back=False)  # wieder die Rueckseite von "MB" fuer den Rest des Tests
-    assert dialog.front_source.candidate is with_back and dialog.front_source.back
-    dialog.side_bar.setCurrentIndex(0)
+    assert dialog.preview.pixmap() is not None and not dialog.preview.pixmap().isNull()
 
-    # KI-Randergaenzung der Rueckseite: neue Version unter "Neu", Original unveraendert
+    # "Rand per KI ergaenzen" am quadratischen Bild: neue Version, nicht zugewiesen
     class FakeSignal:
         def connect(self, slot):
             pass
@@ -261,7 +253,7 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
         done = failed = finished = FakeSignal()
 
         def __init__(self, client, model, data, orientation):
-            self.data = data
+            assert data == other.data
 
         def start(self):
             dialog._on_extended(Image.new("RGB", (400, 600), (1, 2, 3)))
@@ -270,31 +262,16 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
             return False
 
     monkeypatch.setattr(cm, "CoverExtendWorker", lambda *a: FakeWorker(*a))
-    monkeypatch.setattr(cm, "image_model", lambda: "m")
-    saved = []
-    monkeypatch.setattr(dialog, "_set_card_cover", lambda: saved.append(True))
-
-    # "Uebernehmen" fuehrt beide angehakten Randergaenzungen als Batch aus und speichert danach
-    dialog.front_extend_check.setChecked(True)
-    dialog.back_extend_check.setChecked(True)
-    assert "Rand der Vorderseite ergänzen, Rand der Rückseite ergänzen" in dialog.apply_note.text()
-    dialog._apply()
-
+    dialog.gallery.setCurrentRow(1)
+    dialog.side_bar.setCurrentIndex(0)
+    dialog.btn_extend.click()
     new = [c for c in dialog.candidates if c.section == cm.SECTION_NEW]
-    assert len(new) == 2
-    front_version = next(c for c in new if c.kind == "ai")
-    back_version = next(c for c in new if c.kind != "ai")
-    assert front_version.image().size == (400, 600)
-    assert back_version.back_image().size == (400, 600)
-    assert back_version.image().getpixel((0, 0)) == (0, 0, 200)  # Vorderseite der Quelle uebernommen
+    assert len(new) == 1 and new[0].kind == "ai" and new[0].image().size == (400, 600)
+    assert dialog.selected is new[0]
+    assert dialog.front_source.candidate is with_back  # noch nicht zugewiesen
     assert other.back_data is None and with_back.data == png_bytes(color=(10, 10, 10))  # Originale unveraendert
-    assert dialog.front_source.candidate is front_version and dialog.back_source.candidate is back_version
-    assert saved == [True]
-    assert not dialog.front_extend_check.isChecked() and not dialog.back_extend_check.isChecked()
-
-    # ohne Haken speichert "Uebernehmen" direkt
-    dialog._apply()
-    assert saved == [True, True]
+    dialog.btn_card_cover.click()
+    assert dialog.front_source.candidate is new[0] and new[0].kept
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
 
@@ -331,7 +308,9 @@ def test_back_prompt_and_ideas():
     assert suggest_back_ideas.last_front_description == "Eine Eule mit Gitarre"
 
 
-def test_ai_back_is_generated_on_apply_and_becomes_new_version(qt_app, tmp_path, monkeypatch):
+def test_ai_back_button_creates_image_to_assign(qt_app, tmp_path, monkeypatch):
+    """"KI-Rueckseite erzeugen" legt ein eigenes Bild an; "Als Rueckseite" speichert es sofort"""
+    from core.cover_archive import BACK_KIND_AI
     from core.metadata import MetadataManager
     from gui import cover_manager_dialog as cm
 
@@ -343,13 +322,16 @@ def test_ai_back_is_generated_on_apply_and_becomes_new_version(qt_app, tmp_path,
     monkeypatch.setattr(cm, "gemini_client", lambda: object())
     monkeypatch.setattr(cm, "image_model", lambda: "m")
     monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
-    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+
+    archive = CoverArchive(str(tmp_path / "data"))
+    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), archive)
+    card_dir = sd.folders[1].path
     front = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes(color=(0, 0, 200)), KIND_ONLINE)
     dialog._add_candidate(front, select=True)
-    cm._select_data(dialog.back_mode_combo, BACK_MODE_AI)
+    assert not dialog.btn_ai_back.isEnabled()  # erst mit Vorderseite
+    dialog.btn_card_cover.click()
+    assert dialog.btn_ai_back.isEnabled()
     dialog.back_tracklist_check.setChecked(True)
-    assert dialog._needs_ai_back()
-    assert "KI-Rückseite erzeugen" in dialog.apply_note.text()
 
     class FakeSignal:
         def connect(self, slot):
@@ -359,8 +341,7 @@ def test_ai_back_is_generated_on_apply_and_becomes_new_version(qt_app, tmp_path,
         done = failed = finished = FakeSignal()
 
         def __init__(self, client, model, request, front_bytes, wish, with_tracklist):
-            assert with_tracklist and front_bytes == front.data
-            self.wish = wish
+            assert with_tracklist and front_bytes == front.data and wish == "Fritzi im Wald"
 
         def start(self):
             dialog._on_back_generated(Image.new("RGB", (400, 600), (9, 9, 9)))
@@ -370,23 +351,24 @@ def test_ai_back_is_generated_on_apply_and_becomes_new_version(qt_app, tmp_path,
 
     monkeypatch.setattr(cm, "CoverBackGenerateWorker", lambda *a: FakeBackWorker(*a))
     dialog.back_wish_edit.setText("Fritzi im Wald")
-    dialog._apply()
+    dialog.btn_ai_back.click()
 
     new = [c for c in dialog.candidates if c.section == cm.SECTION_NEW]
-    assert len(new) == 1 and new[0].meta["kind"] == "ai_back" and new[0].back_image().size == (400, 600)
-    assert not dialog._needs_ai_back()
-    meta = card_store.load_meta(sd.folders[1].path)
-    assert meta.back_mode == BACK_MODE_AI and meta.back_tracklist and meta.back_prompt == "Fritzi im Wald"
-    assert card_store.has_back(sd.folders[1].path)
+    assert len(new) == 1 and new[0].meta["kind"] == "ai_back" and not new[0].has_back
+    assert new[0].image().size == (400, 600) and dialog.selected is new[0]
+    assert not card_store.has_back(card_dir)  # erzeugt, aber noch nicht zugewiesen
 
-    # erneutes Uebernehmen erzeugt nicht noch einmal
-    monkeypatch.setattr(cm, "CoverBackGenerateWorker", lambda *a: pytest.fail("nicht erneut erzeugen"))
-    dialog._apply()
-    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    dialog.btn_back_cover.click()
+    meta = card_store.load_meta(card_dir)
+    assert meta.back_mode == BACK_MODE_IMAGE and meta.back_tracklist and meta.back_prompt == "Fritzi im Wald"
+    assert card_store.has_back(card_dir) and new[0].kept
+    card_entry = next(e for e in archive.covers(dialog.album_id) if ROLE_CARD_COVER in e.roles)
+    assert card_entry.back_file and card_entry.back_kind == BACK_KIND_AI
     dialog.done(0)
 
 
-def test_clicking_generated_version_keeps_ai_back(qt_app, tmp_path, monkeypatch):
+def test_text_changes_save_automatically(qt_app, tmp_path, monkeypatch):
+    """Titel und Layout speichern kurz nach der Eingabe; Schliessen speichert eine anstehende Aenderung"""
     from core.metadata import MetadataManager
     from gui import cover_manager_dialog as cm
 
@@ -398,27 +380,35 @@ def test_clicking_generated_version_keeps_ai_back(qt_app, tmp_path, monkeypatch)
     monkeypatch.setattr(cm, "gemini_client", lambda: object())
     monkeypatch.setattr(cm, "image_model", lambda: "m")
     monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
-    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+
+    archive = CoverArchive(str(tmp_path / "data"))
+    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), archive)
+    card_dir = sd.folders[1].path
+    dialog.title_edit.setPlainText("Ohne Vorderseite")
+    assert dialog._autosave_timer is None and not card_store.has_card(card_dir)  # nichts zu speichern
+
     front = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes(color=(0, 0, 200)), KIND_ONLINE)
     dialog._add_candidate(front, select=True)
-    cm._select_data(dialog.back_mode_combo, BACK_MODE_AI)
-    dialog._back_front = cm.SideSource(front)
-    monkeypatch.setattr(dialog, "_set_card_cover", lambda: None)  # nur die Zuordnung pruefen
-    dialog._on_back_generated(Image.new("RGB", (400, 600), (9, 9, 9)))
-    generated = [c for c in dialog.candidates if c.section == cm.SECTION_NEW][0]
+    dialog.btn_card_cover.click()
+    dialog.title_edit.setPlainText("Heia Walpurgisnacht")
+    assert dialog._autosave_timer.isActive() and "wird gespeichert" in dialog.sides_label.text()
+    dialog._autosave_timer.stop()
+    dialog._autosave()
+    assert card_store.load_meta(card_dir).title == "Heia Walpurgisnacht"
+    assert "gespeichert ✓" in dialog.sides_label.text()
 
-    # neue Version anklicken: Zuordnung bleibt, kein erneutes Erzeugen noetig
-    dialog.gallery.setCurrentRow(dialog.gallery.count() - 1)
-    assert dialog.selected is generated
-    assert not dialog._needs_ai_back()
-    assert dialog._back_source_image(generated).size == (400, 600)
-    assert "wiederverwendet" in dialog.back_source_label.text()
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_BLUR)  # Rueckseitenmodus: ebenfalls Autosave
+    dialog.series_edit.setText("Die kleine Hexe")
+    dialog.done(0)  # anstehende Aenderung wird beim Schliessen gespeichert
+    meta = card_store.load_meta(card_dir)
+    assert meta.series == "Die kleine Hexe" and meta.back_mode == BACK_MODE_BLUR and card_store.has_back(card_dir)
 
-    # Haken "neu erzeugen" -> beim Uebernehmen wird wieder erzeugt
-    dialog.back_regenerate_check.setChecked(True)
-    assert dialog._needs_ai_back()
-    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
-    dialog.done(0)
+    # Wiederoeffnen: die gespeicherte Karte ist Vorder- und Rueckseite, kein Autosave beim Laden
+    again = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), archive)
+    assert again.front_source is not None and again.front_source.candidate.is_sd_card_art
+    assert again._autosave_timer is None
+    assert "gespeichert ✓" in again.sides_label.text()
+    again.done(0)
 
 
 def test_extension_skipped_when_art_already_fits(tmp_path, monkeypatch):
@@ -429,13 +419,16 @@ def test_extension_skipped_when_art_already_fits(tmp_path, monkeypatch):
 
     app = QApplication.instance() or QApplication([])
     assert app is not None
+
     folder = tmp_path / "sd" / "01"
     folder.mkdir(parents=True)
     (folder / "001.mp3").write_bytes(b"x")
     sd = SDCard(str(tmp_path / "sd"))
     sd.scan()
     monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm, "image_model", lambda: "m")
     monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+
     dialog = cm.CoverManagerDialog(sd.folders[1], "Eule", MetadataManager(), CoverArchive(str(tmp_path / "data")))
     cm._select_data(dialog.orientation_combo, ORIENTATION_PORTRAIT)
     square = cm.Candidate(cm.SECTION_ONLINE, "quadratisch", png_bytes(), KIND_ONLINE)
@@ -444,21 +437,31 @@ def test_extension_skipped_when_art_already_fits(tmp_path, monkeypatch):
     dialog._add_candidate(tall)
 
     calls = []
-    monkeypatch.setattr(cm, "CoverExtendWorker", lambda *a: calls.append(a) or (_ for _ in ()).throw(AssertionError))
-    saved = []
-    monkeypatch.setattr(dialog, "_set_card_cover", lambda: saved.append(True))
 
-    dialog.front_extend_check.setChecked(True)
-    assert "Rand der Vorderseite ergänzen" in dialog.apply_note.text()  # quadratisch: Aufruf noetig
+    class FakeSignal:
+        def connect(self, slot):
+            pass
+
+    class FakeWorker:
+        done = failed = finished = FakeSignal()
+
+        def __init__(self, *args):
+            calls.append(args)
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(cm, "CoverExtendWorker", FakeWorker)
     dialog.gallery.setCurrentRow(1)
     assert dialog.selected is tall
-    dialog._update_apply_note()
-    assert "Vorderseite hat schon das Kartenformat" in dialog.apply_note.text()
-    assert "USD" not in dialog.apply_note.text()
-
-    dialog._apply()
-    assert calls == [] and saved == [True]
-    assert "übersprungen" in dialog.status_label.text()
+    dialog.btn_extend.click()
+    assert calls == [] and "keine Randergänzung nötig" in dialog.status_label.text()
+    dialog.gallery.setCurrentRow(0)
+    dialog.btn_extend.click()
+    assert len(calls) == 1  # quadratisch: Aufruf noetig
     monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
     dialog.done(0)
 
@@ -498,7 +501,7 @@ def test_keep_ai_back_version_with_ai_front(tmp_path, monkeypatch):
 
 
 def test_ai_back_survives_gallery_clicks(tmp_path, monkeypatch):
-    """Die erzeugte KI-Rueckseite bleibt die Rueckseite, egal welches Bild angeklickt wird"""
+    """Die zugewiesene KI-Rueckseite bleibt die Rueckseite, egal welches Bild angeklickt wird"""
     pytest.importorskip("PyQt6")
     from PyQt6.QtWidgets import QApplication
     from core.metadata import MetadataManager
@@ -506,32 +509,56 @@ def test_ai_back_survives_gallery_clicks(tmp_path, monkeypatch):
 
     app = QApplication.instance() or QApplication([])
     assert app is not None
+
     folder = tmp_path / "sd" / "01"
     folder.mkdir(parents=True)
     (folder / "001.mp3").write_bytes(b"x")
     sd = SDCard(str(tmp_path / "sd"))
     sd.scan()
     monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm, "image_model", lambda: "m")
     monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+
     dialog = cm.CoverManagerDialog(sd.folders[1], "Eule", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+    card_dir = sd.folders[1].path
     front = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes(color=(0, 0, 200)), KIND_ONLINE)
     with_back = cm.Candidate(cm.SECTION_ONLINE, "MB", png_bytes(), KIND_ONLINE, back_data=png_bytes(color=(9, 9, 9)))
     dialog._add_candidate(front, select=True)
     dialog._add_candidate(with_back)
     dialog._pick_source(back=False)
-    cm._select_data(dialog.back_mode_combo, BACK_MODE_AI)
-    assert dialog._needs_ai_back()
 
     dialog._back_front = dialog.front_source
     dialog._on_back_generated(Image.new("RGB", (400, 600), (7, 7, 7)))
-    assert dialog.ai_back is not None and not dialog._needs_ai_back()
+    ai_back = dialog.selected
+    dialog._pick_source(back=True)
+    assert dialog.back_source.candidate is ai_back
     dialog.gallery.setCurrentRow(1)  # Cover mit eigener Rueckseite anklicken
-    assert dialog.selected is with_back
-    assert not dialog._needs_ai_back() and dialog._ai_back_source() is dialog.ai_back
-    assert "wird wiederverwendet" in dialog.sides_label.text()
+    assert dialog.selected is with_back and dialog.back_source.candidate is ai_back
     assert dialog._back_source_image(dialog.selected).getpixel((0, 0)) == (7, 7, 7)
-    # Verwerfen der KI-Version: Rueckseite muss neu erzeugt werden
-    dialog._remove_candidate(dialog.ai_back.candidate)
-    assert dialog.ai_back is None and dialog._needs_ai_back()
-    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    assert ai_back.label in dialog.sides_label.text()
+    with Image.open(card_store.back_paths(card_dir)[1]) as img:
+        assert img.convert("RGB").getpixel((img.width // 2, img.height // 2)) == (7, 7, 7)
+    dialog.done(0)
+
+def test_old_card_with_ai_back_mode_loads_as_image(qt_app, tmp_path, monkeypatch):
+    """Karten aus der Zeit mit Rueckseitenmodus "KI" behalten ihre gespeicherte Rueckseite"""
+    from core.card_layout import BACK_MODE_AI, prepare_card_art
+    from core.metadata import MetadataManager
+    from gui import cover_manager_dialog as cm
+
+    folder = tmp_path / "sd" / "01"
+    folder.mkdir(parents=True)
+    (folder / "001.mp3").write_bytes(b"x")
+    sd = SDCard(str(tmp_path / "sd"))
+    sd.scan()
+    monkeypatch.setattr(cm, "gemini_client", lambda: None)
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    meta = card_store.CardMeta(title="Alt", orientation=ORIENTATION_PORTRAIT, back_mode=BACK_MODE_AI)
+    card_store.save_card(str(folder), prepare_card_art(Image.new("RGB", (400, 600), (0, 0, 200)),
+                                                       ORIENTATION_PORTRAIT), meta, 1)
+    card_store.save_back(str(folder), Image.new("RGB", (400, 600), (7, 7, 7)), card_store.load_meta(str(folder)))
+    dialog = cm.CoverManagerDialog(sd.folders[1], "Alt", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+    assert dialog.back_mode_combo.currentData() == BACK_MODE_IMAGE
+    assert dialog.back_source is not None and dialog.back_source.back
+    assert dialog._back_source_image(dialog.selected).getpixel((0, 0)) == (7, 7, 7)
     dialog.done(0)
