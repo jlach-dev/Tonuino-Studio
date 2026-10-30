@@ -1,5 +1,6 @@
 """Stuecke erkennen: fpcalc-Aufruf, AcoustID-Antwort, Gruppierung, Tag-Zuordnung (C2)"""
 
+import hashlib
 import io
 import json
 from types import SimpleNamespace
@@ -216,6 +217,7 @@ def test_download_fpcalc_checks_size_and_only_writes_fpcalc(tmp_path, monkeypatc
     payload = _zip_with_fpcalc()
     monkeypatch.setattr(acoustid.urllib.request, "urlopen", lambda request, timeout=0: _Download(payload))
     monkeypatch.setattr(acoustid, "FPCALC_SIZES", {"win32": len(payload)})
+    monkeypatch.setattr(acoustid, "FPCALC_SHA256", {"win32": hashlib.sha256(payload).hexdigest()})
 
     path = acoustid.download_fpcalc(str(tmp_path), platform="win32")
 
@@ -240,3 +242,8 @@ def test_download_fpcalc_rejects_wrong_size_checksum_and_unknown_system(tmp_path
     with pytest.raises(RuntimeError, match="kein fertiges fpcalc"):
         acoustid.download_fpcalc(str(tmp_path), platform="sunos5")
     assert not (tmp_path / "tools" / "fpcalc.exe").exists()
+
+
+def test_pinned_fpcalc_checksums_cover_every_download():
+    assert set(acoustid.FPCALC_SHA256) == set(acoustid.FPCALC_SIZES) == set(acoustid.FPCALC_DOWNLOADS)
+    assert all(len(value) == 64 for value in acoustid.FPCALC_SHA256.values())

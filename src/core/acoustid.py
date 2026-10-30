@@ -42,11 +42,15 @@ FPCALC_DOWNLOADS = {
     "linux": f"https://github.com/acoustid/chromaprint/releases/download/v{FPCALC_VERSION}/"
              f"chromaprint-fpcalc-{FPCALC_VERSION}-linux-x86_64.tar.gz",
 }
-# Exakte Groessen der offiziellen Archive (GitHub-Release v1.5.1) - schuetzt vor
-# abgebrochenen und vertauschten Downloads. GitHub liefert fuer diese alten
-# Assets keine Pruefsumme; ist eine SHA-256 bekannt, wird sie zusaetzlich geprueft.
+# Exakte Groessen und SHA-256 der offiziellen Archive (GitHub-Release v1.5.1,
+# am 30.10.2026 einmal geladen und berechnet - GitHub selbst meldet fuer diese
+# alten Assets keine Pruefsumme). Ein abweichender Download wird nicht installiert.
 FPCALC_SIZES = {"win32": 1548264, "darwin": 2400481, "linux": 2752946}
-FPCALC_SHA256 = {}
+FPCALC_SHA256 = {
+    "win32": "36b478e16aa69f757f376645db0d436073a42c0097b6bb2677109e7835b59bbc",
+    "darwin": "d4d8faff4b5f7c558d9be053da47804f9501eaa6c2f87906a9f040f38d61c860",
+    "linux": "4d7433a7f778e5946d7225230681cbcd634e153316ecac87c538c33ac32387a5",
+}
 FPCALC_MAX_BYTES = 10 * 1024 * 1024
 
 _last_request = 0.0
