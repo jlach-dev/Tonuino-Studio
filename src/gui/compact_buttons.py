@@ -26,6 +26,15 @@ class CompactButtons(QObject):
         self.labels = {button: button.text() for button in compactable}
         self.tooltips = {button: button.toolTip() for button in compactable}
         self.compact = False
+        # Mindestbreite = nur Symbol: sonst rechnet Qt fuer die Mindestbreite des
+        # Fensters weiter mit den Texten, und Fenster bzw. Trenner lassen sich gar
+        # nicht erst so schmal ziehen, dass der Kompaktmodus greift
+        for button in compactable:
+            button.setText("")
+            icon_only = button.sizeHint().width()
+            button.setText(self.labels[button])
+            button.setMinimumWidth(icon_only)
+        self.icon_only_width = {button: button.minimumWidth() for button in compactable}
         container.installEventFilter(self)
 
     def full_width(self) -> int:
@@ -36,7 +45,7 @@ class CompactButtons(QObject):
             if widget is None or not widget.isVisibleTo(self.container):
                 continue
             if widget in self.labels:
-                widths.append(max(widget.minimumWidth(),
+                widths.append(max(self.icon_only_width[widget],
                                   widget.fontMetrics().horizontalAdvance(self.labels[widget])
                                   + widget.iconSize().width() + 40))
             else:
@@ -56,8 +65,6 @@ class CompactButtons(QObject):
             button.setText("" if compact else self.labels[button])
             tip = self.tooltips[button]
             button.setToolTip(f"{label} – {tip}" if compact and tip else (label if compact else tip))
-            if compact:
-                button.setMinimumWidth(0)
 
     def eventFilter(self, obj, event):
         if obj is self.container and event.type() in (QEvent.Type.Resize, QEvent.Type.Show,

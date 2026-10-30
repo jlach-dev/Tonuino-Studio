@@ -22,6 +22,7 @@ from core.library import (
 )
 from gui import theme
 from gui.common import icon_from_glyph
+from gui.compact_buttons import CompactButtons
 from gui.library_dnd import drag_pixmap, make_album_mime, make_tracks_mime
 from gui.workers import AlbumTracksWorker, retire_worker
 
@@ -321,12 +322,12 @@ class LibraryView(QWidget):
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Suchen (Titel, Interpret) …")
         self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.setMinimumWidth(220)
+        self.search_edit.setMinimumWidth(150)
         self.search_edit.textChanged.connect(self._refresh)
         head.addWidget(self.search_edit)
 
         self.series_combo = QComboBox()
-        self.series_combo.setMinimumWidth(170)
+        self.series_combo.setMinimumWidth(130)
         self.series_combo.setToolTip("Nach Serie filtern (Serienprofile aus dem Cover-Manager)")
         self.series_combo.currentIndexChanged.connect(self._refresh)
         head.addWidget(self.series_combo)
@@ -353,6 +354,8 @@ class LibraryView(QWidget):
         self.btn_sources.clicked.connect(self.sources_requested)
         head.addWidget(self.btn_sources)
         layout.addLayout(head)
+        # Schmale Fenster: die drei Knoepfe nur als Symbol (siehe gui/compact_buttons.py)
+        self._compact_head = CompactButtons(self, head, [self.btn_rescan, self.btn_embed, self.btn_sources])
 
         self.hint_label = QLabel()
         self.hint_label.setObjectName("folderMeta")
