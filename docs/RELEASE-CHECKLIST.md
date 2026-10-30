@@ -12,7 +12,7 @@ Schritte vor dem ersten öffentlichen Release (2.0.0) und für jedes weitere.
 - [x] **fpcalc-Prüfsummen** (`FPCALC_SHA256` in `src/core/acoustid.py`) eingetragen (30.10.2026).
 - [x] **Gemini-Modellnamen** geprüft (30.10.2026): `gemini-nano-banana-2.1` und `gemini-3.5-flash-lite` sind laut ai.google.dev stabil.
 - [x] **Release-Workflow** (`.github/workflows/build.yml`): Ein Tag `v*` prüft, dass er zu `__version__` passt, legt einen Release-Entwurf an, baut alle Plattformen und hängt die Installer an. Beim ersten Release einmal genau hinsehen.
-- [ ] **Screenshot** `docs/screenshot.png` erneuern.
+- [x] **Screenshot** `docs/screenshot.png` erneuert (30.10.2026, erfundene Hörspiele mit selbst gezeichneten Covern – keine geschützten Bilder).
 - [ ] **Repository öffentlich schalten** – erst ganz am Ende.
 
 ## Für jedes Release
