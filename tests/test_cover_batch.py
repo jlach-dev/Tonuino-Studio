@@ -118,6 +118,13 @@ def test_cover_proposal_dialog(tmp_path, monkeypatch):
     assert not dialog.checks[2].isEnabled()
     assert "1 sicher, 1 bitte prüfen, 1 ohne Treffer" in dialog.summary.text()
 
+    # Haekchen-Spalte breit genug, Album/Vorschlag/Bewertung mit der Maus verschiebbar
+    from PyQt6.QtWidgets import QHeaderView
+    from gui.cover_proposal_dialog import COL_ALBUM, COL_CHECK, COL_HIT, COL_NOTE
+    header = dialog.table.horizontalHeader()
+    assert header.sectionSize(COL_CHECK) >= dialog.table.cellWidget(0, COL_CHECK).sizeHint().width()
+    assert all(header.sectionResizeMode(c) == QHeaderView.ResizeMode.Interactive for c in (COL_ALBUM, COL_HIT, COL_NOTE))
+
     dialog._use_alternative(1, alt, download=lambda url: png_bytes(color=(1, 2, 3)))
     assert unsure.hit is alt and dialog.checks[1].isChecked() and unsure.alternatives[0].image_url == "u3"
     dialog.checks[1].setChecked(False)

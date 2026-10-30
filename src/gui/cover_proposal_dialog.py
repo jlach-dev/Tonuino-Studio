@@ -6,7 +6,7 @@ schreibt die angehakten Cover (Dateien, cover.jpg, Archiv).
 
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel, QMenu, QMessageBox,
@@ -19,6 +19,7 @@ from gui.common import confirm_action
 
 THUMB = 72
 COL_CHECK, COL_THUMB, COL_ALBUM, COL_HIT, COL_NOTE = range(5)
+SETTINGS_HEADER = "cover_proposal/header_state"  # gemerkte Spaltenbreiten
 
 
 def _pixmap(data: Optional[bytes]) -> Optional[QPixmap]:
@@ -56,16 +57,25 @@ class CoverProposalDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(COL_CHECK, QHeaderView.ResizeMode.ResizeToContents)
+        # Haekchen und Cover fest; Album, Vorschlag und Bewertung mit der Maus
+        # verschiebbar (die letzte Spalte fuellt den Rest), Breiten werden gemerkt
+        header.setSectionResizeMode(COL_CHECK, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(COL_THUMB, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(COL_THUMB, THUMB + 12)
-        header.setSectionResizeMode(COL_ALBUM, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(COL_HIT, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(COL_NOTE, QHeaderView.ResizeMode.Stretch)
+        for column, width in ((COL_ALBUM, 280), (COL_HIT, 340), (COL_NOTE, 300)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            header.resizeSection(column, width)
+        header.setStretchLastSection(True)
+        header.setMinimumSectionSize(40)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
         layout.addWidget(self.table, 1)
         self._fill()
+        state = QSettings().value(SETTINGS_HEADER)
+        if state is not None:
+            header.restoreState(state)
+        # Nach restoreState: die Haekchen-Spalte muss immer breit genug sein
+        header.resizeSection(COL_CHECK, self._check_column_width())
 
         self.summary = QLabel()
         self.summary.setWordWrap(True)
@@ -134,6 +144,17 @@ class CoverProposalDialog(QDialog):
         if proposal.usable and not proposal.certain:
             note.setForeground(Qt.GlobalColor.yellow)
         self.table.setItem(row, COL_NOTE, note)
+
+    def _check_column_width(self) -> int:
+        """Breite der Haekchen-Spalte: ResizeToContents misst Zell-Widgets nicht mit,
+        das Haekchen wurde deshalb vom Rand der Cover-Spalte abgeschnitten"""
+        widths = [self.table.cellWidget(row, COL_CHECK).sizeHint().width() for row in range(self.table.rowCount())
+                  if self.table.cellWidget(row, COL_CHECK) is not None]
+        return max(widths + [QCheckBox().sizeHint().width() + 12]) + 8
+
+    def done(self, result):
+        QSettings().setValue(SETTINGS_HEADER, self.table.horizontalHeader().saveState())
+        super().done(result)
 
     def _check_all(self, state: bool):
         for check in self.checks:
