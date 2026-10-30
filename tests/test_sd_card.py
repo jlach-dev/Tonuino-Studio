@@ -146,7 +146,7 @@ def test_purge_deletes_read_only_folders(tmp_path):
 def test_delete_folder_reports_failure_and_keeps_folder_entry(tmp_path, monkeypatch):
     card = make_card(tmp_path, {"01": ["001.mp3"]})
 
-    def fail(path):
+    def fail(path, *args, **kwargs):  # Linux: os.rmdir(name, dir_fd=...)
         raise PermissionError(5, "Zugriff verweigert", str(path))
 
     monkeypatch.setattr(os, "rmdir", fail)

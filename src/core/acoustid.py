@@ -55,9 +55,9 @@ _lock = threading.Lock()
 
 # --- fpcalc ---------------------------------------------------------------------------------
 
-def fpcalc_name() -> str:
+def fpcalc_name(platform: Optional[str] = None) -> str:
     import sys
-    return "fpcalc.exe" if sys.platform == "win32" else "fpcalc"
+    return "fpcalc.exe" if (platform or sys.platform) == "win32" else "fpcalc"
 
 
 def find_fpcalc(configured: str = "", data_dir: str = "") -> Optional[str]:
@@ -115,13 +115,14 @@ def download_fpcalc(data_dir: str, platform: Optional[str] = None,
         raise RuntimeError("Prüfsumme des Downloads stimmt nicht - fpcalc wird nicht installiert.")
     target_dir = os.path.join(data_dir, "tools")
     os.makedirs(target_dir, exist_ok=True)
-    target = os.path.join(target_dir, fpcalc_name())
+    name = fpcalc_name(platform)  # nach Zielplattform, nicht nach dem laufenden System
+    target = os.path.join(target_dir, name)
     blob = None
     if url.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            for name in archive.namelist():
-                if os.path.basename(name).lower() == fpcalc_name().lower():
-                    blob = archive.read(name)
+            for member_name in archive.namelist():
+                if os.path.basename(member_name).lower() == name.lower():
+                    blob = archive.read(member_name)
                     break
     else:
         with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
