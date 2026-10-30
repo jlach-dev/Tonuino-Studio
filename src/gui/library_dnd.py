@@ -220,10 +220,23 @@ class FolderListWidget(QListWidget):
         else:
             self.drop_highlight.show_at(rect, f"An {_folder_label(identity)} anhängen")
 
+    def _waiting_for_card(self, event) -> bool:
+        """Album/Tracks gezogen, aber noch keine SD-Karte geoeffnet"""
+        return not self.drop_enabled and bool(drop_payload_from_mime(event.mimeData()))
+
     def dragEnterEvent(self, event):
+        if self._waiting_for_card(event):
+            event.accept()  # sonst kommen keine dragMove-Ereignisse und kein Hinweis
+            self.dragMoveEvent(event)
+            return
         self.dragMoveEvent(event)
 
     def dragMoveEvent(self, event):
+        if self._waiting_for_card(event):
+            # Ablegen nicht erlaubt, aber sagen warum - bisher passierte schlicht nichts
+            event.ignore()
+            self.drop_highlight.show_at(self.viewport().rect(), "Zuerst SD-Karte öffnen", blocked=True)
+            return
         payload = self._payload(event)
         if payload:
             event.setDropAction(Qt.DropAction.CopyAction)

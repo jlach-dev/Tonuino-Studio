@@ -102,8 +102,9 @@ def test_folder_list_highlights_drop_target(app, tmp_path):
     folder_rect = widget.visualItemRect(widget.item(0))
     special_rect = widget.visualItemRect(widget.item(1))
 
-    # ohne SD-Karte: kein Drop, keine Hervorhebung
-    assert not drag_move(widget, folder_rect.center(), mime) and not highlight.isVisible()
+    # ohne SD-Karte: kein Drop, aber ein roter Hinweis auf der ganzen Liste
+    assert not drag_move(widget, folder_rect.center(), mime)
+    assert highlight.isVisible() and highlight.blocked and highlight.hint == "Zuerst SD-Karte öffnen"
 
     widget.drop_enabled = True
     assert drag_move(widget, folder_rect.center(), mime)
