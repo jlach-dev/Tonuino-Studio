@@ -1433,6 +1433,8 @@ class CoverManagerDialog(QDialog):
         # "Zuruecksetzen", "Aus Datei" oder eine fertige KI-Erzeugung. Solange keine
         # Vorderseite festgelegt ist, gilt das angeklickte Bild als Vorschlag.
         self.selected = candidate
+        if not candidate.has_back and not self._card_tab_active() and self.side_bar.currentIndex() == 1:
+            self.side_bar.setCurrentIndex(0)  # das Bild hat keine eigene Rueckseite
         self.selection_label.setText(self._item_tooltip(self.selected).replace("\n", " · "))
         self._update_side_controls()
         self._render_preview()
@@ -1973,12 +1975,14 @@ class CoverManagerDialog(QDialog):
 
     def _browse_source(self) -> Optional[SideSource]:
         """Die gerade angeschaute Seite des angeklickten Bildes (Grundlage fuer
-        "Als Vorderseite" / "Als Rueckseite"); None, wenn das Bild keine Rueckseite hat"""
+        "Als Vorderseite" / "Als Rueckseite"). Der Umschalter zaehlt nur bei Bildern
+        mit eigener Rueckseite - sonst blieb er nach einer KI-Rueckseite auf "Rueckseite"
+        stehen und "Als Rueckseite" tat stillschweigend nichts."""
         if self.selected is None:
             return None
-        if self.side_bar.currentIndex() == 0:
-            return SideSource(self.selected)
-        return SideSource(self.selected, back=True) if self.selected.has_back else None
+        if self.side_bar.currentIndex() == 1 and self.selected.has_back:
+            return SideSource(self.selected, back=True)
+        return SideSource(self.selected)
 
     def _front_candidate(self) -> Optional[Candidate]:
         """Das Cover, dessen Vorderseite die Karte bekommt (festgelegt oder angeklickt)"""
@@ -2051,6 +2055,18 @@ class CoverManagerDialog(QDialog):
         else:
             self._set_front_source(source)
             self._flash(f"Vorderseite: {source.label}")
+        self._highlight_sides()
+
+    def _highlight_sides(self):
+        """Zustandszeile unter der Vorschau kurz hervorheben - die Statuszeile allein
+        wird von der naechsten Aktion (z.B. Uebernehmen) gleich wieder ueberschrieben"""
+        self.sides_label.setStyleSheet(f"color: {theme.GREEN}; font-weight: bold;")
+        timer = getattr(self, "_sides_timer", None)
+        if timer is None:
+            timer = self._sides_timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda: self.sides_label.setStyleSheet(""))
+        timer.start(4000)
 
     def _set_front_source(self, source: Optional[SideSource]):
         self.front_source = source
@@ -2514,9 +2530,15 @@ class CoverManagerDialog(QDialog):
         busy = any(w is not None and w.isRunning() for w in (self._research_worker, self._generate_worker))
         searching = self._search_worker is not None and self._search_worker.isRunning()
         self.btn_album_cover.setEnabled(selected and bool(self.folder.tracks) and not self.selected.is_album_cover)
-        preview = self._preview_source()
-        self.btn_card_cover.setEnabled(preview is not None)
-        self.btn_back_cover.setEnabled(preview is not None)
+        browse = self._browse_source()
+        self.btn_card_cover.setEnabled(browse is not None)
+        self.btn_back_cover.setEnabled(browse is not None)
+        # Bei Bildern mit eigener Rueckseite zeigen, welche Seite genommen wird
+        side = ""
+        if browse is not None and browse.candidate.has_back:
+            side = " (Bild-Rückseite)" if browse.back else " (Bild-Vorderseite)"
+        self.btn_card_cover.setText("Als Vorderseite" + side)
+        self.btn_back_cover.setText("Als Rückseite" + side)
         self.btn_generate.setEnabled(not busy)
         self.btn_research.setEnabled(not busy)
         extending = any(w is not None and w.isRunning() for w in (self._extend_worker, self._back_worker))

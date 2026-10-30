@@ -241,10 +241,15 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
     dialog._pick_source(back=True)
     assert dialog.back_source.candidate is other and dialog.back_mode_combo.currentData() == BACK_MODE_IMAGE
     assert "Rückseite: Deezer (Vorderseite)" in dialog.sides_label.text()
-    # "Als Rueckseite" bei einem Bild ohne Rueckseite im Reiter "Rueckseite": Hinweis, keine Aenderung
+    # Bild ohne eigene Rueckseite, Umschalter steht auf "Rueckseite": der Umschalter zaehlt
+    # dann nicht, genommen wird das Bild selbst (frueher tat der Knopf stillschweigend nichts)
     dialog.side_bar.setCurrentIndex(1)
     dialog._pick_source(back=False)
-    assert dialog.front_source.candidate is with_back and "keine Rückseite" in dialog.status_label.text()
+    assert dialog.front_source.candidate is other and not dialog.front_source.back
+    dialog.gallery.setCurrentRow(0)
+    dialog.side_bar.setCurrentIndex(1)  # "Als Vorderseite" hat auf "Vorderseite" zurueckgeschaltet
+    dialog._pick_source(back=False)  # wieder die Rueckseite von "MB" fuer den Rest des Tests
+    assert dialog.front_source.candidate is with_back and dialog.front_source.back
     dialog.side_bar.setCurrentIndex(0)
 
     # KI-Randergaenzung der Rueckseite: neue Version unter "Neu", Original unveraendert

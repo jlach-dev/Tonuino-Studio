@@ -272,3 +272,83 @@ def test_ai_back_survives_reopen_and_reaches_sd(tmp_path, monkeypatch):
     assert result.card_written and result.back_written
     assert card_store.load_meta(sd_folder.path).back_mode == BACK_MODE_AI
     QSettings().clear()
+
+
+@pytest.mark.parametrize("library", [True, False], ids=["bibliothek", "sd"])
+def test_pick_back_after_ai_back_with_real_buttons(tmp_path, monkeypatch, library):
+    """KI-Rueckseite erzeugen, dann ein Bild ohne eigene Rueckseite anklicken und
+    "Als Rueckseite": der Seiten-Umschalter blieb auf "Rueckseite" stehen, der Knopf
+    tat nichts und "Uebernehmen" speicherte weiter die KI-Rueckseite"""
+    pytest.importorskip("PyQt6")
+    from PIL import Image
+    from PyQt6.QtCore import QCoreApplication, QSettings
+    from PyQt6.QtWidgets import QApplication
+    from core import card_store
+    from core.card_layout import BACK_MODE_AI, BACK_MODE_IMAGE
+    from core.cover_archive import KIND_ONLINE
+    from core.sd_card import Folder, SDCard, Track
+    from gui import cover_manager_dialog as cm
+
+    QCoreApplication.setOrganizationName("Tonuino-Manager-Tests")
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(cm, "CoverExtendWorker",
+                        _instant_worker(lambda: Image.new("RGB", (600, 900), (10, 200, 10)), []))
+    monkeypatch.setattr(cm, "CoverBackGenerateWorker",
+                        _instant_worker(lambda: Image.new("RGB", (600, 900), (200, 10, 10)), []))
+    monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm, "image_model", lambda: "m")
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    monkeypatch.setattr(cm.CoverManagerDialog, "unsaved_variants", lambda self: [])
+    monkeypatch.setattr(cm.CoverManagerDialog, "_ask_archive_previous", lambda self, what: True)
+    archive = CoverArchive(str(tmp_path / "data"))
+    if library:
+        album_dir = make_album(tmp_path / "Musik", "A", count=1, album="Folge 58", artist="Bibi")
+        folder = Folder(index=None, path=str(album_dir), name="A",
+                        tracks=[Track(index=1, filename="01.mp3", filepath=str(album_dir / "01.mp3"))])
+        dialog = cm.CoverManagerDialog(folder, "Folge 58", MetadataManager(), archive, library=True,
+                                       album_id="libA")
+    else:
+        make_album(tmp_path / "sd", "01", count=1, album="Folge 58", artist="Bibi")
+        (tmp_path / "sd" / "01" / "01.mp3").rename(tmp_path / "sd" / "01" / "001.mp3")
+        sd = SDCard(str(tmp_path / "sd"))
+        sd.scan()
+        dialog = cm.CoverManagerDialog(sd.folders[1], "Folge 58", MetadataManager(), archive)
+    yellow = (230, 220, 0)
+    front = cm.Candidate(cm.SECTION_ONLINE, "Front", png_bytes(size=(640, 640), color=(0, 0, 200)), KIND_ONLINE)
+    back = cm.Candidate(cm.SECTION_ONLINE, "Back", png_bytes(size=(640, 640), color=yellow), KIND_ONLINE)
+    dialog._add_candidate(front)
+    dialog._add_candidate(back)
+
+    def click(candidate):
+        row = next(r for r in range(dialog.gallery.count()) if dialog.gallery.item(r).data(256) is candidate)
+        dialog.gallery.setCurrentRow(row)
+        app.processEvents()
+
+    def saved_back_color():
+        with Image.open(card_store.back_paths(dialog._card_dir)[1]) as img:
+            return img.convert("RGB").getpixel((img.width // 2, img.height // 2))
+
+    dialog.tabs.setCurrentIndex(0)
+    click(front)
+    dialog.btn_card_cover.click()
+    click(back)
+    dialog.btn_back_cover.click()
+    dialog.tabs.setCurrentIndex(1)
+    dialog.btn_apply.click()
+    assert saved_back_color() == yellow
+
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_AI)
+    dialog.btn_apply.click()
+    assert card_store.load_meta(dialog._card_dir).back_mode == BACK_MODE_AI
+    assert dialog.side_bar.currentIndex() == 1  # die KI-Erzeugung hat auf "Rueckseite" umgeschaltet
+
+    dialog.tabs.setCurrentIndex(0)
+    click(back)
+    assert dialog.btn_back_cover.isEnabled() and dialog.btn_back_cover.text() == "Als Rückseite"
+    dialog.btn_back_cover.click()
+    dialog.tabs.setCurrentIndex(1)
+    dialog.btn_apply.click()
+    assert card_store.load_meta(dialog._card_dir).back_mode == BACK_MODE_IMAGE
+    assert saved_back_color() == yellow
+    dialog.done(0)
+    QSettings().clear()
