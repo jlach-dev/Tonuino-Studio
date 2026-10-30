@@ -7,8 +7,8 @@ Schritte vor dem ersten öffentlichen Release (2.0.0) und für jedes weitere.
 - [ ] **Lizenz des Originals geklärt**: LICENSE-Datei im Original (donschoof/tonuino-manager) mit Rechteinhaber und Jahr.
 - [ ] **LICENSE im Fork** anlegen: MIT-Text mit zwei Copyright-Zeilen – die des Originals und `Copyright (c) 2026 jlach-dev`.
 - [ ] **README**: Abschnitt „Lizenz und Herkunft“ mit Verweis auf das Original.
-- [ ] **Commit-Adressen umschreiben**: Die Fork-Commits bis Oktober 2026 tragen noch die private E-Mail-Adresse. Solange das Repository privat ist, auf `259598630+jlach-dev@users.noreply.github.com` umschreiben (nur eigene Commits, nicht die des Originals), danach erzwungen in das private Repository pushen. Commit-Kennungen ändern sich dabei.
-- [ ] **GitHub-Einstellungen** (Settings → Emails): „Keep my email addresses private“ und „Block command line pushes that expose my email“ einschalten.
+- [x] **Commit-Adressen umgeschrieben** (30.10.2026): alle eigenen Commits tragen `259598630+jlach-dev@users.noreply.github.com`, auf GitHub per --force-with-lease ersetzt.
+- [x] **GitHub-Einstellungen** (Settings → Emails): „Keep my email addresses private“ und „Block command line pushes that expose my email“ einschalten.
 - [ ] **fpcalc-Prüfsummen** (`FPCALC_SHA256` in `src/core/acoustid.py`) eintragen.
 - [ ] **Gemini-Modellnamen** (`src/core/ai_settings.py`) gegen die aktuelle Modellliste prüfen.
 - [ ] **Release-Workflow**: Tag `v*` baut alle Plattformen und hängt die Installer an ein GitHub-Release (Dateinamen passend zu `core/updater.py`).
