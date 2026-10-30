@@ -13,6 +13,33 @@ def test_safe_name():
     assert safe_name('Die kleine Hexe: "Teil 1"?') == "Die kleine Hexe_ _Teil 1__"
     assert safe_name("  Ende.  ") == "Ende"
     assert safe_name("") == "Unbekannt"
+    assert safe_name("...And You Will Know Us") == "_And You Will Know Us"  # kein versteckter Ordner
+    assert safe_name("Con") == "Con_" and safe_name("nul.txt") == "nul.txt_" and safe_name("Console") == "Console"
+    assert not safe_name("x" * 119 + ". y").endswith((".", " "))  # erst kuerzen, dann Enden saeubern
+
+
+def test_organize_moves_cover_along_and_keeps_user_dotfiles(tmp_path):
+    root = tmp_path / "Musik"
+    folder = make_album(root, "Unsortiert", count=2, album="Die kleine Hexe", artist="Preußler")
+    (folder / "cover.jpg").write_bytes(b"cover")
+    (folder / "Thumbs.db").write_bytes(b"x")
+    plans = plan_moves([str(folder / "01.mp3"), str(folder / "02.mp3")], str(root))
+    result = execute_moves(plans)
+    target = root / "Preußler" / "Die kleine Hexe"
+    assert result.moved == 2 and (target / "cover.jpg").read_bytes() == b"cover"
+    assert not folder.exists() and result.removed_dirs == 1  # nur Thumbs.db blieb - Ordner weg
+
+    other = make_album(root, "Zweites", count=1, album="Anderes", artist="Jemand")
+    (other / ".meine-notizen").write_text("bleibt")
+    execute_moves(plan_moves([str(other / "01.mp3")], str(root)))
+    assert (other / ".meine-notizen").read_text() == "bleibt"  # Ordner bleibt stehen
+
+
+def test_too_long_target_is_reported_before_moving(tmp_path):
+    root = tmp_path / "Musik"
+    folder = make_album(root, "U", count=1, album="A" * 120, artist="B" * 120)
+    plans = plan_moves([str(folder / "01.mp3")], str(root), scheme="{albumartist}/{album}/{album}/{title}")
+    assert plans[0].status == "too_long" and not plans[0].will_move
 
 
 def test_plan_and_execute_moves(tmp_path):

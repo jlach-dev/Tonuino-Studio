@@ -16,7 +16,7 @@ from gui.common import confirm_action
 
 SETTINGS_SCHEME = "library/organize_scheme"
 STATUS_TEXT = {"ok": "wird verschoben", "unchanged": "liegt schon richtig", "missing_tags": "Tags fehlen",
-               "conflict": "Konflikt"}
+               "conflict": "Konflikt", "too_long": "Pfad zu lang"}
 
 
 class OrganizeDialog(QDialog):
