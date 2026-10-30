@@ -1,13 +1,13 @@
 """
-Logdatei des Tonuino-Managers
+Logdatei von Tonuino-Studio
 
 Die EXE laeuft ohne Konsole (console=False in Tonuino-Manager.spec) - ohne
 Logdatei waeren Warnungen und Abstuerze dort unsichtbar. Das Log rotiert
 (einige MB), damit es auf Dauer nicht waechst.
 
-  Windows: %LOCALAPPDATA%/Tonuino-Manager/log/tonuino-manager.log
-  macOS:   ~/Library/Logs/Tonuino-Manager/tonuino-manager.log
-  Linux:   ~/.local/state/Tonuino-Manager/log/tonuino-manager.log
+  Windows: %LOCALAPPDATA%/Tonuino-Studio/log/tonuino-studio.log
+  macOS:   ~/Library/Logs/Tonuino-Studio/tonuino-studio.log
+  Linux:   ~/.local/state/Tonuino-Studio/log/tonuino-studio.log
 """
 
 import logging
@@ -17,8 +17,10 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
-APP_DIR_NAME = "Tonuino-Manager"
-LOG_FILE_NAME = "tonuino-manager.log"
+from core.branding import APP_NAME, PACKAGE_NAME
+
+APP_DIR_NAME = APP_NAME
+LOG_FILE_NAME = f"{PACKAGE_NAME}.log"
 LOG_MAX_BYTES = 1_000_000
 LOG_BACKUP_COUNT = 3
 

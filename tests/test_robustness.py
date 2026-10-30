@@ -107,7 +107,7 @@ def test_setup_logging_writes_rotating_log_file(tmp_path):
         logging.getLogger("test").warning("Hallo Log")
         for handler in root.handlers:
             handler.flush()
-        assert path == tmp_path / "tonuino-manager.log"
+        assert path == tmp_path / "tonuino-studio.log"
         assert "Hallo Log" in path.read_text(encoding="utf-8")
     finally:
         for handler in root.handlers[:]:

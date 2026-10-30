@@ -17,11 +17,13 @@ from typing import Optional
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from core.branding import APP_NAME, GITHUB_REPO, PACKAGE_NAME
+
 log = logging.getLogger(__name__)
 
-GITHUB_API_URL = "https://api.github.com/repos/donschoof/tonuino-manager/releases/latest"
-GITHUB_RELEASES_PAGE = "https://github.com/donschoof/tonuino-manager/releases/latest"
-USER_AGENT = "Tonuino-Manager-UpdateChecker"
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RELEASES_PAGE = f"https://github.com/{GITHUB_REPO}/releases/latest"
+USER_AGENT = f"{APP_NAME}-UpdateChecker"
 REQUEST_TIMEOUT = 10
 
 
@@ -65,12 +67,12 @@ def _asset_pattern_for_platform() -> Optional[re.Pattern]:
     koennte auf einem Intel-Mac faelschlich das arm64-dmg (oder umgekehrt)
     heruntergeladen werden."""
     if sys.platform.startswith("win"):
-        return re.compile(r"^Tonuino-Manager-.*-Setup\.exe$")
+        return re.compile(rf"^{APP_NAME}-.*-Setup\.exe$")
     if sys.platform.startswith("linux"):
-        return re.compile(r"^tonuino-manager_.*_amd64\.deb$")
+        return re.compile(rf"^{PACKAGE_NAME}_.*_amd64\.deb$")
     if sys.platform == "darwin":
         arch = "arm64" if platform.machine() == "arm64" else "intel"
-        return re.compile(rf"^Tonuino-Manager-.*-{arch}\.dmg$")
+        return re.compile(rf"^{APP_NAME}-.*-{arch}\.dmg$")
     return None
 
 
@@ -167,7 +169,7 @@ class UpdateDownloader(QThread):
     def run(self):
         # Eigener frischer Ordner und nur der Dateiname des Assets: ein vorab
         # angelegter Pfad im Temp-Verzeichnis kann so nicht uebernommen werden
-        dest_dir = tempfile.mkdtemp(prefix="tonuino-manager-update-")
+        dest_dir = tempfile.mkdtemp(prefix=f"{PACKAGE_NAME}-update-")
         dest_path = os.path.join(dest_dir, os.path.basename(self.info.asset_name))
         expected = expected_sha256(self.info.asset_digest)
         sha256 = hashlib.sha256()

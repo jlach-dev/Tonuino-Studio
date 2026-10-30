@@ -42,7 +42,7 @@ def clean_build():
 def binary_name() -> str:
     """Name der von PyInstaller erzeugten Programmdatei (mit .exe unter
     Windows, ohne Endung unter Linux/macOS)"""
-    return "Tonuino-Manager.exe" if sys.platform == "win32" else "Tonuino-Manager"
+    return "Tonuino-Studio.exe" if sys.platform == "win32" else "Tonuino-Studio"
 
 
 def create_binary():
@@ -72,8 +72,8 @@ def create_binary():
             # macOS baut im onedir-Modus (PyInstaller-Vorgabe fuer .app-Bundles,
             # siehe Tonuino-Manager.spec) - dist/Tonuino-Manager ist hier ein
             # Ordner, die eigentliche App entsteht als dist/Tonuino-Manager.app.
-            print("\nDer Programmordner befindet sich in: dist/Tonuino-Manager/")
-            print("Die App-Bundle wird daraus erstellt in: dist/Tonuino-Manager.app")
+            print("\nDer Programmordner befindet sich in: dist/Tonuino-Studio/")
+            print("Die App-Bundle wird daraus erstellt in: dist/Tonuino-Studio.app")
         else:
             print(f"\nDie Datei befindet sich in: dist/{binary_name()}")
     else:
@@ -117,7 +117,7 @@ def create_windows_installer():
         print("\n" + "="*50)
         print("ERFOLG! Installer erstellt.")
         print("="*50)
-        print(f"\nDer Installer befindet sich in: dist/Tonuino-Manager-{version}-Setup.exe")
+        print(f"\nDer Installer befindet sich in: dist/Tonuino-Studio-{version}-Setup.exe")
     else:
         print("\nFEHLER beim Erstellen des Installers!")
         sys.exit(1)
@@ -135,7 +135,7 @@ def create_linux_package():
     dist_dir = Path("dist")
     binary_file_name = binary_name()
     version = get_version()
-    package_name = "tonuino-manager"
+    package_name = "tonuino-studio"
     arch = "amd64"
 
     pkg_root = dist_dir / "deb-build"
@@ -166,7 +166,7 @@ def create_linux_package():
 
     desktop_content = f"""[Desktop Entry]
 Type=Application
-Name=Tonuino-Manager
+Name=Tonuino-Studio
 Comment=Tonuino SD-Karten und RFID-Karten verwalten
 Exec={package_name}
 Icon={package_name}
@@ -185,10 +185,10 @@ Section: sound
 Priority: optional
 Architecture: {arch}
 Depends: pcscd, libpcsclite1, libpulse0
-Maintainer: Tonuino-Manager <tonuino-manager@localhost>
-Homepage: https://github.com/donschoof/tonuino-manager
+Maintainer: Tonuino-Studio <tonuino-studio@localhost>
+Homepage: https://github.com/jlach-dev/Tonuino-manager
 Description: Tonuino SD-Karten und RFID-Karten verwalten
- Tonuino-Manager verwaltet SD-Karten (Ordner/Dateien für den DIY-Audio-
+ Tonuino-Studio (Fork von Tonuino-Manager) verwaltet SD-Karten (Ordner/Dateien für den DIY-Audio-
  Player Tonuino) und die zugehörigen RFID-Karten.
 """
     (debian_dir / "control").write_text(control_content, encoding="utf-8")
@@ -244,7 +244,7 @@ def create_macos_package():
     koennen."""
     dist_dir = Path("dist")
     version = get_version()
-    app_name = "Tonuino-Manager.app"
+    app_name = "Tonuino-Studio.app"
     app_path = dist_dir / app_name
 
     if not app_path.exists():
@@ -283,7 +283,7 @@ def create_macos_package():
     shutil.copytree(app_path, dmg_root / app_name)
     os.symlink("/Applications", dmg_root / "Applications")
 
-    archive_name = f"Tonuino-Manager-{version}-{macos_arch_label()}.dmg"
+    archive_name = f"Tonuino-Studio-{version}-{macos_arch_label()}.dmg"
     archive_path = dist_dir / archive_name
     if archive_path.exists():
         archive_path.unlink()
@@ -299,7 +299,7 @@ def create_macos_package():
         result = subprocess.run(
             [
                 "hdiutil", "create",
-                "-volname", "Tonuino-Manager",
+                "-volname", "Tonuino-Studio",
                 "-srcfolder", str(dmg_root),
                 "-ov", "-format", "UDZO",
                 str(archive_path),
@@ -327,7 +327,7 @@ def create_macos_package():
 
 if __name__ == "__main__":
     print("="*50)
-    print(f"  Tonuino-Manager {get_version()} - Build")
+    print(f"  Tonuino-Studio {get_version()} - Build")
     print("="*50)
     print()
     

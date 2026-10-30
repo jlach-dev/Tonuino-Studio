@@ -1,8 +1,10 @@
-# Tonuino-Manager
+# Tonuino-Studio
 
-Ein hübsches Tool zum Verwalten von Tonuino SD-Karten und RFID-Karten für Windows, Linux und macOS.
+Ein hübsches Tool zum Verwalten von Tonuino SD-Karten und RFID-Karten für Windows, Linux und macOS – mit KI-Kartencovern, Bibliothek für PC und NAS, Serienprofilen und Tags von MusicBrainz.
 
-![Tonuino-Manager](docs/screenshot.png)
+Tonuino-Studio ist ein Fork von [Tonuino-Manager](https://github.com/donschoof/tonuino-manager) (donschoof) und übernimmt dessen Weiterentwicklung regelmäßig. Beide Programme lassen sich nebeneinander installieren.
+
+![Tonuino-Studio](docs/screenshot.png)
 
 ## Features
 
@@ -23,14 +25,14 @@ Ein hübsches Tool zum Verwalten von Tonuino SD-Karten und RFID-Karten für Wind
 
 ## Installation
 
-Fertige Builds auf der [Releases-Seite](https://github.com/donschoof/tonuino-manager/releases/latest) – keine Python-Installation nötig, FFmpeg ist enthalten.
+Fertige Builds auf der [Releases-Seite](https://github.com/jlach-dev/Tonuino-manager/releases/latest) – keine Python-Installation nötig, FFmpeg ist enthalten.
 
 | System | Datei | Hinweise |
 | --- | --- | --- |
-| Windows | `Tonuino-Manager-<Version>-Setup.exe` | Installer, deinstallierbar über *Apps & Features* |
-| macOS (Apple Silicon) | `Tonuino-Manager-<Version>-arm64.dmg` | App nach `/Applications` ziehen, beim ersten Start [Quarantäne entfernen](#hinweis-zur-signatur-macos) |
-| macOS (Intel) | `Tonuino-Manager-<Version>-intel.dmg` | wie oben |
-| Linux (Debian/Ubuntu) | `tonuino-manager_<Version>_amd64.deb` | `sudo apt install ./tonuino-manager_<Version>_amd64.deb` |
+| Windows | `Tonuino-Studio-<Version>-Setup.exe` | Installer, deinstallierbar über *Apps & Features* |
+| macOS (Apple Silicon) | `Tonuino-Studio-<Version>-arm64.dmg` | App nach `/Applications` ziehen, beim ersten Start [Quarantäne entfernen](#hinweis-zur-signatur-macos) |
+| macOS (Intel) | `Tonuino-Studio-<Version>-intel.dmg` | wie oben |
+| Linux (Debian/Ubuntu) | `tonuino-studio_<Version>_amd64.deb` | `sudo apt install ./tonuino-studio_<Version>_amd64.deb` |
 
 Portable Programmdateien (z. B. für Distributionen ohne `apt`) lassen sich mit dem [lokalen Build](#eigene-builds) erzeugen.
 
@@ -39,7 +41,7 @@ Portable Programmdateien (z. B. für Distributionen ohne `apt`) lassen sich mit 
 Die App ist nur ad-hoc signiert (kein Apple Developer Account). Gatekeeper meldet bei heruntergeladenen Kopien deshalb „beschädigt“ – die Datei ist in Ordnung. Quarantäne-Flag entfernen, danach startet die App normal:
 
 ```bash
-xattr -cr /Applications/Tonuino-Manager.app
+xattr -cr /Applications/Tonuino-Studio.app
 ```
 
 ## SD-Karten-Format
@@ -122,8 +124,8 @@ Die eigene Sammlung bleibt, wo sie ist – auf dem PC, auf einem NAS, in mehrere
 Python 3.10+ und ein venv (auf aktuellem Debian/Ubuntu ohnehin Pflicht, siehe [PEP 668](https://peps.python.org/pep-0668/)):
 
 ```bash
-git clone https://github.com/donschoof/tonuino-manager.git
-cd tonuino-manager
+git clone https://github.com/jlach-dev/Tonuino-manager.git
+cd Tonuino-manager
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements-dev.txt   # nur zum Starten reicht requirements.txt
@@ -156,9 +158,9 @@ python build_package.py
 
 Das Skript erkennt das Betriebssystem und legt das Ergebnis in `dist/` ab. Es muss auf jeder Zielplattform separat laufen. Die Version kommt aus [src/core/\_\_init\_\_.py](src/core/__init__.py).
 
-- **Windows**: `Tonuino-Manager.exe` (portabel) und mit [Inno Setup](https://jrsoftware.org/isdl.php) zusätzlich das Setup (oder `Build_Package.bat`)
-- **Linux**: `Tonuino-Manager` (portabel) und `.deb` (benötigt `dpkg-deb`)
-- **macOS**: `Tonuino-Manager.app` und `.dmg` (`arm64` oder `intel`, je nach Build-Rechner)
+- **Windows**: `Tonuino-Studio.exe` (portabel) und mit [Inno Setup](https://jrsoftware.org/isdl.php) zusätzlich das Setup (oder `Build_Package.bat`)
+- **Linux**: `Tonuino-Studio` (portabel) und `.deb` (benötigt `dpkg-deb`)
+- **macOS**: `Tonuino-Studio.app` und `.dmg` (`arm64` oder `intel`, je nach Build-Rechner)
 
 Tests und Lint lokal:
 

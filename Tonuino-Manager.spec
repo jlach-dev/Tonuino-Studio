@@ -105,7 +105,7 @@ if sys.platform == 'darwin':
         a.scripts,
         [],
         exclude_binaries=True,
-        name='Tonuino-Manager',
+        name='Tonuino-Studio',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
@@ -127,7 +127,7 @@ if sys.platform == 'darwin':
         strip=False,
         upx=True,
         upx_exclude=[],
-        name='Tonuino-Manager',
+        name='Tonuino-Studio',
     )
 
     # Unsigned - fuer eine spaetere Codesignatur/Notarisierung (Voraussetzung
@@ -135,16 +135,16 @@ if sys.platform == 'darwin':
     # waere ein Apple Developer Account noetig, der hier nicht vorausgesetzt wird.
     app = BUNDLE(
         coll,
-        name='Tonuino-Manager.app',
+        name='Tonuino-Studio.app',
         icon=_icon,
-        bundle_identifier='de.tonuino-manager.app',
+        bundle_identifier='de.jlach.tonuino-studio',
         info_plist={
-            'CFBundleName': 'Tonuino-Manager',
-            'CFBundleDisplayName': 'Tonuino-Manager',
+            'CFBundleName': 'Tonuino-Studio',
+            'CFBundleDisplayName': 'Tonuino-Studio',
             'CFBundleVersion': _get_version(),
             'CFBundleShortVersionString': _get_version(),
             'NSHighResolutionCapable': True,
-            'NSHumanReadableCopyright': 'Tonuino-Manager',
+            'NSHumanReadableCopyright': 'Tonuino-Studio',
         },
     )
 else:
@@ -155,7 +155,7 @@ else:
         a.zipfiles,
         a.datas,
         [],
-        name='Tonuino-Manager',
+        name='Tonuino-Studio',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,

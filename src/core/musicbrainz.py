@@ -18,8 +18,9 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from core import __version__
+from core.branding import APP_NAME, HOMEPAGE
 
-USER_AGENT = f"Tonuino-Manager/{__version__} ( https://github.com/jlach-dev/Tonuino-manager )"
+USER_AGENT = f"{APP_NAME}/{__version__} ( {HOMEPAGE} )"
 HTTP_TIMEOUT = 20
 
 _last_request = 0.0

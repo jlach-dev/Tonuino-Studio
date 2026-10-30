@@ -1,5 +1,5 @@
 """
-Tonuino-Manager
+Tonuino-Studio (Fork von Tonuino-Manager)
 Ein hübsches Tool zum Verwalten von Tonuino SD-Karten und RFID-Karten.
 """
 
@@ -27,6 +27,7 @@ from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon, QFontDatabase
 from core import __version__
+from core.branding import APP_NAME
 from core.app_log import setup_logging
 # crash_handler liest keine Farben - darf vor set_theme() importiert werden
 from gui.crash_handler import install_exception_hooks
@@ -35,13 +36,14 @@ from gui.crash_handler import install_exception_hooks
 def main():
     # Log zusaetzlich in eine rotierende Datei - die EXE hat keine Konsole
     log_file = setup_logging(logging.INFO)
-    logging.getLogger(__name__).info("Tonuino-Manager %s startet", __version__)
+    logging.getLogger(__name__).info("%s %s startet", APP_NAME, __version__)
 
     # High DPI Skalierung aktivieren
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
 
     app = QApplication(sys.argv)
+    # Interner Name bleibt "Tonuino-Manager" (Ablageort der Einstellungen), siehe core/branding.py
     app.setApplicationName("Tonuino-Manager")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("TonuinoManager")

@@ -17,6 +17,7 @@ from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint, QRect, QP
 from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup, QBrush, QColor, QKeySequence, QShortcut
 
 from core import __version__, loudness
+from core.branding import APP_NAME
 from core.sd_card import SDCard, Folder, Track, PurgeFolderInfo, PurgePreview, MAX_TRACKS_PER_FOLDER
 from core.drive_check import get_total_size, is_removable_drive, MAX_SD_CARD_BYTES
 from core.audio_converter import AudioConverter
@@ -80,7 +81,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Tonuino-Manager")
+        self.setWindowTitle(APP_NAME)
         icon_path = resource_path("resources", "icon.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
@@ -470,7 +471,7 @@ class MainWindow(QMainWindow):
         logo_label.setMinimumHeight(self.SIDEBAR_LOGO_SIZE + 8)
         title_row.addWidget(logo_label)
 
-        title = QLabel("Tonuino-Manager")
+        title = QLabel(APP_NAME)
         title.setObjectName("sidebarTitle")
         title.setFont(heading_font(14))
 
@@ -563,7 +564,7 @@ class MainWindow(QMainWindow):
         welcome_layout = QVBoxLayout(self.welcome_widget)
         welcome_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        welcome_label = QLabel("Willkommen beim Tonuino-Manager!")
+        welcome_label = QLabel(f"Willkommen bei {APP_NAME}!")
         welcome_label.setFont(heading_font(18))
         welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         welcome_layout.addWidget(welcome_label)

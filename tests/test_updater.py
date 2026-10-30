@@ -18,8 +18,8 @@ def test_is_newer_version():
 def test_select_asset_windows(monkeypatch):
     monkeypatch.setattr(updater.sys, "platform", "win32")
     assets = [
-        {"name": "Tonuino-Manager-1.5.0-portable.exe"},
-        {"name": "Tonuino-Manager-1.5.0-Setup.exe"},
+        {"name": "Tonuino-Studio-1.5.0-portable.exe"},
+        {"name": "Tonuino-Studio-1.5.0-Setup.exe"},
     ]
     assert updater.select_asset(assets)["name"].endswith("-Setup.exe")
 
@@ -45,7 +45,7 @@ def run_download(monkeypatch, data, digest, content_length=None):
     )
     info = updater.UpdateInfo(
         version="9.9.9", release_notes="", release_url="", asset_url="https://example.invalid/x",
-        asset_name="../Tonuino-Manager-9.9.9-Setup.exe", asset_size=len(data), asset_digest=digest,
+        asset_name="../Tonuino-Studio-9.9.9-Setup.exe", asset_size=len(data), asset_digest=digest,
     )
     downloader = updater.UpdateDownloader(info)
     done, errors = [], []
@@ -66,7 +66,7 @@ def test_download_with_matching_digest_succeeds(monkeypatch):
     done, errors = run_download(monkeypatch, data, "sha256:" + hashlib.sha256(data).hexdigest())
     assert not errors and len(done) == 1
     # Nur der Dateiname zaehlt, nicht der '../'-Anteil des Asset-Namens
-    assert os.path.basename(done[0]) == "Tonuino-Manager-9.9.9-Setup.exe"
+    assert os.path.basename(done[0]) == "Tonuino-Studio-9.9.9-Setup.exe"
     assert open(done[0], "rb").read() == data
     os.remove(done[0])
     os.rmdir(os.path.dirname(done[0]))

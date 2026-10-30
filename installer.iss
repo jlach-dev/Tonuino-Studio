@@ -1,9 +1,9 @@
-; Inno Setup Skript fuer Tonuino-Manager
+; Inno Setup Skript fuer Tonuino-Studio (Fork von Tonuino-Manager)
 ; Erstellt einen Windows-Installer, der sich korrekt unter "Apps & Features"
 ; (Windows-Einstellungen) registriert und dort auch wieder deinstallieren laesst.
 ; Installation erfolgt pro Maschine unter Program Files (benoetigt Administrator/UAC).
 
-#define MyAppName "Tonuino-Manager"
+#define MyAppName "Tonuino-Studio"
 ; MyAppVersion wird von build_package.py per /DMyAppVersion=... aus
 ; src/core/__init__.py (__version__) uebergeben, damit es nur eine Quelle fuer
 ; die Versionsnummer im Projekt gibt. Der Wert hier ist nur ein Fallback fuer
@@ -11,12 +11,14 @@
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
-#define MyAppExeName "Tonuino-Manager.exe"
+#define MyAppExeName "Tonuino-Studio.exe"
 
 [Setup]
 ; Feste AppId (GUID) - wichtig, damit Windows Updates/Deinstallation ueber
 ; Versionen hinweg konsistent demselben Programm zuordnet. Nicht aendern.
-AppId={{9BB90457-5891-44D4-8BC7-4D7B3595037F}
+; Eigene AppId des Forks (das Original nutzt 9BB90457-...), damit sich beide
+; nicht gegenseitig ueberschreiben und nebeneinander installiert sein koennen.
+AppId={{A65B1BDA-9CF9-4A42-9FA9-ABBFB4A3417B}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppName}

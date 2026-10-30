@@ -24,16 +24,16 @@ jobs:
         include:
           - os: windows-latest
             name: windows
-            artifact_glob: dist/Tonuino-Manager-*-Setup.exe
+            artifact_glob: dist/Tonuino-Studio-*-Setup.exe
           - os: ubuntu-latest
             name: linux
-            artifact_glob: dist/tonuino-manager_*_amd64.deb
+            artifact_glob: dist/tonuino-studio_*_amd64.deb
           - os: macos-latest
             name: macos-arm64
-            artifact_glob: dist/Tonuino-Manager-*.dmg
+            artifact_glob: dist/Tonuino-Studio-*.dmg
           - os: macos-15-intel
             name: macos-intel
-            artifact_glob: dist/Tonuino-Manager-*.dmg
+            artifact_glob: dist/Tonuino-Studio-*.dmg
 
     runs-on: ${{ matrix.os }}
 
@@ -129,6 +129,6 @@ jobs:
       - name: Artefakte hochladen
         uses: actions/upload-artifact@v7
         with:
-          name: tonuino-manager-${{ matrix.name }}
+          name: tonuino-studio-${{ matrix.name }}
           path: ${{ matrix.artifact_glob }}
           if-no-files-found: error
