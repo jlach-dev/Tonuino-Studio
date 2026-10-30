@@ -5,15 +5,17 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
-from PyQt6.QtCore import QCoreApplication, QPointF, QSettings, Qt, QUrl, QMimeData
-from PyQt6.QtGui import QDropEvent
+from PyQt6.QtCore import QCoreApplication, QPoint, QPointF, QSettings, Qt, QUrl, QMimeData
+from PyQt6.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PyQt6.QtWidgets import QApplication
 
 from core import album_identity
 from core.cover_archive import CoverArchive
 from core.library import SETTINGS_SOURCES, Library
 from core.metadata import MetadataManager
-from gui.library_dnd import MIME_ALBUM, FolderListWidget, album_paths_from_mime, make_album_mime
+from gui.library_dnd import (
+    MIME_ALBUM, DropArea, FolderListWidget, album_paths_from_mime, make_album_mime, make_tracks_mime,
+)
 
 
 @pytest.fixture(scope="module")
@@ -76,6 +78,71 @@ def test_folder_list_drop_targets(app, tmp_path):
     item.setData(Qt.ItemDataRole.UserRole, 1)
     widget.addItem(item)
     assert drop(widget.visualItemRect(item).center()) and received[-1] == ([str(tmp_path)], 1)
+
+
+def drag_move(widget, pos, mime):
+    event = QDragMoveEvent(pos, Qt.DropAction.CopyAction, mime, Qt.MouseButton.LeftButton,
+                           Qt.KeyboardModifier.NoModifier)
+    widget.dragMoveEvent(event)
+    return event.isAccepted()
+
+
+def test_folder_list_highlights_drop_target(app, tmp_path):
+    from PyQt6.QtWidgets import QListWidgetItem
+
+    widget = FolderListWidget()
+    widget.resize(200, 300)
+    widget.show()
+    highlight = widget.drop_highlight
+    mime = make_album_mime([str(tmp_path)])
+    for identity in (3, "mp3"):
+        item = QListWidgetItem(str(identity))
+        item.setData(Qt.ItemDataRole.UserRole, identity)
+        widget.addItem(item)
+    folder_rect = widget.visualItemRect(widget.item(0))
+    special_rect = widget.visualItemRect(widget.item(1))
+
+    # ohne SD-Karte: kein Drop, keine Hervorhebung
+    assert not drag_move(widget, folder_rect.center(), mime) and not highlight.isVisible()
+
+    widget.drop_enabled = True
+    assert drag_move(widget, folder_rect.center(), mime)
+    assert highlight.isVisible() and highlight.geometry() == folder_rect
+    assert highlight.hint == "In Ordner 03" and not highlight.blocked
+
+    drag_move(widget, special_rect.center(), mime)
+    assert highlight.geometry() == special_rect and highlight.blocked
+
+    drag_move(widget, widget.viewport().rect().bottomLeft() - QPoint(-5, 5), mime)
+    assert highlight.geometry() == widget.viewport().rect() and highlight.hint == "Neuer Ordner"
+
+    tracks = make_tracks_mime([str(tmp_path / "01.mp3")])
+    (tmp_path / "01.mp3").write_bytes(b"x")
+    drag_move(widget, folder_rect.center(), tracks)
+    assert highlight.hint == "An Ordner 03 anhängen"
+
+    widget.dragLeaveEvent(QDragLeaveEvent())
+    assert not highlight.isVisible()
+    widget.close()
+
+
+def test_drop_area_highlight_follows_drag(app, tmp_path):
+    area = DropArea()
+    area.resize(400, 300)
+    area.show()
+    area.drop_enabled = True
+    area.drop_hint = "In Ordner 07"
+    mime = make_album_mime([str(tmp_path)])
+
+    assert drag_move(area, area.rect().center(), mime)
+    assert area.drop_highlight.isVisible() and area.drop_highlight.hint == "In Ordner 07"
+    area.drop_highlight.grab()  # malt ohne Fehler
+
+    event = QDropEvent(QPointF(area.rect().center()), Qt.DropAction.CopyAction, mime, Qt.MouseButton.LeftButton,
+                       Qt.KeyboardModifier.NoModifier)
+    area.dropEvent(event)
+    assert not area.drop_highlight.isVisible()
+    area.close()
 
 
 def test_main_window_library_view_switch_badges_and_drop(app, tmp_path, monkeypatch):

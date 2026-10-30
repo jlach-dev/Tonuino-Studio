@@ -11,8 +11,11 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from PyQt6.QtCore import QMimeData, QUrl, Qt, pyqtSignal
+from PyQt6.QtCore import QMimeData, QPoint, QRect, QRectF, QUrl, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QListWidget, QWidget
+
+from gui import theme
 
 MIME_ALBUM = "application/x-tonuino-album"
 MIME_TRACKS = "application/x-tonuino-tracks"
@@ -97,6 +100,62 @@ def album_paths_from_mime(mime: QMimeData) -> List[str]:
     return paths
 
 
+class DropHighlight(QWidget):
+    """Hervorhebung eines Drop-Ziels waehrend eines Drags: halbtransparente
+    Flaeche mit gestricheltem Rahmen und einem Hinweis, was beim Loslassen
+    passiert. Liegt ueber dem Ziel und laesst Maus- und Drag-Ereignisse durch."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.hint = ""
+        self.blocked = False  # rot statt blau: Ablegen hier nicht moeglich
+        self.hide()
+
+    def show_at(self, rect: QRect, hint: str, blocked: bool = False):
+        if self.isVisible() and rect == self.geometry() and (hint, blocked) == (self.hint, self.blocked):
+            return
+        self.hint, self.blocked = hint, blocked
+        self.setGeometry(rect)
+        self.raise_()  # ueber den Item-Widgets der Liste
+        self.show()
+        self.update()
+
+    def paintEvent(self, event):
+        color = QColor(theme.RED if self.blocked else theme.BLUE)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        fill = QColor(color)
+        fill.setAlpha(45)
+        pen = QPen(color, 2, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 8, 8)
+        font = painter.font()
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        # Auf einer einzelnen Ordnerzeile wuerde das Schild den Ordnernamen
+        # verdecken - dort reicht die Hervorhebung selbst
+        if not self.hint or self.height() < metrics.height() * 3:
+            return
+        text = metrics.elidedText(self.hint, Qt.TextElideMode.ElideRight, max(self.width() - 28, 20))
+        width = min(metrics.horizontalAdvance(text) + 20, self.width() - 8)
+        height = min(metrics.height() + 10, self.height() - 4)
+        # Auf grossen Flaechen unten mittig, damit es keinen Inhalt (Trackliste) verdeckt
+        top = (self.height() - height) / 2 if self.height() < height * 8 else self.height() - height - 16
+        pill = QRectF((self.width() - width) / 2, top, width, height)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawRoundedRect(pill, height / 2, height / 2)
+        painter.setPen(QColor(theme.BASE))
+        painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, text)
+
+
+def _folder_label(identity) -> str:
+    return f"Ordner {identity:02d}" if isinstance(identity, int) else f"Ordner {identity}"
+
+
 class FolderListWidget(QListWidget):
     """Ordnerliste der Sidebar als Drop-Ziel: Ablegen auf einem Ordner liefert
     dessen Kennung (Nummer bzw. Name), auf freier Flaeche None (= neuer Ordner)"""
@@ -107,29 +166,48 @@ class FolderListWidget(QListWidget):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.drop_enabled = False  # erst mit geoeffneter SD-Karte
+        self.drop_highlight = DropHighlight(self.viewport())
 
-    def _accepts(self, event) -> bool:
-        return self.drop_enabled and bool(drop_payload_from_mime(event.mimeData()))
+    def _payload(self, event) -> DropPayload:
+        return drop_payload_from_mime(event.mimeData()) if self.drop_enabled else DropPayload()
+
+    def _show_target(self, pos: QPoint, payload: DropPayload):
+        """Hebt das Ziel unter pos hervor: den Ordner oder die ganze Liste (neuer Ordner)"""
+        item = self.itemAt(pos)
+        if item is None:
+            count = len(payload.albums) if payload.albums else 1
+            hint = "Neuer Ordner" if count == 1 else f"{count} neue Ordner"
+            self.drop_highlight.show_at(self.viewport().rect(), hint)
+            return
+        identity = item.data(Qt.ItemDataRole.UserRole)
+        rect = self.visualItemRect(item)
+        if not isinstance(identity, int):
+            self.drop_highlight.show_at(rect, f"{_folder_label(identity)}: nicht möglich", blocked=True)
+        elif payload.albums:
+            self.drop_highlight.show_at(rect, f"In {_folder_label(identity)}")
+        else:
+            self.drop_highlight.show_at(rect, f"An {_folder_label(identity)} anhängen")
 
     def dragEnterEvent(self, event):
-        if self._accepts(event):
-            event.setDropAction(Qt.DropAction.CopyAction)
-            event.accept()
-        else:
-            event.ignore()
+        self.dragMoveEvent(event)
 
     def dragMoveEvent(self, event):
-        if self._accepts(event):
+        payload = self._payload(event)
+        if payload:
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
+            self._show_target(event.position().toPoint(), payload)
         else:
             event.ignore()
+            self.drop_highlight.hide()
 
     def dragLeaveEvent(self, event):
+        self.drop_highlight.hide()
         event.accept()
 
     def dropEvent(self, event):
-        payload = drop_payload_from_mime(event.mimeData()) if self.drop_enabled else DropPayload()
+        self.drop_highlight.hide()
+        payload = self._payload(event)
         if not payload:
             event.ignore()
             return
@@ -152,22 +230,31 @@ class DropArea(QWidget):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.drop_enabled = False
+        self.drop_hint = "In diesen Ordner"  # setzt das Hauptfenster je nach gezeigtem Ordner
+        self.drop_highlight = DropHighlight(self)
 
-    def _accepts(self, event) -> bool:
-        return self.drop_enabled and bool(drop_payload_from_mime(event.mimeData()))
+    def _payload(self, event) -> DropPayload:
+        return drop_payload_from_mime(event.mimeData()) if self.drop_enabled else DropPayload()
 
     def dragEnterEvent(self, event):
-        if self._accepts(event):
-            event.setDropAction(Qt.DropAction.CopyAction)
-            event.accept()
-        else:
-            event.ignore()
+        self.dragMoveEvent(event)
 
     def dragMoveEvent(self, event):
-        self.dragEnterEvent(event)
+        if self._payload(event):
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+            self.drop_highlight.show_at(self.rect().adjusted(4, 4, -4, -4), self.drop_hint)
+        else:
+            event.ignore()
+            self.drop_highlight.hide()
+
+    def dragLeaveEvent(self, event):
+        self.drop_highlight.hide()
+        event.accept()
 
     def dropEvent(self, event):
-        payload = drop_payload_from_mime(event.mimeData()) if self.drop_enabled else DropPayload()
+        self.drop_highlight.hide()
+        payload = self._payload(event)
         if not payload:
             event.ignore()
             return

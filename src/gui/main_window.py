@@ -69,6 +69,9 @@ class MainWindow(QMainWindow):
 
     # Breite des Fensterrands (px), an dem unter Windows die Groesse geaendert wird
     RESIZE_BORDER = 6
+    # Hit-Test-Code (HTLEFT ... HTBOTTOMRIGHT) -> Windows-Cursor (IDC_SIZE*)
+    RESIZE_CURSORS = {10: 32644, 11: 32644, 12: 32645, 15: 32645,
+                      13: 32642, 17: 32642, 14: 32643, 16: 32643}
 
     def __init__(self):
         super().__init__()
@@ -185,6 +188,18 @@ class MainWindow(QMainWindow):
                 result = self._hit_test(pos)
                 if result is not None:
                     return True, result
+            elif msg.message == 0x0020:  # WM_SETCURSOR
+                # Qt setzt hier sonst immer den Pfeil, auch am Rand - den
+                # Groessen-Cursor fuer die Hit-Test-Codes selbst setzen
+                cursor = self.RESIZE_CURSORS.get(msg.lParam & 0xFFFF)
+                if cursor is not None:
+                    import ctypes
+                    user32 = ctypes.WinDLL("user32")  # eigene Instanz, argtypes nicht global setzen
+                    user32.LoadCursorW.restype = wintypes.HANDLE
+                    user32.LoadCursorW.argtypes = [wintypes.HINSTANCE, ctypes.c_void_p]
+                    user32.SetCursor.argtypes = [wintypes.HANDLE]
+                    user32.SetCursor(user32.LoadCursorW(None, ctypes.c_void_p(cursor)))
+                    return True, 1
         # Bewusst kein super().nativeEvent(): der Aufruf stuerzt mit PyQt6 ab
         return False, 0
 
@@ -970,6 +985,8 @@ class MainWindow(QMainWindow):
         """Schaltet die ordnerbezogenen Bearbeiten-Aktionen frei/aus - Tonuio-
         Systemordner (mp3/advert) sind nur einseh- und abspielbar, aber nicht editierbar."""
         editable = self.current_folder is not None and not self._is_special_folder(self.current_folder)
+        # Hinweis beim Ziehen auf die Ordneransicht (Systemordner: Ablage als neuer Ordner)
+        self.folder_widget.drop_hint = f"In Ordner {self.current_folder.index:02d}" if editable else "Neuer Ordner"
         self.btn_add_tracks.setEnabled(editable)
         self.btn_delete_folder.setEnabled(editable)
         self.cover_label.setEnabled(editable)
