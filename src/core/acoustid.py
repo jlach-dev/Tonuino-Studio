@@ -24,6 +24,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
+from core.fileutil import replace_with_retry
 from core.musicbrainz import USER_AGENT
 
 log = logging.getLogger(__name__)
@@ -140,7 +141,7 @@ def download_fpcalc(data_dir: str, platform: Optional[str] = None,
     tmp = target + ".tmp"
     with open(tmp, "wb") as handle:
         handle.write(blob)
-    os.replace(tmp, target)
+    replace_with_retry(tmp, target)
     if platform != "win32":
         os.chmod(target, 0o755)
     return target

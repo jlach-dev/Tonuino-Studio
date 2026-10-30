@@ -23,6 +23,7 @@ from PIL import Image
 from core.card_layout import (
     BACK_MODE_NONE, BACK_MODE_TRACKLIST, CardText, ORIENTATION_PORTRAIT, TextStyle, render_back_card, render_card,
 )
+from core.fileutil import replace_with_retry
 
 CARD_IMAGE = "card.png"
 CARD_RAW = "card_art_raw.png"
@@ -103,7 +104,7 @@ def _write_atomic(path: Path, data: bytes):
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(tmp, path)
+    replace_with_retry(tmp, path)
 
 
 def _write_png(img: Image.Image, path: Path):

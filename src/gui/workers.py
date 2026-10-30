@@ -13,6 +13,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from core.sd_card import SDCard, Folder, Track, MAX_TRACKS_PER_FOLDER
 from core.audio_converter import AudioConverter
 from core import loudness
+from core.fileutil import replace_with_retry
 from core.metadata import MetadataManager
 from core.rfid import RFIDReader, RfidStatus
 from core.tonuino_serial import TonuinoSerial, TonuinoSerialError, TonuinoWriteCancelled
@@ -194,7 +195,7 @@ class TrackAddWorker(QThread):
                         track_number=next_number if metadata.title else None,
                         folder_name=folder_name or None,
                     )
-                os.replace(part_path, dest_path)
+                replace_with_retry(part_path, dest_path)
 
                 new_track = Track(
                     index=next_number,
@@ -311,7 +312,7 @@ class LoudnessApplyWorker(QThread):
             try:
                 bitrate = loudness.pick_bitrate_kbps(self._source_bitrate(track.filepath))
                 self.audio_converter.apply_gain(str(source), str(temp), gain_db, bitrate)
-                os.replace(temp, source)
+                replace_with_retry(temp, source)
                 done += 1
             except Exception as e:
                 log.warning("Lautstaerke-Anpassung fehlgeschlagen (%s): %s", track.filename, e)

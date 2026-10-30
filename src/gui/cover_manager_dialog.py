@@ -1889,8 +1889,12 @@ class CoverManagerDialog(QDialog):
             QMessageBox.warning(self, "Speichern fehlgeschlagen", str(e))
             return
         self.folder.card_path = str(card_store.card_paths(self._card_dir)[0])
+        role_error = None
         if entry:
-            self.archive.set_role(self.album_id, entry.id, ROLE_CARD_COVER)
+            try:
+                self.archive.set_role(self.album_id, entry.id, ROLE_CARD_COVER)
+            except OSError as e:  # card.png steht schon - die Rolle fehlt nur im Archiv
+                role_error = e
             self._sync_roles()
         back_note = self._save_back(front.candidate, orientation)
         self.card_changed = True
@@ -1905,7 +1909,12 @@ class CoverManagerDialog(QDialog):
                                           KIND_LOCAL, is_sd_card_art=True,
                                           back_data=back_raw.read_bytes() if back_raw.exists() else None))
         self._render_preview()
-        if self.library_mode:
+        if role_error is not None:
+            QMessageBox.warning(self, "Nur teilweise gespeichert",
+                                "Das Kartenbild ist gespeichert, im Cover-Archiv konnte es aber nicht als "
+                                f"Kartencover vermerkt werden:\n\n{role_error}\n\n"
+                                "Bitte „Übernehmen“ noch einmal klicken." + back_note)
+        elif self.library_mode:
             self._flash("✓ Kartencover im Archiv gespeichert – wird beim Übertragen auf die SD-Karte "
                         "geschrieben." + back_note)
         else:

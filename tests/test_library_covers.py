@@ -126,3 +126,45 @@ def test_cover_manager_library_mode(tmp_path, monkeypatch):
     app.processEvents()
     dialog2.done(0)
     QSettings().clear()
+
+
+def test_card_cover_role_error_is_reported(tmp_path, monkeypatch):
+    """Scheitert das Vermerken der Rolle (covers.json gesperrt), steht card.png schon -
+    der Nutzer erfaehrt, dass er erneut uebernehmen muss, statt eines Absturzdialogs"""
+    pytest.importorskip("PyQt6")
+    from PyQt6.QtCore import QCoreApplication, QSettings
+    from PyQt6.QtWidgets import QApplication
+    from core import card_store
+    from core.sd_card import Folder, Track
+    from gui import cover_manager_dialog as cm
+
+    QCoreApplication.setOrganizationName("Tonuino-Manager-Tests")
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(cm, "gemini_client", lambda: None)
+    archive = CoverArchive(str(tmp_path / "data"))
+    folder_path = make_album(tmp_path / "Musik", "Hexe", count=1, album="Die kleine Hexe", artist="Preußler")
+    archive.ensure_album("lib1", "Die kleine Hexe", "Preußler", path=str(folder_path))
+    entry = archive.add_cover("lib1", png_bytes(size=(400, 400)), KIND_FILE, source="test")
+    track = Track(index=1, filename="01.mp3", filepath=str(folder_path / "01.mp3"))
+    folder = Folder(index=None, path=str(folder_path), tracks=[track], name="Hexe")
+    dialog = cm.CoverManagerDialog(folder, "Die kleine Hexe", MetadataManager(), archive, focus="album",
+                                   library=True, album_id="lib1")
+    app.processEvents()
+    dialog.selected = next(c for c in dialog.candidates if c.entry is not None and c.entry.id == entry.id)
+
+    def locked(*_):
+        raise PermissionError(5, "Zugriff verweigert")
+
+    warnings = []
+    monkeypatch.setattr(archive, "set_role", locked)
+    monkeypatch.setattr(cm.QMessageBox, "warning", lambda _parent, title, text: warnings.append((title, text)))
+    dialog._set_card_cover()
+    assert card_store.has_card(str(archive.card_dir("lib1")))
+    assert len(warnings) == 1 and "noch einmal" in warnings[0][1]
+    assert ROLE_CARD_COVER not in archive.covers("lib1")[0].roles
+    for worker in (dialog._research_worker, dialog._search_worker):
+        if worker is not None:
+            worker.wait(5000)
+    app.processEvents()
+    dialog.done(0)
+    QSettings().clear()

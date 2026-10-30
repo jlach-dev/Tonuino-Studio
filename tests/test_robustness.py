@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 import weakref
@@ -267,3 +268,52 @@ def test_header_buttons_shrink_to_icons_when_space_is_short(app):
     compact.update_mode()
     assert not compact.compact and buttons[2].text() == " Cover-Manager"
     container.close()
+
+
+def test_replace_with_retry_waits_for_locked_target(tmp_path, monkeypatch):
+    """WinError 5: Google Drive/Virenscanner halten die Zieldatei kurz offen"""
+    from core import fileutil
+
+    src, dst = tmp_path / "covers.json.tmp", tmp_path / "covers.json"
+    src.write_text("neu", encoding="utf-8")
+    dst.write_text("alt", encoding="utf-8")
+    real_replace, calls = os.replace, []
+
+    def flaky(a, b):
+        calls.append(a)
+        if len(calls) <= 2:
+            raise PermissionError(5, "Zugriff verweigert")
+        real_replace(a, b)
+
+    monkeypatch.setattr(fileutil.os, "replace", flaky)
+    fileutil.replace_with_retry(src, dst, delays=(0, 0, 0))
+    assert len(calls) == 3 and dst.read_text(encoding="utf-8") == "neu" and not src.exists()
+
+    # bleibt gesperrt: Fehler weiterreichen, Ziel unveraendert, keine .tmp-Leiche
+    src.write_text("neuer", encoding="utf-8")
+    monkeypatch.setattr(fileutil.os, "replace", lambda a, b: (_ for _ in ()).throw(PermissionError(5, "gesperrt")))
+    with pytest.raises(PermissionError):
+        fileutil.replace_with_retry(src, dst, delays=(0, 0))
+    assert dst.read_text(encoding="utf-8") == "neu" and not src.exists()
+
+
+def test_archive_write_retries_locked_covers_json(tmp_path, monkeypatch):
+    from core import fileutil
+    from core.cover_archive import KIND_FILE, ROLE_CARD_COVER, CoverArchive
+    from tests.test_library import png_bytes
+
+    archive = CoverArchive(str(tmp_path / "data"))
+    archive.ensure_album("a1", "Hexe", "")
+    entry = archive.add_cover("a1", png_bytes(), KIND_FILE, source="test")
+    real_replace, failures = os.replace, [2]
+
+    def flaky(a, b):
+        if failures[0]:
+            failures[0] -= 1
+            raise PermissionError(5, "Zugriff verweigert")
+        real_replace(a, b)
+
+    monkeypatch.setattr(fileutil.os, "replace", flaky)
+    monkeypatch.setattr(fileutil.time, "sleep", lambda _s: None)
+    archive.set_role("a1", entry.id, ROLE_CARD_COVER)
+    assert ROLE_CARD_COVER in archive.covers("a1")[0].roles

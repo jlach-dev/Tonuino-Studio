@@ -13,7 +13,6 @@ import hashlib
 import io
 import json
 import logging
-import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -21,6 +20,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from PIL import Image
+
+from core.fileutil import replace_with_retry
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ def _write_json_atomic(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    replace_with_retry(tmp, path)
 
 
 def _sniff_extension(data: bytes) -> str:
