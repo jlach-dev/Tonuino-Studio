@@ -1,3 +1,4 @@
+import pytest
 from PIL import Image
 
 from core import card_store
@@ -64,6 +65,28 @@ def test_card_store_roundtrip(tmp_path):
 
     card_store.delete_card(str(tmp_path))
     assert not any(tmp_path.iterdir())
+
+
+def test_card_files_are_replaced_atomically(tmp_path, monkeypatch):
+    """Scheitert das Schreiben (z.B. Karte gezogen), bleibt die alte Datei heil"""
+    import os
+    from core import card_store
+    from core.card_store import CardMeta
+
+    art = Image.new("RGB", (400, 600), (200, 100, 50))
+    card_store.save_card(str(tmp_path), art, CardMeta(title="Alt"), 1)
+    old_meta = (tmp_path / "card.json").read_bytes()
+
+    def broken_replace(src, dst):
+        raise OSError("Karte entfernt")
+
+    monkeypatch.setattr(card_store.os, "replace", broken_replace)
+    with pytest.raises(OSError):
+        card_store.save_card(str(tmp_path), art, CardMeta(title="Neu"), 1)
+    monkeypatch.undo()
+    assert (tmp_path / "card.json").read_bytes() == old_meta
+    assert card_store.load_meta(str(tmp_path)).title == "Alt"
+    assert os.path.exists(tmp_path / "card.png")
 
 
 def test_sheet_layout_fits_on_a4_and_paginates(tmp_path):

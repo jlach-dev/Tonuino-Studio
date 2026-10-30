@@ -97,6 +97,41 @@ def test_archive_finds_album_by_title_and_keeps_paths(tmp_path):
         archive.load_album("../x") or archive._album_dir("../x")
 
 
+def test_archive_keeps_entries_whose_image_is_not_synced_yet(tmp_path):
+    """Google Drive kann covers.json vor den Bildern synchronisieren - eine
+    Aenderung darf die Eintraege ohne Bild nicht verwerfen"""
+    archive = CoverArchive(str(tmp_path))
+    first = archive.add_cover("alb", png_bytes(color=(1, 2, 3)), KIND_MUSICBRAINZ)
+    second = archive.add_cover("alb", png_bytes(color=(4, 5, 6)), KIND_AI, prompt="Hexe")
+    archive.cover_path("alb", first).unlink()  # Bild noch nicht da
+
+    assert [e.id for e in archive.covers("alb")] == [second.id]  # Anzeige nur mit Bild
+    archive.set_role("alb", second.id, ROLE_CARD_COVER)
+
+    archive.cover_path("alb", first).write_bytes(png_bytes(color=(1, 2, 3)))  # Sync holt es nach
+    assert {e.id for e in archive.covers("alb")} == {first.id, second.id}
+
+
+def test_unreadable_archive_files_are_never_overwritten(tmp_path):
+    from core.cover_archive import ArchiveReadError
+
+    archive = CoverArchive(str(tmp_path))
+    archive.ensure_album("alb", "Die kleine Hexe", "Preußler", path="X:/Hexe")
+    archive.add_cover("alb", png_bytes(), KIND_MUSICBRAINZ)
+    album_json = tmp_path / "albums" / "alb" / "album.json"
+    covers_json = tmp_path / "albums" / "alb" / "covers.json"
+    album_json.write_text("{ halb geschrieben", encoding="utf-8")
+    covers_json.write_text("[ {", encoding="utf-8")
+
+    assert archive.load_album("alb") is None and archive.covers("alb") == []  # Anzeige bleibt ruhig
+    with pytest.raises(ArchiveReadError):
+        archive.ensure_album("alb", "Anderes", path="Y:/neu")
+    with pytest.raises(ArchiveReadError):
+        archive.add_cover("alb", png_bytes(color=(9, 9, 9)), KIND_AI)
+    assert album_json.read_text(encoding="utf-8") == "{ halb geschrieben"
+    assert covers_json.read_text(encoding="utf-8") == "[ {"
+
+
 def test_album_id_tag_roundtrip(silent_mp3):
     assert album_identity.read_album_id([str(silent_mp3)]) is None
     assert album_identity.write_album_id([str(silent_mp3)], "id-123") == 1

@@ -12,6 +12,7 @@ Auf die SD-Karte kommt nur das aktive Kartencover (siehe core/card_store.py).
 import hashlib
 import io
 import json
+import logging
 import os
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from PIL import Image
+
+log = logging.getLogger(__name__)
 
 KIND_AI = "ai"
 KIND_MUSICBRAINZ = "musicbrainz"
@@ -46,6 +49,12 @@ def sha1(data: bytes) -> str:
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+class ArchiveReadError(OSError):
+    """Eine Archivdatei (album.json, covers.json) existiert, ist aber nicht
+    lesbar - z.B. waehrend Google Drive sie synchronisiert. Wer daraufhin neu
+    schreiben wuerde, verloere ihren Inhalt; deshalb wird abgebrochen."""
 
 
 def _write_json_atomic(path: Path, data):
@@ -130,10 +139,21 @@ class CoverArchive:
 
     def load_album(self, album_id: str) -> Optional[AlbumRecord]:
         try:
-            data = json.loads((self._album_dir(album_id) / "album.json").read_text(encoding="utf-8"))
-            return AlbumRecord.from_dict(data)
-        except (OSError, ValueError):
+            return self._read_album(album_id)
+        except ArchiveReadError as e:
+            log.warning("%s", e)
             return None
+
+    def _read_album(self, album_id: str) -> Optional[AlbumRecord]:
+        """None, wenn es album.json nicht gibt; ArchiveReadError, wenn sie
+        existiert, aber nicht lesbar ist"""
+        path = self._album_dir(album_id) / "album.json"
+        if not path.exists():
+            return None
+        try:
+            return AlbumRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            raise ArchiveReadError(f"Archivdatei nicht lesbar: {path} ({e})") from e
 
     def save_album(self, record: AlbumRecord):
         if not record.created:
@@ -141,7 +161,9 @@ class CoverArchive:
         _write_json_atomic(self._album_dir(record.id) / "album.json", asdict(record))
 
     def ensure_album(self, album_id: str, title: str = "", artist: str = "", path: str = "") -> AlbumRecord:
-        record = self.load_album(album_id) or AlbumRecord(id=album_id, title=title, artist=artist)
+        # _read_album statt load_album: eine vorhandene, gerade unlesbare album.json
+        # darf nicht durch einen fast leeren Datensatz ersetzt werden
+        record = self._read_album(album_id) or AlbumRecord(id=album_id, title=title, artist=artist)
         changed = not (self._album_dir(album_id) / "album.json").exists()
         if title and not record.title:
             record.title, changed = title, True
@@ -180,12 +202,26 @@ class CoverArchive:
     # --- Cover ----------------------------------------------------------------------
 
     def covers(self, album_id: str) -> List[CoverEntry]:
+        """Cover des Albums, deren Bilddatei vorhanden ist (zum Anzeigen)"""
         try:
-            data = json.loads((self._album_dir(album_id) / "covers.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            entries = self._load_entries(album_id)
+        except ArchiveReadError as e:
+            log.warning("%s", e)
             return []
-        entries = [CoverEntry.from_dict(item) for item in data]
         return [e for e in entries if self.cover_path(album_id, e).exists()]
+
+    def _load_entries(self, album_id: str) -> List[CoverEntry]:
+        """Alle Eintraege aus covers.json, auch solche, deren Bild (noch) fehlt -
+        z.B. weil Google Drive die Bilder nach der JSON-Datei synchronisiert.
+        Grundlage fuer jedes Aendern: so geht beim Zurueckschreiben nichts
+        verloren. ArchiveReadError, wenn die Datei existiert, aber nicht lesbar ist."""
+        path = self._album_dir(album_id) / "covers.json"
+        if not path.exists():
+            return []
+        try:
+            return [CoverEntry.from_dict(item) for item in json.loads(path.read_text(encoding="utf-8"))]
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            raise ArchiveReadError(f"Archivdatei nicht lesbar: {path} ({e})") from e
 
     def _save_covers(self, album_id: str, entries: List[CoverEntry]):
         _write_json_atomic(self._album_dir(album_id) / "covers.json", [asdict(e) for e in entries])
@@ -219,7 +255,7 @@ class CoverArchive:
         path = self.cover_path(album_id, entry)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-        self._save_covers(album_id, self.covers(album_id) + [entry])
+        self._save_covers(album_id, self._load_entries(album_id) + [entry])
         return entry
 
     def find_cover_by_sha1(self, album_id: str, digest: str) -> Optional[CoverEntry]:
@@ -241,7 +277,7 @@ class CoverArchive:
 
     def set_back(self, album_id: str, cover_id: str, data: Optional[bytes]) -> Optional[CoverEntry]:
         """Haengt eine Rueckseite an ein Cover (None entfernt sie)"""
-        entries = self.covers(album_id)
+        entries = self._load_entries(album_id)
         for entry in entries:
             if entry.id != cover_id:
                 continue
@@ -265,7 +301,7 @@ class CoverArchive:
             return None
 
     def delete_cover(self, album_id: str, cover_id: str):
-        entries = self.covers(album_id)
+        entries = self._load_entries(album_id)
         for entry in entries:
             if entry.id == cover_id:
                 self.cover_path(album_id, entry).unlink(missing_ok=True)
@@ -276,7 +312,7 @@ class CoverArchive:
 
     def set_role(self, album_id: str, cover_id: str, role: str, exclusive: bool = True):
         """Vergibt eine Rolle; exclusive entzieht sie allen anderen Covern des Albums"""
-        entries = self.covers(album_id)
+        entries = self._load_entries(album_id)
         for entry in entries:
             if entry.id == cover_id:
                 if role not in entry.roles:
@@ -286,7 +322,7 @@ class CoverArchive:
         self._save_covers(album_id, entries)
 
     def clear_role(self, album_id: str, cover_id: str, role: str):
-        entries = self.covers(album_id)
+        entries = self._load_entries(album_id)
         for entry in entries:
             if entry.id == cover_id and role in entry.roles:
                 entry.roles.remove(role)

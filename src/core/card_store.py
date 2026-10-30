@@ -12,6 +12,7 @@ daher wandern die Dateien nie und bleiben dem richtigen Ordner zugeordnet.
 
 import io
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -94,14 +95,26 @@ def render_back_from_meta(art: Image.Image, meta: CardMeta, spec=None) -> Image.
     return render_back_card(art, meta.orientation, spec=spec)
 
 
+def _write_atomic(path: Path, data: bytes):
+    """Erst in eine temporaere Datei daneben, dann ersetzen: wird die Karte beim
+    Schreiben gezogen, bleibt die alte Datei heil statt einer halben neuen"""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
 def _write_png(img: Image.Image, path: Path):
     buffer = io.BytesIO()
     img.save(buffer, "PNG", dpi=(300, 300))
-    path.write_bytes(buffer.getvalue())
+    _write_atomic(path, buffer.getvalue())
 
 
 def _save_meta(folder_path: str, meta: CardMeta):
-    card_paths(folder_path)[2].write_text(json.dumps(asdict(meta), ensure_ascii=False, indent=2), encoding="utf-8")
+    data = json.dumps(asdict(meta), ensure_ascii=False, indent=2).encode("utf-8")
+    _write_atomic(card_paths(folder_path)[2], data)
 
 
 def save_back(folder_path: str, art: Image.Image, meta: CardMeta) -> Image.Image:
@@ -149,8 +162,8 @@ def render_from_meta(art: Image.Image, meta: CardMeta, folder_number: Optional[i
 
 
 def save_card(folder_path: str, art: Image.Image, meta: CardMeta, folder_number: Optional[int]) -> Image.Image:
-    """Rendert die Karte und schreibt alle drei Dateien. Erst in einen Puffer,
-    dann auf die Karte - so bleibt bei einem Fehler keine halbe Datei liegen."""
+    """Rendert die Karte und schreibt alle drei Dateien, jede atomar (siehe
+    _write_atomic). card.json zuletzt: sie verweist auf die beiden Bilder."""
     image_path, raw_path, meta_path = card_paths(folder_path)
     if not meta.created:
         meta.created = datetime.now().isoformat(timespec="seconds")
