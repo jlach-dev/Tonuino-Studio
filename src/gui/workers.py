@@ -785,9 +785,11 @@ class LibraryScanWorker(QThread):
             index = self.previous
             if self.rescan and self.library is not None:
                 index = self.library.scan(self.previous, self.progress.emit, lambda: self._cancelled)
-                if self.archive is not None:
-                    index = self.library.match(index, self.archive)
+                # Abgebrochen: das Ergebnis ist unvollstaendig - weder Archiv abgleichen
+                # (wuerde Bibliothekspfade fuer verwaist halten) noch Index speichern
                 if not self._cancelled:
+                    if self.archive is not None:
+                        index = self.library.match(index, self.archive)
                     self.library.save(index)
             sd_map = sd_album_ids(self.sd_folders) if self.sd_folders else {}
             self.completed.emit(index, sd_map)

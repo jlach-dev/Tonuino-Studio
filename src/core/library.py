@@ -117,6 +117,7 @@ class LibraryIndex:
     albums: List[LibraryAlbum] = field(default_factory=list)
     scanned: str = ""
     orphaned: List[dict] = field(default_factory=list)  # Archiv-Eintraege ohne Bibliotheksordner (id, title, artist)
+    unreadable: List[str] = field(default_factory=list)  # Ordner, die beim letzten Einlesen nicht lesbar waren
 
     def by_path(self) -> Dict[str, LibraryAlbum]:
         return {norm_path(a.path): a for a in self.albums}
@@ -494,10 +495,17 @@ def album_track_files(album_path: str) -> List[str]:
     return files
 
 
-def find_album_folders(source: str) -> List[Tuple[str, List[str]]]:
-    """(Albumpfad, Audiodateien) fuer alle Alben unter einem Quellordner"""
+def find_album_folders(source: str, failed: Optional[List[str]] = None) -> List[Tuple[str, List[str]]]:
+    """(Albumpfad, Audiodateien) fuer alle Alben unter einem Quellordner.
+    Ordner, die sich nicht lesen liessen (NAS-Aussetzer, fehlende Rechte),
+    landen in failed - ihre Alben sind dann nicht weg, nur gerade nicht lesbar."""
     result = []
-    for dirpath, dirnames, filenames in os.walk(source):
+
+    def remember(error: OSError):
+        if failed is not None:
+            failed.append(error.filename or source)
+
+    for dirpath, dirnames, filenames in os.walk(source, onerror=remember):
         dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d.lower() != "@eadir")
         files = [os.path.join(dirpath, n) for n in sorted(filenames, key=_natural_key) if is_audio_file(n)]
         if files:
@@ -645,10 +653,11 @@ class Library:
         index = LibraryIndex(scanned=_now(), orphaned=list(previous.orphaned))
         offline_sources = [s for s in self.sources if is_offline(s)]
         found: List[Tuple[str, str, List[str]]] = []
+        failed_dirs: List[str] = []
         for source in self.sources:
             if source in offline_sources:
                 continue
-            for album_path, files in find_album_folders(source):
+            for album_path, files in find_album_folders(source, failed_dirs):
                 found.append((source, album_path, files))
 
         total = len(found)
@@ -674,6 +683,19 @@ class Library:
                     album.offline = True
                     album.state = STATE_OFFLINE
                     index.albums.append(album)
+        # Teilbaeume, die sich gerade nicht lesen liessen (z.B. NAS-Aussetzer mitten
+        # im Einlesen): ihre bisherigen Alben bleiben als offline erhalten, statt
+        # aus dem Index zu verschwinden und im Archiv als verwaist zu gelten
+        failed = [norm_path(d) for d in failed_dirs]
+        present = {norm_path(a.path) for a in index.albums}
+        for album in previous.albums:
+            path = norm_path(album.path)
+            if path not in present and any(path == d or path.startswith(d + "/") for d in failed):
+                album.offline = True
+                album.state = STATE_OFFLINE
+                index.albums.append(album)
+                present.add(path)
+        index.unreadable = list(failed_dirs)
         index.albums.sort(key=lambda a: (a.artist.lower(), a.name.lower()))
         return index
 
@@ -720,8 +742,11 @@ class Library:
                 album.state = STATE_LINKED
             else:
                 album.state = STATE_MOVED
+                # Nur Pfade entfernen, die es wirklich nicht mehr gibt - nicht solche,
+                # die beim Einlesen bloss nicht erreichbar waren
                 record.paths = [p for p in record.paths
-                                if not (self._in_sources(p) and norm_path(p) not in present)]
+                                if not (self._in_sources(p) and norm_path(p) not in present
+                                        and not os.path.isdir(p))]
                 record.paths.append(album.path)
                 if not record.title:
                     record.title = album.title

@@ -1,4 +1,5 @@
 import io
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -291,3 +292,31 @@ def test_import_without_archive_and_without_permission_leaves_library_untouched(
     assert album_identity.read_album_id([str(album_dir / "01.mp3")]) is None
     assert album_identity.read_album_id([str(sd.path / "03" / "001.mp3")]) == result.album_id
     assert not result.card_written
+
+
+def test_scan_keeps_albums_of_unreadable_folders(tmp_path, monkeypatch):
+    """NAS-Aussetzer mitten im Einlesen: Alben unter einem nicht lesbaren Ordner
+    bleiben als offline im Index, statt zu verschwinden"""
+    from core import library as library_module
+    source = tmp_path / "Musik"
+    make_album(source / "A", "Eins", count=1, album="Eins")
+    make_album(source / "B", "Zwei", count=1, album="Zwei")
+    lib = Library(str(tmp_path / "data"), [str(source)])
+    first = lib.scan()
+    assert len(first.albums) == 2
+
+    real_walk = library_module.os.walk
+
+    def flaky_walk(top, onerror=None, **kwargs):
+        for dirpath, dirnames, filenames in real_walk(top, onerror=onerror, **kwargs):
+            if os.path.basename(dirpath) == "B":
+                onerror(OSError(5, "Netzwerkname nicht mehr verfügbar", dirpath))
+                dirnames[:] = []
+                continue
+            yield dirpath, dirnames, filenames
+
+    monkeypatch.setattr(library_module.os, "walk", flaky_walk)
+    second = lib.scan(first)
+    names = {a.name: a.offline for a in second.albums}
+    assert names == {"Eins": False, "Zwei": True}
+    assert second.unreadable and second.unreadable[0].endswith("B")
