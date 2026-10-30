@@ -102,3 +102,30 @@ def test_organize_dialog_preview(tmp_path):
     assert dialog.result.moved == 2
     assert (root / "Preußler" / "Die kleine Hexe" / "01 - Track 1.mp3").exists()
     QSettings().clear()
+
+
+def _set_disc(path, value):
+    from mutagen.id3 import ID3, TPOS
+    tags = ID3(path)
+    tags.add(TPOS(encoding=3, text=value))
+    tags.save(path)
+
+
+def test_multi_disc_albums_get_disc_prefix(tmp_path):
+    from core.library import read_track_tags
+    root = tmp_path / "Musik"
+    cd1 = make_album(root, "CD1", count=2, album="Die kleine Hexe", artist="Preußler")
+    cd2 = make_album(root, "CD2", count=1, album="Die kleine Hexe", artist="Preußler")
+    for path in (cd1 / "01.mp3", cd1 / "02.mp3"):
+        _set_disc(str(path), "1/2")
+    _set_disc(str(cd2 / "01.mp3"), "2/2")
+    assert (read_track_tags(str(cd2 / "01.mp3")).disc_number, read_track_tags(str(cd2 / "01.mp3")).disc_total) == (2, 2)
+
+    plans = plan_moves([str(cd1 / "01.mp3"), str(cd1 / "02.mp3"), str(cd2 / "01.mp3")], str(root))
+    names = [os.path.basename(p.target) for p in plans]
+    assert names == ["1-01 - Track 1.mp3", "1-02 - Track 2.mp3", "2-01 - Track 1.mp3"]
+    assert all(p.will_move for p in plans)  # gleiche Nummer und gleicher Titel kollidieren nicht mehr
+
+    single = make_album(root, "Einzeln", count=1, album="Anderes Album", artist="Jemand")
+    _set_disc(str(single / "01.mp3"), "1/1")
+    assert os.path.basename(plan_moves([str(single / "01.mp3")], str(root))[0].target) == "01 - Track 1.mp3"

@@ -16,7 +16,11 @@ from typing import Callable, Dict, List, Optional
 from core.library import TrackTags, read_track_tags
 
 DEFAULT_SCHEME = "{albumartist}/{album}/{track:02d} - {title}"
-SCHEME_FIELDS = ("albumartist", "artist", "album", "title", "track", "year")
+SCHEME_FIELDS = ("albumartist", "artist", "album", "title", "track", "disc", "year")
+# Bei Alben mit mehreren CDs bekommt die Tracknummer die CD-Nummer davor
+# (1-01, 1-02 ... 2-01), sonst liefen die CDs durcheinander und gleiche
+# Nummer + Titel kollidierten. Gilt fuer Schemata ohne eigenes {disc}.
+MULTI_DISC_TRACK = "{disc}-{track:02d}"
 
 _INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # Geraetenamen, die Windows als Datei- oder Ordnernamen nicht zulaesst (auch mit Endung)
@@ -62,8 +66,10 @@ class OrganizeResult:
     removed_dirs: int = 0
 
 
-def target_for(tags: TrackTags, root: str, ext: str, scheme: str = DEFAULT_SCHEME) -> Optional[str]:
-    """Zielpfad nach Schema; None, wenn Album oder Titel fehlen"""
+def target_for(tags: TrackTags, root: str, ext: str, scheme: str = DEFAULT_SCHEME,
+               multi_disc: bool = False) -> Optional[str]:
+    """Zielpfad nach Schema; None, wenn Album oder Titel fehlen. multi_disc:
+    das Album hat mehrere CDs - die Tracknummer bekommt die CD-Nummer davor."""
     if not (tags.album and tags.title):
         return None
     values = {
@@ -72,8 +78,11 @@ def target_for(tags: TrackTags, root: str, ext: str, scheme: str = DEFAULT_SCHEM
         "album": safe_name(tags.album, "Unbekanntes Album"),
         "title": safe_name(tags.title, "Unbekannter Titel"),
         "track": int(tags.track_number or 0),
+        "disc": int(getattr(tags, "disc_number", 0) or 1),
         "year": safe_name(getattr(tags, "year", "") or "", ""),
     }
+    if multi_disc and "{disc" not in scheme:
+        scheme = scheme.replace("{track:02d}", MULTI_DISC_TRACK).replace("{track}", "{disc}-{track}")
     try:
         relative = scheme.format(**values)
     except (KeyError, ValueError, IndexError):
@@ -88,10 +97,18 @@ def plan_moves(paths: List[str], root: str, scheme: str = DEFAULT_SCHEME) -> Lis
     """Vorschau: fuer jede Datei den Zielpfad bestimmen und Konflikte markieren"""
     plans: List[MovePlan] = []
     taken: Dict[str, str] = {}
-    for path in paths:
-        tags = read_track_tags(path)
+    all_tags = [(path, read_track_tags(path)) for path in paths]
+    # Mehrfach-CD-Alben erkennen: verschiedene CD-Nummern oder "CD x von 2+" im Tag
+    discs: Dict[tuple, set] = {}
+    for _path, tags in all_tags:
+        key = ((tags.album_artist or tags.artist).lower(), tags.album.lower())
+        discs.setdefault(key, set()).add(tags.disc_number or 1)
+        if tags.disc_total > 1:
+            discs[key].add(-1)  # Markierung: laut Tag mehrere CDs
+    for path, tags in all_tags:
         ext = os.path.splitext(path)[1]
-        target = target_for(tags, root, ext, scheme)
+        key = ((tags.album_artist or tags.artist).lower(), tags.album.lower())
+        target = target_for(tags, root, ext, scheme, multi_disc=len(discs.get(key, ())) > 1)
         plan = MovePlan(path, target or "", tags)
         if target is None:
             plan.status, plan.note = "missing_tags", "Album oder Titel fehlt im Tag"

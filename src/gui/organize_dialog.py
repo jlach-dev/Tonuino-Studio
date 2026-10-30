@@ -38,7 +38,9 @@ class OrganizeDialog(QDialog):
 
         form = QFormLayout()
         self.scheme_edit = QLineEdit(QSettings().value(SETTINGS_SCHEME, DEFAULT_SCHEME, type=str))
-        self.scheme_edit.setToolTip("Platzhalter: {albumartist} {artist} {album} {title} {track:02d} {year}")
+        self.scheme_edit.setToolTip("Platzhalter: {albumartist} {artist} {album} {title} {track:02d} {disc} {year} – "
+                                    "bei Alben mit mehreren CDs kommt die CD-Nummer automatisch vor die "
+                                    "Tracknummer (1-01, 2-01)")
         self.scheme_edit.editingFinished.connect(self._refresh)
         form.addRow("Schema:", self.scheme_edit)
         layout.addLayout(form)

@@ -154,6 +154,19 @@ class TrackTags:
     mb_release_id: str = ""
     mb_release_group_id: str = ""
     track_number: int = 0
+    disc_number: int = 0  # CD-Nummer bei Mehrfach-CDs (0 = unbekannt)
+    disc_total: int = 0  # Anzahl CDs, falls im Tag angegeben
+
+
+def _number_pair(value) -> Tuple[int, int]:
+    """'2', '2/3', [(2, 3)] -> (2, 3); fehlende Werte als 0"""
+    if isinstance(value, (list, tuple)) and value and isinstance(value[0], tuple):
+        pair = value[0]
+        return int(pair[0] or 0), int(pair[1] or 0) if len(pair) > 1 else 0
+    match = re.match(r"\s*(\d+)(?:\s*/\s*(\d+))?", _first(value))
+    if not match:
+        return 0, 0
+    return int(match.group(1)), int(match.group(2) or 0)
 
 
 def _track_number(value) -> int:
@@ -211,6 +224,7 @@ def read_track_tags(path: str) -> TrackTags:
         tags.title, tags.artist = frame("TIT2"), frame("TPE1")
         tags.album, tags.album_artist = frame("TALB"), frame("TPE2")
         tags.track_number = _track_number(frame("TRCK"))
+        tags.disc_number, tags.disc_total = _number_pair(frame("TPOS"))
         tags.album_id = txxx(ALBUM_ID_KEY)
         tags.mb_release_id, tags.mb_release_group_id = txxx(MB_ALBUM_ID_KEY), txxx(MB_RELEASE_GROUP_KEY)
         for key in raw.keys():
@@ -224,6 +238,7 @@ def read_track_tags(path: str) -> TrackTags:
         tags.title, tags.artist = atom("\xa9nam"), atom("\xa9ART")
         tags.album, tags.album_artist = atom("\xa9alb"), atom("aART")
         tags.track_number = _track_number(raw.get("trkn"))
+        tags.disc_number, tags.disc_total = _number_pair(raw.get("disk"))
         tags.album_id = atom(f"----:com.apple.iTunes:{ALBUM_ID_KEY}")
         tags.mb_release_id = atom(f"----:com.apple.iTunes:{MB_ALBUM_ID_KEY}")
         tags.mb_release_group_id = atom(f"----:com.apple.iTunes:{MB_RELEASE_GROUP_KEY}")
@@ -237,6 +252,9 @@ def read_track_tags(path: str) -> TrackTags:
         tags.title, tags.artist = comment("title"), comment("artist")
         tags.album, tags.album_artist = comment("album"), comment("albumartist")
         tags.track_number = _track_number(comment("tracknumber"))
+        tags.disc_number, tags.disc_total = _number_pair(comment("discnumber"))
+        if not tags.disc_total:
+            tags.disc_total = _number_pair(comment("disctotal") or comment("totaldiscs"))[0]
         tags.album_id = comment(ALBUM_ID_KEY)
         tags.mb_release_id = comment("musicbrainz_albumid")
         tags.mb_release_group_id = comment("musicbrainz_releasegroupid")

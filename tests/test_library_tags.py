@@ -126,3 +126,11 @@ def test_tag_writes_keep_id3v23_and_other_pictures(tmp_path):
     assert tags.version[:2] == (2, 3)
     pictures = {frame.type: frame.data for frame in tags.getall("APIC")}
     assert pictures == {3: b"\xff\xd8front", 4: b"\xff\xd8back"}
+
+
+def test_disc_number_formats():
+    from core.library import _number_pair
+    assert _number_pair("2/3") == (2, 3)  # ID3 TPOS, Vorbis discnumber
+    assert _number_pair(["1"]) == (1, 0)
+    assert _number_pair([(1, 2)]) == (1, 2)  # MP4 disk
+    assert _number_pair("") == (0, 0) and _number_pair(None) == (0, 0)
