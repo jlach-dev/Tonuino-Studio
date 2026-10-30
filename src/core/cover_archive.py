@@ -52,6 +52,9 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+BACK_KIND_AI = "ai"  # CoverEntry.back_kind: KI-Rueckseite
+
+
 class ArchiveReadError(OSError):
     """Eine Archivdatei (album.json, covers.json) existiert, ist aber nicht
     lesbar - z.B. waehrend Google Drive sie synchronisiert. Wer daraufhin neu
@@ -105,6 +108,7 @@ class CoverEntry:
     style: str = ""
     roles: List[str] = field(default_factory=list)
     back_file: str = ""  # zugehoerige Rueckseite (optional)
+    back_kind: str = ""  # BACK_KIND_AI: per KI erzeugt (darf ersetzt werden), sonst echte bzw. gewaehlte
     width: int = 0
     height: int = 0
     created: str = ""
@@ -276,8 +280,8 @@ class CoverArchive:
     def back_path(self, album_id: str, entry: CoverEntry) -> Optional[Path]:
         return self._album_dir(album_id) / "covers" / entry.back_file if entry.back_file else None
 
-    def set_back(self, album_id: str, cover_id: str, data: Optional[bytes]) -> Optional[CoverEntry]:
-        """Haengt eine Rueckseite an ein Cover (None entfernt sie)"""
+    def set_back(self, album_id: str, cover_id: str, data: Optional[bytes], kind: str = "") -> Optional[CoverEntry]:
+        """Haengt eine Rueckseite an ein Cover (None entfernt sie); kind: BACK_KIND_AI oder leer"""
         entries = self._load_entries(album_id)
         for entry in entries:
             if entry.id != cover_id:
@@ -287,9 +291,10 @@ class CoverArchive:
                 old.unlink(missing_ok=True)
             if data:
                 entry.back_file = f"{entry.id}_back{_sniff_extension(data)}"
+                entry.back_kind = kind
                 self.back_path(album_id, entry).write_bytes(bytes(data))
             else:
-                entry.back_file = ""
+                entry.back_file, entry.back_kind = "", ""
             self._save_covers(album_id, entries)
             return entry
         return None

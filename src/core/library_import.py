@@ -182,10 +182,25 @@ def _write_card(folder: Folder, album: LibraryAlbum, album_id: str, archive: Cov
     card_store.save_card(folder.path, art, meta, folder.index)
     folder.card_path = str(card_store.card_paths(folder.path)[0])
     result.card_written = True
+    import io
+    from PIL import Image
+    # Im Cover-Manager (Bibliothek) fuer genau dieses Kartencover gestaltete Rueckseite
+    # (KI, Blur, Verlauf, Bild, Trackliste) uebernehmen, sonst die Rueckseite im Archiv
+    designed = card_store.load_meta(str(archive.card_dir(album_id)))
+    designed_raw = card_store.back_paths(str(archive.card_dir(album_id)))[1]
+    if (designed is not None and designed.archive_cover_id == entry.id and designed.back_mode
+            and designed_raw.exists()):
+        with Image.open(designed_raw) as img:
+            img.load()
+            back_art = prepare_card_art(img.convert("RGB"), meta.orientation)
+        for name in ("back_mode", "back_tracklist", "back_prompt", "back_heading", "back_lines",
+                     "back_archive_cover_id", "back_extended"):
+            setattr(meta, name, getattr(designed, name))
+        card_store.save_back(folder.path, back_art, meta)
+        result.back_written = True
+        return
     back = archive.load_back_bytes(album_id, entry)
     if back:
-        import io
-        from PIL import Image
         with Image.open(io.BytesIO(back)) as img:
             img.load()
             back_art = prepare_card_art(img.convert("RGB"), meta.orientation)

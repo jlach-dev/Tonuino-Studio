@@ -1,12 +1,13 @@
 """Album-Cover in der Bibliothek: alle Formate, Stapellauf aus dem Archiv, Cover-Manager im Bibliotheksmodus"""
 
 import os
+from pathlib import Path
 
 import pytest
 
 from core import album_identity
 from core.cover_archive import KIND_FILE, ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive
-from core.library import LibraryAlbum, LibraryIndex, read_track_tags, write_album_cover, write_cover_any
+from core.library import LibraryAlbum, LibraryIndex, read_album, read_track_tags, write_album_cover, write_cover_any
 from core.library_import import embed_archive_covers
 from core.metadata import MetadataManager
 from tests.test_library import make_album, png_bytes
@@ -167,4 +168,107 @@ def test_card_cover_role_error_is_reported(tmp_path, monkeypatch):
             worker.wait(5000)
     app.processEvents()
     dialog.done(0)
+    QSettings().clear()
+
+
+class _Signal:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, slot):
+        self.slots.append(slot)
+
+    def emit(self, *args):
+        for slot in self.slots:
+            slot(*args)
+
+
+def _instant_worker(result, calls):
+    """Ersatz fuer die KI-Worker: liefert sofort ein Bild und zaehlt die Aufrufe"""
+    class Worker:
+        def __init__(self, *_args):
+            self.done, self.failed, self.finished = _Signal(), _Signal(), _Signal()
+
+        def start(self):
+            calls.append(1)
+            self.done.emit(result())
+
+        def isRunning(self):
+            return False
+
+        def wait(self, *_args):
+            return True
+    return Worker
+
+
+def test_ai_back_survives_reopen_and_reaches_sd(tmp_path, monkeypatch):
+    """Rand per KI + KI-Rueckseite -> Uebernehmen -> schliessen -> oeffnen -> Uebernehmen:
+    keine neue Erzeugung, Rueckseite unveraendert, im Archiv am Kartencover, auf der SD-Karte"""
+    pytest.importorskip("PyQt6")
+    from PIL import Image
+    from PyQt6.QtCore import QCoreApplication, QSettings
+    from PyQt6.QtWidgets import QApplication
+    from core import card_store
+    from core.card_layout import BACK_MODE_AI
+    from core.cover_archive import BACK_KIND_AI, KIND_ONLINE
+    from core.library_import import ImportResult, _write_card
+    from core.sd_card import Folder, Track
+    from gui import cover_manager_dialog as cm
+
+    QCoreApplication.setOrganizationName("Tonuino-Manager-Tests")
+    app = QApplication.instance() or QApplication([])
+    generated = []
+    monkeypatch.setattr(cm, "CoverExtendWorker",
+                        _instant_worker(lambda: Image.new("RGB", (900, 600), (10, 200, 10)), []))
+    monkeypatch.setattr(cm, "CoverBackGenerateWorker",
+                        _instant_worker(lambda: Image.new("RGB", (900, 600), (200, 10, 10)), generated))
+    monkeypatch.setattr(cm, "gemini_client", lambda: object())
+    monkeypatch.setattr(cm, "image_model", lambda: "m")
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    monkeypatch.setattr(cm.CoverManagerDialog, "unsaved_variants", lambda self: [])
+    archive = CoverArchive(str(tmp_path / "data"))
+    album_dir = make_album(tmp_path / "Musik", "Folge 58", count=1, album="Folge 58", artist="Bibi")
+    folder = Folder(index=None, path=str(album_dir), name="Folge 58",
+                    tracks=[Track(index=1, filename="01.mp3", filepath=str(album_dir / "01.mp3"))])
+
+    def open_dialog():
+        dialog = cm.CoverManagerDialog(folder, "Folge 58", MetadataManager(), archive, library=True,
+                                       album_id="lib58")
+        dialog.tabs.setCurrentIndex(1)
+        app.processEvents()
+        return dialog
+
+    dialog = open_dialog()
+    dialog._add_candidate(cm.Candidate(cm.SECTION_ONLINE, "Spotify", png_bytes(size=(640, 640)), KIND_ONLINE),
+                          select=True)
+    dialog.front_extend_check.setChecked(True)
+    cm._select_data(dialog.back_mode_combo, BACK_MODE_AI)
+    dialog.back_wish_edit.setText("Pferdehalfter auf Holzschemel")
+    dialog._apply()
+    card_dir = dialog._card_dir
+    assert len(generated) == 1 and card_store.has_back(card_dir)
+    assert card_store.load_meta(card_dir).back_mode == BACK_MODE_AI
+    back_before = card_store.back_paths(card_dir)[0].read_bytes()
+    card_entry = next(e for e in archive.covers("lib58") if ROLE_CARD_COVER in e.roles)
+    assert card_entry.back_file and card_entry.back_kind == BACK_KIND_AI
+    dialog.done(0)
+
+    dialog = open_dialog()
+    assert not dialog._needs_ai_back()
+    assert "KI-Rückseite KI-Rückseite" not in dialog.sides_label.text()
+    assert "wird wiederverwendet" in dialog.sides_label.text()
+    dialog._apply()
+    assert len(generated) == 1  # nicht neu erzeugt
+    assert card_store.back_paths(card_dir)[0].read_bytes() == back_before
+    meta = card_store.load_meta(card_dir)
+    assert meta.back_mode == BACK_MODE_AI and meta.archive_cover_id == card_entry.id
+    dialog.done(0)
+
+    # Uebertragen auf die SD-Karte: die gestaltete KI-Rueckseite kommt mit
+    sd_folder = Folder(index=1, path=str(tmp_path / "sd" / "01"), tracks=[], name="01")
+    Path(sd_folder.path).mkdir(parents=True)
+    result = ImportResult()
+    _write_card(sd_folder, read_album(str(album_dir)), "lib58", archive, MetadataManager(), "landscape", result)
+    assert result.card_written and result.back_written
+    assert card_store.load_meta(sd_folder.path).back_mode == BACK_MODE_AI
     QSettings().clear()

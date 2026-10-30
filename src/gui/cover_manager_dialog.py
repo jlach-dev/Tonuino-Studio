@@ -34,8 +34,8 @@ from core.card_layout import (
     fits_card_format, prepare_card_art,
 )
 from core.cover_archive import (
-    KIND_AI, KIND_FILE, KIND_LOCAL, KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER, ROLE_SERIES_ANCHOR,
-    CoverArchive, CoverEntry, sha1,
+    BACK_KIND_AI, KIND_AI, KIND_FILE, KIND_LOCAL, KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER,
+    ROLE_SERIES_ANCHOR, CoverArchive, CoverEntry, sha1,
 )
 from core.series import MAX_ANCHORS, SIDE_BACK, SIDE_FRONT, AnchorRef, SeriesProfile, load_anchor_bytes
 from core.cover_generator import (
@@ -1400,10 +1400,15 @@ class CoverManagerDialog(QDialog):
         if raw_path.exists():
             try:
                 back_raw = card_store.back_paths(self._card_dir)[1]
-                self._add_candidate(Candidate(SECTION_CURRENT, self._card_art_label(), raw_path.read_bytes(),
-                                              KIND_LOCAL, is_sd_card_art=True,
-                                              back_data=back_raw.read_bytes() if back_raw.exists() else None),
-                                    select=True)
+                back_data = back_raw.read_bytes() if back_raw.exists() else None
+                ai_back = (back_data is not None and self._card_meta is not None
+                           and self._card_meta.back_mode == BACK_MODE_AI)
+                candidate = Candidate(SECTION_CURRENT, self._card_art_label(), raw_path.read_bytes(), KIND_LOCAL,
+                                      is_sd_card_art=True, back_data=back_data,
+                                      meta={"kind": "ai_back"} if ai_back else {})
+                self._add_candidate(candidate, select=True)
+                if ai_back:  # schon erzeugt - beim naechsten Uebernehmen wiederverwenden statt neu erzeugen
+                    self.ai_back = SideSource(candidate, back=True)
             except OSError:
                 pass
 
@@ -1416,7 +1421,8 @@ class CoverManagerDialog(QDialog):
             except OSError:
                 continue
             self._add_candidate(Candidate(SECTION_ARCHIVE, entry.label, data, entry.kind, entry=entry,
-                                          back_data=self.archive.load_back_bytes(self.album_id, entry)))
+                                          back_data=self.archive.load_back_bytes(self.album_id, entry),
+                                          meta={"kind": "ai_back"} if entry.back_kind == BACK_KIND_AI else {}))
 
     def _on_item_selected(self, item: Optional[QListWidgetItem], _previous=None):
         if item is None:
@@ -1735,9 +1741,10 @@ class CoverManagerDialog(QDialog):
             entry = self.archive.add_cover(self.album_id, candidate.data, candidate.kind, source=candidate.label)
         candidate.entry = entry
         if candidate.back_data is not None and not entry.back_file:
-            updated = self.archive.set_back(self.album_id, entry.id, self._full_resolution_back(candidate))
+            kind = BACK_KIND_AI if candidate.meta.get("kind") == "ai_back" else ""
+            updated = self.archive.set_back(self.album_id, entry.id, self._full_resolution_back(candidate), kind)
             if updated is not None:
-                entry.back_file = updated.back_file
+                entry.back_file, entry.back_kind = updated.back_file, updated.back_kind
         if candidate.section in (SECTION_NEW, SECTION_ONLINE):
             candidate.section = SECTION_ARCHIVE
             self._apply_filter()
@@ -1882,9 +1889,16 @@ class CoverManagerDialog(QDialog):
         art = prepare_card_art(source, orientation)
         QSettings().setValue(ai_settings.SETTINGS_ORIENTATION, orientation)
         QSettings().setValue(ai_settings.SETTINGS_STYLE, self.style_combo.currentText())
+        meta = self._card_meta_now(entry)
+        previous = self._card_meta
+        if entry is None and candidate.is_sd_card_art and previous is not None:
+            # dasselbe Motiv nur neu gerendert: Herkunft und Archiv-Bezug bleiben
+            meta.source, meta.style, meta.prompt, meta.model = (previous.source, previous.style,
+                                                                previous.prompt, previous.model)
+            meta.archive_cover_id = previous.archive_cover_id
         try:
             Path(self._card_dir).mkdir(parents=True, exist_ok=True)
-            card_store.save_card(self._card_dir, art, self._card_meta_now(entry), self.folder.index)
+            card_store.save_card(self._card_dir, art, meta, self.folder.index)
         except OSError as e:
             QMessageBox.warning(self, "Speichern fehlgeschlagen", str(e))
             return
@@ -1897,6 +1911,11 @@ class CoverManagerDialog(QDialog):
                 role_error = e
             self._sync_roles()
         back_note = self._save_back(front.candidate, orientation)
+        if role_error is None:
+            try:
+                self._archive_card_back(entry or self._archive_entry(meta.archive_cover_id))
+            except OSError as e:
+                role_error = e
         self.card_changed = True
         self._card_meta = card_store.load_meta(self._card_dir)
         if current is not candidate:
@@ -2084,7 +2103,10 @@ class CoverManagerDialog(QDialog):
         if mode == BACK_MODE_AI:
             source = self._ai_back_source()
             if source is not None and not self._needs_ai_back():
-                return f"KI-Rückseite {source.candidate.label} (wird wiederverwendet)"
+                label = source.candidate.label
+                if not label.startswith("KI-Rückseite"):
+                    label = f"KI-Rückseite von {label}"
+                return f"{label} (wird wiederverwendet)"
             if source is not None:
                 return "KI-Rückseite wird beim Übernehmen neu erzeugt"
             return "KI-Rückseite wird beim Übernehmen erzeugt (Vorschau zeigt bis dahin einen Platzhalter)"
@@ -2376,6 +2398,41 @@ class CoverManagerDialog(QDialog):
             front.back_data, front._back_image = _pil_bytes(art), None
             self._refresh_item_texts()
         return " Rückseite gespeichert (card_back.png)."
+
+    def _archive_entry(self, cover_id: str) -> Optional[CoverEntry]:
+        if not cover_id or self.archive is None:
+            return None
+        return next((e for e in self.archive.covers(self.album_id) if e.id == cover_id), None)
+
+    def _archive_card_back(self, entry: Optional[CoverEntry]):
+        """Die verwendete Rueckseite (KI oder gewaehltes Bild) ans Kartencover im Archiv
+        haengen - von dort holt sie das Uebertragen auf die SD-Karte, und beim naechsten
+        Oeffnen ist sie wieder da. Eine echte Rueckseite (z.B. Cover Art Archive) wird
+        nicht ueberschrieben, nur eine fruehere KI-Rueckseite."""
+        if entry is None or self.archive is None:
+            return
+        mode = self.back_mode_combo.currentData()
+        if mode == BACK_MODE_AI:
+            source, kind = self._ai_back_source(), BACK_KIND_AI
+        elif mode == BACK_MODE_IMAGE:
+            source, kind = self.back_source, ""
+        else:
+            return
+        data = source.data() if source is not None else None
+        if not data:
+            return
+        current = self.archive.load_back_bytes(self.album_id, entry)
+        if current == data or (current is not None and entry.back_kind != BACK_KIND_AI):
+            return
+        updated = self.archive.set_back(self.album_id, entry.id, data, kind)
+        if updated is not None:
+            for candidate in self.candidates:
+                if candidate.entry is not None and candidate.entry.id == entry.id:
+                    candidate.entry.back_file, candidate.entry.back_kind = updated.back_file, updated.back_kind
+                    candidate.back_data, candidate._back_image = bytes(data), None
+                    if kind:
+                        candidate.meta["kind"] = "ai_back"
+            self._refresh_item_texts()
 
     def _card_art_archived(self) -> bool:
         """Liegt das aktuelle SD-Kartenmotiv schon im Archiv?"""
