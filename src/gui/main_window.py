@@ -31,6 +31,7 @@ from core.cover_generator import DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, SOURCE
 from core.library import SETTINGS_WRITE_ID_TAGS, Library, LibraryIndex, format_time
 from core import library_import
 from gui.about_dialog import show_about
+from gui.compact_buttons import CompactButtons
 from gui.common import resource_path, heading_font, confirm_action, icon_from_glyph, icon_with_hover
 from gui.track_list import ROW_NOT_CHECKABLE_ROLE, HoverListWidget, InlineLineEdit, FloatingIconRow, reorder_with_selection
 from gui.workers import (
@@ -712,6 +713,8 @@ class MainWindow(QMainWindow):
 
         actions.addStretch(1)
         info_col.addLayout(actions)
+        # Schmale Fenster: Lautstaerke und Cover-Manager nur als Symbol, statt sich zu ueberlappen
+        self._compact_header_buttons = CompactButtons(folder_header, actions, [btn_normalize, btn_card_cover])
 
         header_layout.addLayout(info_col, 1)
         folder_layout.addWidget(folder_header)

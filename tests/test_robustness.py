@@ -242,3 +242,28 @@ def test_about_text_names_fork_author_and_original():
     text = about_text()
     assert "Tonuino-Studio" in text and __version__ in text
     assert "donschoof/tonuino-manager" in text and "GPLv3" in text
+
+
+def test_header_buttons_shrink_to_icons_when_space_is_short(app):
+    from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QWidget
+    from gui.compact_buttons import CompactButtons
+
+    container = QWidget()
+    row = QHBoxLayout(container)
+    buttons = [QPushButton(" Tracks hinzufügen"), QPushButton(" Lautstärke angleichen"), QPushButton(" Cover-Manager")]
+    for button in buttons:
+        row.addWidget(button)
+    compact = CompactButtons(container, row, buttons[1:])
+    container.show()
+
+    container.resize(300, 50)
+    app.processEvents()
+    compact.update_mode()
+    assert compact.compact and buttons[1].text() == "" and "Lautstärke" in buttons[1].toolTip()
+    assert buttons[0].text() == " Tracks hinzufügen"
+
+    container.resize(1200, 50)
+    app.processEvents()
+    compact.update_mode()
+    assert not compact.compact and buttons[2].text() == " Cover-Manager"
+    container.close()
