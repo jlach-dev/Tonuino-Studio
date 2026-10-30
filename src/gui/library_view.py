@@ -276,9 +276,33 @@ class AlbumTile(QFrame):
         layout.addLayout(badge_row)
         if album.offline:
             self.setProperty("offline", True)
+        self.setProperty("selected", False)
+        # Haekchen oben links auf dem Cover, nur bei markierten Kacheln sichtbar
+        self.check_mark = QLabel(self)
+        self.check_mark.setObjectName("libraryTileCheck")
+        self.check_mark.setFixedSize(26, 26)
+        self.check_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.check_mark.setPixmap(icon_from_glyph("\ue86c", color=theme.BLUE, size=26).pixmap(26, 26))  # check_circle
+        self.check_mark.move(layout.contentsMargins().left() + (TILE_WIDTH - 24 - COVER_SIZE) // 2 + 6,
+                             layout.contentsMargins().top() + 6)
+        self.check_mark.hide()
         # Hoehe aus dem echten Platzbedarf (Schriftgroessen je System verschieden) -
         # mit fester Hoehe rutschte der Titel unter Windows ins Cover
         self.setFixedSize(TILE_WIDTH, max(TILE_HEIGHT, layout.sizeHint().height()))
+
+    def is_selected(self) -> bool:
+        return bool(self.property("selected"))
+
+    def set_selected(self, selected: bool):
+        """Auswahlzustand zeigen: die Kachel verdeckt die Markierung des Listeneintrags,
+        darum Akzentrahmen, Hintergrund und Haekchen an der Kachel selbst"""
+        if self.is_selected() == selected:
+            return
+        self.setProperty("selected", selected)
+        self.check_mark.setVisible(selected)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
 
 
 def reveal_in_file_manager(path: str):
@@ -384,6 +408,7 @@ class LibraryView(QWidget):
         self.grid = LibraryGrid()
         self.grid.setIconSize(QSize(COVER_SIZE, COVER_SIZE))
         self.grid.itemDoubleClicked.connect(lambda item: self.open_album(item.data(Qt.ItemDataRole.UserRole)))
+        self.grid.itemSelectionChanged.connect(self._sync_selection)
         self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self._show_tile_menu)
         overview_layout.addWidget(self.grid, 1)
@@ -405,6 +430,18 @@ class LibraryView(QWidget):
         self.pages.addWidget(self.album_panel)
         layout.addWidget(self.pages, 1)
         self._rebuild_series_combo()
+
+    def _sync_selection(self):
+        """Markierung auf die Kacheln uebertragen und in der Kopfzeile zaehlen"""
+        selected = 0
+        for row in range(self.grid.count()):
+            item = self.grid.item(row)
+            tile = self.grid.itemWidget(item)
+            if isinstance(tile, AlbumTile):
+                tile.set_selected(item.isSelected())
+            selected += item.isSelected()
+        text = getattr(self, "_count_text", "")
+        self.count_label.setText(f"{text} · {selected} markiert" if selected else text)
 
     # --- Kontextmenue der Kacheln ---
 
@@ -592,8 +629,9 @@ class LibraryView(QWidget):
             self.grid.setItemWidget(item, tile)
 
         total = len(self.index.albums)
-        self.count_label.setText(f"{len(albums)} von {total} Alben" if len(albums) != total else
-                                 (f"{total} Alben" if total != 1 else "1 Album"))
+        self._count_text = (f"{len(albums)} von {total} Alben" if len(albums) != total else
+                            (f"{total} Alben" if total != 1 else "1 Album"))
+        self._sync_selection()
         if self.library is None:
             self.empty_label.setText("Es ist noch kein Datenordner festgelegt – er wird beim ersten Öffnen des "
                                      "Cover-Managers oder über „Ordner …“ gewählt.")

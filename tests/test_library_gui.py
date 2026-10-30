@@ -7,7 +7,7 @@ pytest.importorskip("PyQt6")
 
 from PyQt6.QtCore import QCoreApplication, QPoint, QPointF, QSettings, QSize, Qt, QUrl, QMimeData
 from PyQt6.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from core import album_identity
 from core.cover_archive import CoverArchive
@@ -346,4 +346,39 @@ def test_library_tile_context_menu(app, tmp_path):
     assert [name for name, a in actions.items() if a.isEnabled()] == ["Pfad kopieren"]
     actions["Pfad kopieren"].trigger()
     assert QApplication.clipboard().text() == nas.path
+    view.close()
+
+
+def test_library_tile_selection_is_visible(app, tmp_path):
+    """Die Kachel verdeckt die Markierung des Listeneintrags - sie zeigt den Zustand selbst"""
+    from core.library import LibraryAlbum, LibraryIndex
+    from gui.library_view import LibraryView
+    from gui.styles import MAIN_STYLESHEET
+
+    view = LibraryView()
+    view.setStyleSheet(MAIN_STYLESHEET)  # Rahmen und Padding kommen aus dem Stylesheet
+    view.resize(900, 600)
+    view.index = LibraryIndex(albums=[LibraryAlbum(path=str(tmp_path / name), title=name, tracks=["a"])
+                                      for name in ("Hexe", "Räuber", "Sterne")])
+    view._refresh()
+    view.show()
+    app.processEvents()
+    tiles = [view.grid.itemWidget(view.grid.item(row)) for row in range(view.grid.count())]
+    assert view.count_label.text() == "3 Alben"
+    assert not any(tile.is_selected() for tile in tiles)
+    cover_pos = tiles[0].findChild(QWidget, "libraryTileCover").pos()
+
+    view.grid.item(0).setSelected(True)
+    view.grid.item(2).setSelected(True)
+    app.processEvents()
+    assert [tile.is_selected() for tile in tiles] == [True, False, True]
+    assert [tile.check_mark.isVisibleTo(tile) for tile in tiles] == [True, False, True]
+    assert view.count_label.text() == "3 Alben · 2 markiert"
+    # Breiterer Rahmen, aber nichts verrutscht
+    assert tiles[0].findChild(QWidget, "libraryTileCover").pos() == cover_pos
+
+    view.grid.clearSelection()
+    app.processEvents()
+    assert not any(tile.is_selected() for tile in tiles)
+    assert view.count_label.text() == "3 Alben"
     view.close()

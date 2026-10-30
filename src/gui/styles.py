@@ -922,7 +922,7 @@ QListWidget#libraryGrid::item {
 }
 
 QListWidget#libraryGrid::item:selected {
-    background-color: @SURFACE0@;
+    background-color: transparent;  /* die Kachel zeigt die Markierung selbst */
 }
 
 QListWidget#libraryGrid::item:hover {
@@ -933,6 +933,18 @@ QFrame#libraryTile {
     background-color: @SURFACE_DEEP@;
     border: 1px solid @SURFACE0@;
     border-radius: 12px;
+    padding: 1px;  /* markiert: 2px Rahmen ohne Padding - nichts verschiebt sich */
+}
+
+QFrame#libraryTile[selected="true"] {
+    background-color: @SELECTED_TILE@;
+    border: 2px solid @BLUE@;
+    padding: 0px;
+}
+
+QLabel#libraryTileCheck {
+    background-color: @BASE@;
+    border-radius: 13px;
 }
 
 QFrame#libraryTile[offline="true"] {
