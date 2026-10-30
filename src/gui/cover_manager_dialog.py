@@ -1519,9 +1519,17 @@ class CoverManagerDialog(QDialog):
 
     def _flash(self, text: str):
         """Rueckmeldung zu einer Aktion (gruen, gut sichtbar)"""
-        self.status_label.setStyleSheet("color: #a6e3a1; font-weight: bold;")
+        self.status_label.setStyleSheet(f"color: {theme.GREEN}; font-weight: bold;")
         self.status_label.setText(text)
-        QTimer.singleShot(6000, lambda: self.status_label.setStyleSheet(""))
+        # Timer als Kind des Dialogs: wird der Dialog vorher geschlossen und geloescht,
+        # verschwindet der Timer mit ihm, statt auf das geloeschte Label zu feuern.
+        # Ein zweites _flash verlaengert die Frist.
+        timer = getattr(self, "_flash_timer", None)
+        if timer is None:
+            timer = self._flash_timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda: self.status_label.setStyleSheet(""))
+        timer.start(6000)
 
     # --- Cover-Suche --------------------------------------------------------------------------
 

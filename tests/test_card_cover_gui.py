@@ -145,6 +145,30 @@ def test_cover_manager_new_variants_need_keeping(app, sd, tmp_path, monkeypatch,
     dialog.done(0)
 
 
+def test_flash_message_timer_dies_with_the_dialog(app, sd, tmp_path, monkeypatch, fake_sources):
+    """Album-Cover setzen und den Dialog gleich schliessen: der 6-s-Timer der
+    Rueckmeldung darf danach nicht auf das geloeschte Statusfeld feuern"""
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from gui import cover_manager_dialog as cm
+
+    monkeypatch.setattr(cm, "gemini_client", lambda: None)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "X", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+    run_workers(app, dialog)
+    dialog._flash("Album-Cover gesetzt")
+    timer = dialog._flash_timer
+    assert timer.parent() is dialog and timer.isActive()
+    dialog._flash("noch einmal")
+    assert dialog._flash_timer is timer  # derselbe Timer, Frist neu gestartet
+
+    monkeypatch.setattr(dialog, "unsaved_variants", lambda: [])
+    dialog.done(0)
+    dialog.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+    from PyQt6 import sip
+    assert sip.isdeleted(timer)  # mit dem Dialog geloescht - kann nicht mehr feuern
+
+
 def test_print_sheet_dialog_renders_items(app, sd):
     from gui.print_sheet_dialog import PrintSheetDialog
 
