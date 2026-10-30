@@ -720,6 +720,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self.library_view.recognize_requested.connect(self._library_recognize)
         self.library_view.organize_requested.connect(self._library_organize)
         self.library_view.cover_requested.connect(self._library_cover)
+        self.library_view.transfer_requested.connect(lambda paths: self._on_albums_dropped(paths, None))
         self.library_view.embed_covers_requested.connect(self._library_embed_covers)
 
         self.stack = QStackedWidget()

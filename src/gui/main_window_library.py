@@ -65,6 +65,7 @@ class LibraryMixin:
     def _set_drop_enabled(self, enabled: bool):
         self.folder_list.drop_enabled = enabled
         self.folder_widget.drop_enabled = enabled
+        self.library_view.set_sd_available(enabled)  # Kontextmenue "Auf SD-Karte uebertragen"
 
     def _init_library(self):
         """Index aus dem Datenordner laden (ohne Netz-/NAS-Zugriff), damit die

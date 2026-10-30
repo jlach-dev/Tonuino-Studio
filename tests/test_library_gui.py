@@ -296,3 +296,54 @@ def test_main_window_library_view_switch_badges_and_drop(app, tmp_path, monkeypa
     assert window.current_folder.index == 1
     window.close()
     app.processEvents()
+
+
+def test_library_tile_context_menu(app, tmp_path):
+    from core.library import LibraryAlbum, LibraryIndex
+    from gui.library_view import LibraryView
+
+    view = LibraryView()
+    view.resize(900, 600)
+    hexe = LibraryAlbum(path=str(tmp_path / "Hexe"), title="Die kleine Hexe", tracks=["a"])
+    raeuber = LibraryAlbum(path=str(tmp_path / "Räuber"), title="Räuber", tracks=["b"])
+    nas = LibraryAlbum(path=r"\nas\musik\Weg", title="Nicht erreichbar", tracks=["c"], offline=True)
+    view.index = LibraryIndex(albums=[hexe, raeuber, nas])
+    view._refresh()
+    view.show()
+    app.processEvents()
+    received = {"cover": [], "transfer": [], "recognize": []}
+    view.cover_requested.connect(received["cover"].append)
+    view.transfer_requested.connect(received["transfer"].append)
+    view.recognize_requested.connect(lambda album, paths: received["recognize"].append((album, paths)))
+
+    def menu_at(row):
+        menu = view.tile_menu(view.grid.visualItemRect(view.grid.item(row)).center())
+        return menu, {a.text(): a for a in menu.actions() if a.text()}
+
+    menu, actions = menu_at(0)
+    assert list(actions) == ["Öffnen", "Cover …", "Tags nachtragen …", "Stücke erkennen …", "Einsortieren …",
+                             "Auf SD-Karte übertragen", "Im Explorer zeigen", "Pfad kopieren"]
+    assert not actions["Auf SD-Karte übertragen"].isEnabled()  # keine SD-Karte offen
+    actions["Cover …"].trigger()
+    actions["Stücke erkennen …"].trigger()
+    album = view.index.albums[0]
+    assert received["cover"] == [album] and received["recognize"] == [(album, [])]
+
+    # Mehrfachauswahl: Uebertragen gilt fuer alle markierten (erreichbaren) Alben
+    view.set_sd_available(True)
+    view.grid.selectAll()
+    menu, actions = menu_at(0)
+    transfer = actions["Auf SD-Karte übertragen (2 Alben)"]
+    assert transfer.isEnabled()
+    transfer.trigger()
+    assert sorted(received["transfer"][0]) == sorted([hexe.path, raeuber.path])
+
+    # Offline-Album: nur "Pfad kopieren"
+    offline_row = next(i for i in range(view.grid.count())
+                       if view.grid.item(i).data(Qt.ItemDataRole.UserRole) == nas.path)
+    view.grid.clearSelection()
+    menu, actions = menu_at(offline_row)
+    assert [name for name, a in actions.items() if a.isEnabled()] == ["Pfad kopieren"]
+    actions["Pfad kopieren"].trigger()
+    assert QApplication.clipboard().text() == nas.path
+    view.close()

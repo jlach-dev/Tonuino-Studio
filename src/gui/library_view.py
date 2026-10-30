@@ -7,13 +7,16 @@ oben. Die Kacheln lassen sich auf die SD-Ordnerliste bzw. die Ordneransicht
 ziehen (gui/library_dnd.py).
 """
 
+import os
+import subprocess
+import sys
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import QPoint, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QDrag, QPixmap
+from PyQt6.QtCore import QPoint, QSize, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices, QDrag, QPixmap
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QStackedWidget, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMenu, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from core.cover_archive import ROLE_CARD_COVER
@@ -278,6 +281,16 @@ class AlbumTile(QFrame):
         self.setFixedSize(TILE_WIDTH, max(TILE_HEIGHT, layout.sizeHint().height()))
 
 
+def reveal_in_file_manager(path: str):
+    """Ordner im Explorer (Windows), Finder (macOS) bzw. Dateimanager zeigen"""
+    if sys.platform == "win32":
+        subprocess.Popen(["explorer", os.path.normpath(path)])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+
 def _elide(text: str, limit: int) -> str:
     text = text or ""
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
@@ -291,9 +304,11 @@ class LibraryView(QWidget):
     organize_requested = pyqtSignal(object, list)  # LibraryAlbum, markierte Dateien
     cover_requested = pyqtSignal(object)  # LibraryAlbum
     embed_covers_requested = pyqtSignal()  # Album-Cover aus dem Archiv nachtragen (alle Alben ohne Cover)
+    transfer_requested = pyqtSignal(list)  # Albumpfade: auf die SD-Karte, je Album ein neuer Ordner
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.sd_available = False  # SD-Karte geoeffnet (fuer "Auf SD-Karte uebertragen")
         self._tracks_worker: Optional[AlbumTracksWorker] = None
         self.library: Optional[Library] = None
         self.index = LibraryIndex()
@@ -369,6 +384,8 @@ class LibraryView(QWidget):
         self.grid = LibraryGrid()
         self.grid.setIconSize(QSize(COVER_SIZE, COVER_SIZE))
         self.grid.itemDoubleClicked.connect(lambda item: self.open_album(item.data(Qt.ItemDataRole.UserRole)))
+        self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.grid.customContextMenuRequested.connect(self._show_tile_menu)
         overview_layout.addWidget(self.grid, 1)
 
         self.empty_label = QLabel()
@@ -388,6 +405,56 @@ class LibraryView(QWidget):
         self.pages.addWidget(self.album_panel)
         layout.addWidget(self.pages, 1)
         self._rebuild_series_combo()
+
+    # --- Kontextmenue der Kacheln ---
+
+    def set_sd_available(self, available: bool):
+        self.sd_available = available
+
+    def _show_tile_menu(self, pos: QPoint):
+        menu = self.tile_menu(pos)
+        if menu is not None:
+            menu.exec(self.grid.viewport().mapToGlobal(pos))
+
+    def tile_menu(self, pos: QPoint) -> Optional[QMenu]:
+        """Rechtsklick auf eine Kachel: die Aktionen des Album-Panels plus Uebertragen,
+        Explorer und Pfad. Offline-Alben: nur "Pfad kopieren". Uebertragen gilt fuer
+        alle markierten Kacheln, die anderen Aktionen fuer die angeklickte."""
+        item = self.grid.itemAt(pos)
+        album = self.index.find(item.data(Qt.ItemDataRole.UserRole)) if item is not None else None
+        if album is None:
+            return None
+        if not item.isSelected():  # Rechtsklick ausserhalb der Auswahl: nur diese Kachel
+            self.grid.clearSelection()
+            item.setSelected(True)
+        selected = [self.index.find(i.data(Qt.ItemDataRole.UserRole)) for i in self.grid.selectedItems()]
+        transferable = [a.path for a in selected if a is not None and not a.offline]
+        online = not album.offline
+
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+
+        def add(text, slot, enabled=True, tip=""):
+            action = menu.addAction(text)
+            action.setEnabled(enabled)
+            action.setToolTip(tip)
+            action.triggered.connect(slot)
+            return action
+
+        add("Öffnen", lambda: self.open_album(album.path), online)
+        menu.addSeparator()
+        add("Cover …", lambda: self.cover_requested.emit(album), online)
+        add("Tags nachtragen …", lambda: self.tags_requested.emit(album), online)
+        add("Stücke erkennen …", lambda: self.recognize_requested.emit(album, []), online)
+        add("Einsortieren …", lambda: self.organize_requested.emit(album, []), online)
+        menu.addSeparator()
+        count = len(transferable)
+        add("Auf SD-Karte übertragen" + (f" ({count} Alben)" if count > 1 else ""),
+            lambda: self.transfer_requested.emit(transferable), self.sd_available and count > 0,
+            "" if self.sd_available else "Zuerst eine SD-Karte öffnen")
+        add("Im Explorer zeigen", lambda: reveal_in_file_manager(album.path), online)
+        add("Pfad kopieren", lambda: QApplication.clipboard().setText(album.path))
+        return menu
 
     # --- Album-Panel ---
 
