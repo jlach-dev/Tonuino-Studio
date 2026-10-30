@@ -1,6 +1,6 @@
 name: Build
 
-# Baut Tonuino-Manager auf Windows, Linux und macOS und macht damit den
+# Baut Tonuino-Studio auf Windows, Linux und macOS und macht damit den
 # plattformuebergreifenden Support tatsaechlich ueberpruefbar (PyInstaller
 # kompiliert nicht plattformuebergreifend - ein Windows-Build allein sagt
 # nichts darueber aus, ob die App auf Linux/macOS funktioniert).
@@ -10,10 +10,11 @@ name: Build
 # (Qt xcb-Plugin, PC/SC) fruehzeitig zu erkennen. Der macOS-Job macht denselben
 # Smoketest ohne xvfb (der WindowServer ist auf den Runnern bereits vorhanden).
 
+# Nur fuer Release-Tags (v*) oder von Hand: im privaten Repository zaehlen
+# macOS-Minuten zehnfach. Lint und Tests bei jedem Push: tests.yml.
 on:
   push:
-    branches: [main]
-  pull_request:
+    tags: ['v*']
   workflow_dispatch:
 
 jobs:

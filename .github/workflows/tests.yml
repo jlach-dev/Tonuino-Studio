@@ -1,0 +1,47 @@
+name: Tests
+
+# Lint und Tests bei jedem Push und Pull Request - nur unter Linux, dafuer mit
+# der aeltesten und der neuesten unterstuetzten Python-Version. Die teuren
+# Plattform-Builds (build.yml, macOS-Minuten zaehlen im privaten Repository
+# zehnfach) laufen nur fuer Release-Tags oder von Hand.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: System-Abhaengigkeiten installieren
+        run: |
+          sudo apt-get update
+          # pyscard wird ggf. gebaut (PC/SC, swig); Qt braucht EGL/xkbcommon auch
+          # fuer die Offscreen-Plattform, QtMultimedia libpulse0
+          sudo apt-get install -y pcscd libpcsclite-dev libpcsclite1 swig \
+            libegl1 libxkbcommon-x11-0 libpulse0
+
+      - name: Python-Abhaengigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint (pyflakes)
+        run: python -m pyflakes src main.py tests
+
+      - name: Tests (pytest)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
