@@ -10,7 +10,7 @@ API-Keys bestehender Installationen scheinbar verloren.
 """
 
 APP_NAME = "Tonuino-Studio"
-AUTHOR = "jlach-dev"  # wie es im Programm und in der Lizenz erscheinen soll
+AUTHOR = "jlach-dev"  # Autorenname in Programm und LICENSE (festgelegt 10/2026, GitHub-Konto)
 PACKAGE_NAME = "tonuino-studio"  # Linux-Paket und Dateinamen
 GITHUB_REPO = "jlach-dev/Tonuino-manager"
 HOMEPAGE = f"https://github.com/{GITHUB_REPO}"
