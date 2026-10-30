@@ -30,6 +30,7 @@ from core.cover_research import gather_folder_info
 from core.cover_generator import DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, SOURCE_AI
 from core.library import SETTINGS_WRITE_ID_TAGS, Library, LibraryIndex, format_time
 from core import library_import
+from gui.about_dialog import show_about
 from gui.common import resource_path, heading_font, confirm_action, icon_from_glyph, icon_with_hover
 from gui.track_list import ROW_NOT_CHECKABLE_ROLE, HoverListWidget, InlineLineEdit, FloatingIconRow, reorder_with_selection
 from gui.workers import (
@@ -312,6 +313,8 @@ class MainWindow(QMainWindow):
 
         action_check_now = menu.addAction("Nach Updates suchen")
         action_check_now.triggered.connect(self.update_controller.check_manual)
+        action_about = menu.addAction(f"Über {APP_NAME} …")
+        action_about.triggered.connect(lambda: show_about(self))
 
         menu.addSeparator()
 

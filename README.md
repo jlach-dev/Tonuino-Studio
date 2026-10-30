@@ -99,6 +99,8 @@ Folgen einer Hörspielreihe („Die Fuchsbande“, „Bibi Blocksberg“ …) so
 
 **Druckbogen**: Karten auswählen, Bogen wählen, ggf. bei einem angebrochenen Bogen weiter unten beginnen, PDF speichern und in **Originalgröße (100 %)** drucken. Die Bogenränder der HERMA 5028 sind nicht offiziell veröffentlicht – vorher die **Testseite** auf Normalpapier drucken, gegen den Bogen halten und ggf. den Druck-Versatz einstellen.
 
+**Datenschutz**: Für KI-Kartencover übermittelt die App Titel, Tags, Recherche-Ergebnisse sowie Album-Cover und gewählte Vorlagen als Referenzbilder an Google (Gemini API); es gelten die Bedingungen von Google. Ohne API-Key bleibt alles lokal bzw. bei den Such-Diensten (MusicBrainz, Deezer, iTunes, Spotify, AcoustID).
+
 **Gemini-API-Key**: im [Google AI Studio](https://aistudio.google.com/apikey) erstellen und unter *Kartencover → KI & Online-Dienste* eintragen (wird im Schlüsselbund des Betriebssystems gespeichert) oder als Umgebungsvariable `GEMINI_API_KEY` setzen. Die Bildgenerierung ist kostenpflichtig (grob einige Cent pro Bild). Modell-IDs (Standard: `gemini-nano-banana-2.1` für Bilder, `gemini-3.5-flash-lite` für die Recherche) sind dort ebenfalls änderbar. Für Spotify dort Client-ID und Secret einer eigenen App aus dem [Developer Dashboard](https://developer.spotify.com/dashboard) eintragen (oder `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` setzen); Spotify dient dann als Cover-Quelle und als vierte Quelle für „Tags von MusicBrainz“ bzw. „Tags nachtragen“ (ohne MusicBrainz-IDs).
 
 ## Bibliothek

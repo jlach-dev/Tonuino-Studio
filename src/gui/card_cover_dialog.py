@@ -77,7 +77,10 @@ class AiSettingsDialog(QDialog):
         info = QLabel(
             'Den API-Key erhältst du im <a href="https://aistudio.google.com/apikey">Google AI Studio</a>. '
             "Bildgenerierung ist kostenpflichtig (Abrechnung im Google-Cloud-Projekt). "
-            "Der Key wird im Schlüsselbund des Betriebssystems gespeichert.")
+            "Der Key wird im Schlüsselbund des Betriebssystems gespeichert.<br><br>"
+            "<b>Datenschutz:</b> Für KI-Kartencover gehen Titel, Tags, die Recherche-Ergebnisse sowie das "
+            "Album-Cover und gewählte Vorlagen als Referenzbilder an Google (Gemini API). Es gelten die "
+            "Bedingungen von Google für die Gemini API.")
         info.setOpenExternalLinks(True)
         info.setWordWrap(True)
         layout.addWidget(info)

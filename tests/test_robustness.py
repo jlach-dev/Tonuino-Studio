@@ -234,3 +234,11 @@ def test_tonuino_write_buttons_stay_disabled_while_the_box_waits(app, monkeypatc
         assert panel.btn_program_card.isEnabled()
     finally:
         panel.shutdown()
+
+
+def test_about_text_names_fork_author_and_original():
+    from core import __version__
+    from gui.about_dialog import about_text
+    text = about_text()
+    assert "Tonuino-Studio" in text and __version__ in text
+    assert "donschoof/tonuino-manager" in text and "GPLv3" in text
