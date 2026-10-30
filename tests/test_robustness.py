@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 import weakref
+from types import SimpleNamespace
 
 import pytest
 
@@ -199,3 +200,37 @@ def test_guarded_slot_reports_file_errors_and_ignores_extra_signal_args(app, mon
     assert dialog.save(True) is None  # clicked(bool) liefert ein Argument mehr
     assert shown == ["Speichern"]
     assert dialog.count(1, "extra") == 2
+
+
+def test_tonuino_write_buttons_stay_disabled_while_the_box_waits(app, monkeypatch):
+    from gui import rfid_panel
+
+    started = []
+
+    class FakeWorker:
+        def __init__(self, *args):
+            self.completed = SimpleNamespace(connect=lambda slot: None)
+
+        def start(self):
+            started.append(True)
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(rfid_panel, "TonuinoCardWorker", FakeWorker)
+    monkeypatch.setattr(rfid_panel.QMessageBox, "information", lambda *a, **k: None)
+    panel = rfid_panel.RfidPanel(get_folder=lambda: None, folder_name=lambda folder: "", show_status=lambda text: None)
+    try:
+        monkeypatch.setattr(type(panel.tonuino_serial), "is_connected", property(lambda self: True))
+        panel._reader_mode = panel.READER_MODE_TONUINO
+
+        panel._start_tonuino_write(1, 3, None, None)
+        panel._update_program_buttons()  # z.B. weil der Nutzer einen anderen Ordner anklickt
+        assert not panel.btn_program_card.isEnabled() and not panel.btn_program_admin.isEnabled()
+        panel._start_tonuino_write(1, 4, None, None)
+        assert len(started) == 1  # kein zweiter Auftrag
+
+        panel._on_tonuino_write_finished(True, "fertig")
+        assert panel.btn_program_card.isEnabled()
+    finally:
+        panel.shutdown()

@@ -51,6 +51,7 @@ class RfidPanel(QFrame):
         self.tonuino_serial = TonuinoSerial()
         self._reader_mode = self.READER_MODE_ACR122U
         self._tonuino_worker: Optional[TonuinoCardWorker] = None
+        self._tonuino_writing = False  # TonUINO wartet auf eine Karte zum Beschreiben
         self._tonuino_connect_worker: Optional[TonuinoConnectWorker] = None
         self._last_rfid_status: Optional[RfidStatus] = None
         self._rfid_card_present = False  # fuer die Freischaltung von "Karte programmieren"
@@ -312,7 +313,9 @@ class RfidPanel(QFrame):
         (die Firmware meldet das nicht zurueck) - hier zaehlt nur, ob eine
         Verbindung besteht."""
         if self._reader_mode == self.READER_MODE_TONUINO:
-            connected = self.tonuino_serial.is_connected
+            # Waehrend der TonUINO auf eine Karte wartet, kein zweiter Schreibauftrag
+            # (zwei Worker auf demselben seriellen Port; der erste wuerde verworfen)
+            connected = self.tonuino_serial.is_connected and not self._tonuino_write_running()
             self.btn_program_admin.setEnabled(connected)
             # Ordnerunabhaengig: manche WRITECARD-Modi (z.B. "Wiederhole",
             # "Bluetooth an/aus") brauchen keinen Ordner - die Pruefung, ob
@@ -331,6 +334,10 @@ class RfidPanel(QFrame):
             and not self._is_special_folder(self.current_folder)
         )
         self._set_erase_icon_state(self._rfid_card_present and self._rfid_card_programmed)
+
+    def _tonuino_write_running(self) -> bool:
+        # Eigenes Flag statt isRunning(): im completed-Slot laeuft run() noch kurz
+        return self._tonuino_writing
 
     def _update_card_status(self, present: bool):
         """Setzt Karten- und Programmiert-Icon auf den 'keine Karte'-Zustand zurueck"""
@@ -634,6 +641,9 @@ class RfidPanel(QFrame):
         Firmware wartet ohne eigenes Timeout darauf, dass eine Karte aufgelegt
         wird, daher kann das beliebig lange dauern; per btn_tonuino_cancel_write
         kann der Vorgang abgebrochen werden (WRITECARD CANCEL)."""
+        if self._tonuino_writing:
+            return
+        self._tonuino_writing = True
         self._tonuino_cancel_requested = False
         self.btn_program_card.setEnabled(False)
         self.btn_program_admin.setEnabled(False)
@@ -662,6 +672,7 @@ class RfidPanel(QFrame):
             QMessageBox.warning(self, "Fehler", f"Abbruch fehlgeschlagen: {e}")
 
     def _on_tonuino_write_finished(self, success: bool, message: str):
+        self._tonuino_writing = False
         self.btn_tonuino_connect.setEnabled(True)
         self.btn_tonuino_cancel_write.setVisible(False)
         self._update_program_buttons()
