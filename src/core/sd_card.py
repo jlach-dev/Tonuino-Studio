@@ -140,7 +140,7 @@ class SDCard:
 
         for item in self.path.iterdir():
             if item.is_dir():
-                if self.FOLDER_PATTERN.match(item.name) or item.name in self.SPECIAL_FOLDER_NAMES:
+                if self.FOLDER_PATTERN.match(item.name) or item.name.lower() in self.SPECIAL_FOLDER_NAMES:
                     folder_count += 1
             elif item.suffix.lower() == '.mp3':
                 mp3_count += 1
@@ -156,7 +156,8 @@ class SDCard:
             if not item.is_dir():
                 continue
 
-            if item.name in self.SPECIAL_FOLDER_NAMES:
+            # Gross-/Kleinschreibung egal: FAT32/Windows speichern MP3, Advert usw. wie getippt
+            if item.name.lower() in self.SPECIAL_FOLDER_NAMES:
                 folder = Folder(
                     index=None,
                     path=str(item),
@@ -167,7 +168,7 @@ class SDCard:
                 self._scan_tracks(folder)
                 self._find_folder_cover(folder)
 
-                self.special_folders[item.name] = folder
+                self.special_folders[item.name.lower()] = folder
                 continue
 
             match = self.FOLDER_PATTERN.match(item.name)
@@ -301,7 +302,7 @@ class SDCard:
 
     def get_special_folder(self, name: str) -> Optional[Folder]:
         """Gibt einen Tonuio-Systemordner (mp3/advert) zurueck"""
-        return self.special_folders.get(name)
+        return self.special_folders.get(name.lower())
 
     def get_any_folder(self, identity) -> Optional[Folder]:
         """Gibt einen Ordner unabhaengig davon zurueck, ob er ueber seine
@@ -309,7 +310,7 @@ class SDCard:
         mp3/advert) identifiziert wird"""
         if isinstance(identity, int):
             return self.folders.get(identity)
-        return self.special_folders.get(identity)
+        return self.special_folders.get(str(identity).lower())
 
     def delete_folder(self, folder_index: int):
         """Loescht einen Ordner samt Inhalt von der SD-Karte"""
@@ -435,7 +436,7 @@ class SDCard:
     def preview_purge(self) -> PurgePreview:
         """Ermittelt, was purge() entfernen wuerde, ohne dabei etwas zu
         loeschen - nutzt dieselbe Whitelist-Logik wie purge()."""
-        allowed_dir = lambda name: bool(self.FOLDER_PATTERN.match(name)) or name in self.SPECIAL_FOLDER_NAMES
+        allowed_dir = lambda name: bool(self.FOLDER_PATTERN.match(name)) or name.lower() in self.SPECIAL_FOLDER_NAMES
 
         preview = PurgePreview()
 
@@ -558,7 +559,7 @@ class SDCard:
         aufgerufen, da macOS auf Schreibvorgaenge (Renames) reagiert und dabei
         selbst neue Metadatendateien anlegt (z.B. .Spotlight-V100 oder
         AppleDouble-Schattendateien wie ._001.mp3 fuer jede umbenannte Datei)."""
-        allowed_dir = lambda name: bool(self.FOLDER_PATTERN.match(name)) or name in self.SPECIAL_FOLDER_NAMES
+        allowed_dir = lambda name: bool(self.FOLDER_PATTERN.match(name)) or name.lower() in self.SPECIAL_FOLDER_NAMES
 
         # Root-Ebene: lose Dateien loeschen, nicht erlaubte Verzeichnisse rekursiv loeschen
         for item in list(self.path.iterdir()):

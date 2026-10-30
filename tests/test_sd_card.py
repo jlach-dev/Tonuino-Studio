@@ -283,3 +283,14 @@ def test_create_folder_validates_range(tmp_path):
         card.create_folder(100)
     with pytest.raises(FileExistsError):
         card.create_folder(1)
+
+
+def test_purge_keeps_system_folders_in_any_case(tmp_path):
+    # Windows/FAT32 speichern Ordnernamen wie getippt - MP3/Advert sind die Ansagen der Box
+    card = make_card(tmp_path, {"01": ["001.mp3"], "MP3": ["0001.mp3"], "Advert": ["0001.mp3"]})
+    assert set(card.special_folders) == {"mp3", "advert"}
+    preview = card.preview_purge()
+    assert preview.root_dirs == []
+    card.purge()
+    assert names(tmp_path) == ["01", "Advert", "MP3"]
+    assert names(tmp_path / "MP3") == ["0001.mp3"]
