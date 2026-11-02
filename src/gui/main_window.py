@@ -56,6 +56,7 @@ from gui import theme
 SHOW_ALL_MP3_KEY = "library/show_all_mp3"
 # Zuletzt geoeffneter SD-Karten-Pfad (Vorbelegung der Verzeichnisauswahl)
 LAST_SD_PATH_KEY = "library/last_sd_path"
+READER_MODE_KEY = "rfid/reader_mode"
 
 
 class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
@@ -127,6 +128,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self.update_controller = UpdateController(self)
 
         self._setup_ui()
+        self._restore_reader_mode()
         self._setup_statusbar()
         self._check_dependencies()
         self._restore_window_state()
@@ -301,17 +303,13 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         action_reader_acr122u = reader_menu.addAction("ACR122U")
         action_reader_acr122u.setCheckable(True)
         action_reader_acr122u.setChecked(True)  # Default
-        action_reader_acr122u.triggered.connect(
-            lambda: self.rfid_panel.set_reader_mode(RfidPanel.READER_MODE_ACR122U)
-        )
+        action_reader_acr122u.triggered.connect(lambda: self._select_reader_mode(RfidPanel.READER_MODE_ACR122U))
         reader_group.addAction(action_reader_acr122u)
 
-        action_reader_tonuino = reader_menu.addAction("TonUINO (seriell)")
-        action_reader_tonuino.setCheckable(True)
-        action_reader_tonuino.triggered.connect(
-            lambda: self.rfid_panel.set_reader_mode(RfidPanel.READER_MODE_TONUINO)
-        )
-        reader_group.addAction(action_reader_tonuino)
+        self.action_reader_tonuino = reader_menu.addAction("TonUINO (seriell)")
+        self.action_reader_tonuino.setCheckable(True)
+        self.action_reader_tonuino.triggered.connect(lambda: self._select_reader_mode(RfidPanel.READER_MODE_TONUINO))
+        reader_group.addAction(self.action_reader_tonuino)
 
         menu.addSeparator()
         action_library_sources = menu.addAction("Bibliothek-Ordner …")
@@ -319,6 +317,9 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         action_library_sources.triggered.connect(self._edit_library_sources)
         self.action_library_rescan = menu.addAction("Bibliothek neu einlesen")
         self.action_library_rescan.triggered.connect(lambda: self._start_library_scan(force=True))
+        action_data_folder = menu.addAction("Datenordner ändern …")
+        action_data_folder.setToolTip("Cover-Archiv, Serienprofile und Bibliotheks-Übersicht an einen anderen Ort legen")
+        action_data_folder.triggered.connect(self._change_data_folder)
         menu.addSeparator()
         action_system_files = menu.addAction("TonUINO-Systemdateien …")
         action_system_files.setToolTip("Ansagen in den Ordnern mp3 und advert einrichten oder aktualisieren")
@@ -355,6 +356,15 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
     @staticmethod
     def _show_all_mp3_enabled() -> bool:
         return QSettings().value(SHOW_ALL_MP3_KEY, False, type=bool)
+
+    def _select_reader_mode(self, mode: str):
+        QSettings().setValue(READER_MODE_KEY, mode)
+        self.rfid_panel.set_reader_mode(mode)
+
+    def _restore_reader_mode(self):
+        if QSettings().value(READER_MODE_KEY, "", type=str) == RfidPanel.READER_MODE_TONUINO:
+            self.action_reader_tonuino.setChecked(True)
+            self.rfid_panel.set_reader_mode(RfidPanel.READER_MODE_TONUINO)
 
     def _on_show_all_mp3_toggled(self, checked: bool):
         """Speichert die Einstellung und wendet sie auf die geoeffnete Karte an"""

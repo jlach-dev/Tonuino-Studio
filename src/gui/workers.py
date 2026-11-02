@@ -69,6 +69,32 @@ def _worker_signals(worker: QThread) -> set:
     return names
 
 
+class BackgroundTask(QThread):
+    """Fuehrt fn(task) im Hintergrund aus"""
+    done = pyqtSignal(object)
+    failed = pyqtSignal(str)
+    progress = pyqtSignal(int, int, str)
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled
+
+    def run(self):
+        try:
+            self.done.emit(self.fn(self))
+        except Exception as e:
+            log.exception("Hintergrundaufgabe fehlgeschlagen")
+            self.failed.emit(str(e) or type(e).__name__)
+
+
 def retire_worker(worker: Optional[QThread]):
     """Worker ausmustern, der durch einen neuen ersetzt wird (oder dessen
     Fenster schliesst), ohne den GUI-Thread mit wait() zu blockieren:

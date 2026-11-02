@@ -23,6 +23,7 @@ from core.sd_card import Folder, Track, MAX_TRACKS_PER_FOLDER
 from gui.card_cover_dialog import AiSettingsDialog
 from gui.common import confirm_action
 from gui.cover_manager_dialog import CoverManagerDialog, SETTINGS_DATA_DIR, get_archive
+from gui.data_folder_dialog import DataFolderDialog
 from gui.library_settings_dialog import LibrarySourcesDialog, library_sources
 from gui.tag_diff_dialog import TagDiffDialog
 from gui.workers import CoverProposalWorker, RecognizeWorker, TrackAddWorker, LibraryScanWorker, retire_worker
@@ -86,6 +87,23 @@ class LibraryMixin:
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._init_library()
             self._start_library_scan(force=True)
+
+    def _change_data_folder(self):
+        """Der Index und alle Cover haengen am Ordner, also nicht waehrend eines laufenden Vorgangs"""
+        if self._file_job_running():
+            return
+        running = [self._library_worker, self._cover_batch_worker]
+        if any(worker is not None and worker.isRunning() for worker in running):
+            QMessageBox.information(self, "Bitte warten", "Die Bibliothek wird gerade eingelesen oder es werden "
+                                                          "Kartencover erzeugt. Bitte warten, bis das fertig ist.")
+            return
+        dialog = DataFolderDialog(self)
+        dialog.exec()
+        if dialog.changed:
+            self._init_library()
+            if self._library_scanned:
+                self._start_library_scan()
+            self.status_bar.showMessage(f"Datenordner: {dialog.current}")
 
     def _stop_library_worker(self):
         worker = self._library_worker

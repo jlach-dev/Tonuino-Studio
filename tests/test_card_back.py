@@ -563,3 +563,43 @@ def test_old_card_with_ai_back_mode_loads_as_image(qt_app, tmp_path, monkeypatch
     assert dialog.back_source is not None and dialog.back_source.back
     assert dialog._back_source_image(dialog.selected).getpixel((0, 0)) == (7, 7, 7)
     dialog.done(0)
+
+
+def test_closing_with_remembered_back_and_no_front_asks_first(qt_app, tmp_path, monkeypatch):
+    """Ohne Vorderseite ist die gewaehlte Rueckseite nur gemerkt, Schliessen wuerde sie verlieren"""
+    from core.metadata import MetadataManager
+    from gui import cover_manager_dialog as cm
+
+    folder = tmp_path / "sd" / "01"
+    folder.mkdir(parents=True)
+    (folder / "001.mp3").write_bytes(b"x")
+    sd = SDCard(str(tmp_path / "sd"))
+    sd.scan()
+    monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
+    dialog = cm.CoverManagerDialog(sd.folders[1], "Eule", MetadataManager(), CoverArchive(str(tmp_path / "data")))
+    dialog._add_candidate(cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes(), KIND_ONLINE), select=True)
+    dialog._pick_source(back=True)
+    assert dialog.front_source is None and dialog.back_source is not None
+
+    shown = []
+
+    class Box(cm.QMessageBox):
+        answer = "Zurück"
+
+        def exec(self):
+            shown.append(self.text())
+            self.answer_button = next(b for b in self.buttons() if b.text() == Box.answer)
+            return 0
+
+        def clickedButton(self):
+            return self.answer_button
+
+    monkeypatch.setattr(cm, "QMessageBox", Box)
+    dialog.show()
+    dialog.done(0)
+    assert len(shown) == 1 and "noch nicht gespeichert" in shown[0]
+    assert dialog.isVisible()  # "Zurueck" laesst den Dialog offen
+
+    Box.answer = "Verwerfen"
+    dialog.done(0)
+    assert not dialog.isVisible()

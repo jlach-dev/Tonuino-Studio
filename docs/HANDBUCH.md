@@ -98,7 +98,7 @@ Beim Start sucht die App nach einer neuen Version. Abschalten kannst du das im M
 
 | Menü | Einträge |
 | --- | --- |
-| **Einstellungen** | **Nach Updates suchen**, **Über Tonuino-Studio …**, **Automatisch nach Updates suchen**, **Alle MP3 Dateien anzeigen**, **Design** (**Dunkel**, **Hell**), **RFID-Leser** (**ACR122U**, **TonUINO (seriell)**), **Bibliothek-Ordner …**, **Bibliothek neu einlesen** |
+| **Einstellungen** | **Nach Updates suchen**, **Über Tonuino-Studio …**, **Automatisch nach Updates suchen**, **Alle MP3 Dateien anzeigen**, **Design** (**Dunkel**, **Hell**), **RFID-Leser** (**ACR122U**, **TonUINO (seriell)**), **Bibliothek-Ordner …**, **Bibliothek neu einlesen**, **Datenordner ändern …**, **TonUINO-Systemdateien …** |
 | **Ansicht** | **Vollbild** (F11, Esc beendet es), **Maximieren / Wiederherstellen** |
 | **Kartencover** | **Cover-Manager für diesen Ordner …**, **Kartencover für alle Ordner ohne Cover …**, **Kartencover für alle Folgen der Serie ohne Cover …**, **Druckbogen (PDF) erstellen …**, **Tags von MusicBrainz …**, **KI & Online-Dienste (Gemini, Spotify) …** |
 
@@ -493,7 +493,7 @@ Wähle im Druckdialog **„Tatsächliche Größe / 100 %“**, nicht „An Seite
 
 Unterstützt werden MIFARE Mini, Classic 1K/4K und Ultralight/NTAG21x. Den Kartentyp erkennt die App selbst.
 
-Es gibt zwei Wege. Du wählst ihn im Menü **Einstellungen** → **RFID-Leser**. Beim Programmstart ist immer **ACR122U** eingestellt.
+Es gibt zwei Wege. Du wählst ihn im Menü **Einstellungen** → **RFID-Leser**. Die Wahl bleibt über den Programmstart hinaus gespeichert.
 
 ### Mit dem USB-Leser ACR122U
 
@@ -609,6 +609,16 @@ Der Ort wird beim ersten Bedarf abgefragt. Vorschlag ist `Tonuino/Bibliothek-Dat
 
 Auf die SD-Karte kommt nur das aktive Kartencover, alles andere bleibt im Archiv.
 
+### Datenordner wechseln
+
+**Einstellungen** → **Datenordner ändern …** zeigt den aktuellen Ort. **Anderen Ordner wählen …** legt einen neuen fest:
+
+- **Der neue Ordner enthält keine Daten der App:** Sie werden dorthin kopiert und geprüft. Erst danach wechselt die App.
+- **Dort liegt schon ein Datenordner:** Die App verwendet ihn nach einer Rückfrage, wie er ist. Zusammengeführt wird nichts.
+- **Der bisherige Ordner ist nicht erreichbar**, etwa auf einem neuen Rechner: Die App wechselt, ohne zu kopieren.
+
+Der bisherige Ordner bleibt in jedem Fall unverändert. Löschen kannst du ihn selbst, wenn du ihn nicht mehr brauchst. Ein Abbruch oder Fehler beim Kopieren ändert nichts am aktuellen Datenordner. Während die Bibliothek eingelesen wird oder eine Datei kopiert wird, lässt sich der Ordner nicht wechseln.
+
 ### Im Benutzerprofil
 
 - **Einstellungen** (Fenstergröße, Bibliothek-Ordner, Datenordner, gemerkte Quellen): an der vom System vorgesehenen Stelle, unter Windows in der Registrierung unter `HKEY_CURRENT_USER\Software\TonuinoManager\Tonuino-Manager`. Die internen Namen lauten bewusst noch „Tonuino-Manager“.
@@ -710,7 +720,7 @@ Ein eigener Ordnername hat Vorrang vor dem Album-Tag. Leere den Namen beim Umben
 Es liegt im Archiv und wird beim Übertragen des Albums auf die SD-Karte geschrieben.
 
 **Kann ich den Datenordner später wechseln?**
-Im Programm gibt es dafür keine Einstellung. Der Ort wird beim ersten Mal festgelegt.
+Ja, siehe [Datenordner wechseln](#datenordner-wechseln).
 
 **Kann ich Tonuino-Manager und Tonuino-Studio zusammen verwenden?**
 Beide lassen sich nebeneinander installieren. Tonuino-Studio nutzt intern weiterhin die Namen des Originals für Einstellungen und Schlüsselbund.

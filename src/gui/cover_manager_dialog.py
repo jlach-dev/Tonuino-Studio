@@ -2518,6 +2518,17 @@ class CoverManagerDialog(QDialog):
     def done(self, result):
         self._after_research = None  # kein kostenpflichtiger Aufruf mehr nach dem Schliessen
         self._flush_autosave()  # eine gerade getippte Aenderung nicht verlieren
+        if self.front_source is None and self.back_source is not None:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle("Rückseite nicht gespeichert")
+            box.setText("Die gewählte Rückseite ist noch nicht gespeichert, weil die Karte noch keine Vorderseite "
+                        "hat. Beim Schließen geht die Wahl verloren.")
+            btn_discard = box.addButton("Verwerfen", QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton("Zurück", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() != btn_discard:
+                return
         unsaved = self.unsaved_variants()
         if unsaved and self.archive is not None:
             box = QMessageBox(self)

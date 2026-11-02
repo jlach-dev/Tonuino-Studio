@@ -3,11 +3,9 @@ TonUINO-Systemdateien einrichten oder aktualisieren: Firmware-Version waehlen
 oder von der Box lesen, Karte mit dem Release vergleichen, fehlende Dateien laden
 """
 
-import logging
 from pathlib import Path
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout,
 )
@@ -16,35 +14,7 @@ from core import system_files
 from core.system_files import LANGUAGES, FirmwareVersion, SyncPlan
 from core.tonuino_serial import TonuinoSerial
 from gui.common import confirm_action
-from gui.workers import retire_worker
-
-log = logging.getLogger(__name__)
-
-
-class _Task(QThread):
-    """Fuehrt fn(task) im Hintergrund aus"""
-    done = pyqtSignal(object)
-    failed = pyqtSignal(str)
-    progress = pyqtSignal(int, int, str)
-
-    def __init__(self, fn: Callable):
-        super().__init__()
-        self.fn = fn
-        self._cancelled = False
-
-    def cancel(self):
-        self._cancelled = True
-
-    @property
-    def cancelled(self) -> bool:
-        return self._cancelled
-
-    def run(self):
-        try:
-            self.done.emit(self.fn(self))
-        except Exception as e:
-            log.exception("Systemdateien: Vorgang fehlgeschlagen")
-            self.failed.emit(str(e) or type(e).__name__)
+from gui.workers import BackgroundTask, retire_worker
 
 
 class SystemFilesDialog(QDialog):
@@ -54,7 +24,7 @@ class SystemFilesDialog(QDialog):
         self.card_changed = False
         self._written_note = ""
         self.plan: Optional[SyncPlan] = None
-        self._task: Optional[_Task] = None
+        self._task: Optional[BackgroundTask] = None
         self._writing = False
         self._loading = True
         self.setWindowTitle("TonUINO-Systemdateien")
@@ -145,7 +115,7 @@ class SystemFilesDialog(QDialog):
     def _run(self, fn: Callable, on_done: Callable, status: str):
         retire_worker(self._task)
         self.status_label.setText(status)
-        self._task = _Task(fn)
+        self._task = BackgroundTask(fn)
         self._task.done.connect(on_done)
         self._task.failed.connect(self._on_failed)
         self._task.finished.connect(self._update_buttons)
