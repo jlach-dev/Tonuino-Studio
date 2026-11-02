@@ -173,7 +173,9 @@ python -m pyflakes src main.py tests
 
 CI führt Lint und Tests aus, baut jeden Push/PR auf allen Plattformen und startet die App headless als Smoketest ([build.yml](.github/workflows/build.yml)).
 
-## Lizenz
+## Lizenz und Herkunft
+
+Tonuino-Studio baut auf [tonuino-manager](https://github.com/donschoof/tonuino-manager) von David Schäfer auf und ergänzt es um Bibliothek, Cover-Manager und Kartendruck.
 
 MIT License, siehe [LICENSE](LICENSE).
 
