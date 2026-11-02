@@ -34,6 +34,9 @@ desktop.ini
 .mypy_cache/
 .ruff_cache/
 
+# Lokale Werkzeug-Einstellungen und Arbeitskopien
+.claude/
+
 # Lokale Umgebungsvariablen / Secrets
 .env
 .env.*

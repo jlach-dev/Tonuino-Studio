@@ -2,6 +2,8 @@
 
 Gilt für Version 2.0.0. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
 
+> Die Bilder zeigen die echte Oberfläche, aber erfundene Hörspiele mit selbst gezeichneten Covern. Sie entstehen mit `tools/make_manual_screenshots.py`.
+
 ## Inhalt
 
 1. [Was die App kann](#1-was-die-app-kann)
@@ -90,6 +92,8 @@ Beim Start sucht die App nach einer neuen Version. Abschalten kannst du das im M
 
 ## 3. Das Hauptfenster
 
+![Hauptfenster mit geöffnetem Ordner](screenshots/hauptfenster.png)
+
 **Links** steht die Seitenleiste: **SD-Karte öffnen**, **Neuer Ordner**, **SD-Karte bereinigen**, die Liste **Ordner:** und darunter der Bereich **RFID-Karte**.
 
 **Rechts** schaltest du oben zwischen den Reitern **SD-Karte** und **Bibliothek** um. Ganz unten sitzt der Player.
@@ -149,7 +153,7 @@ Die Grenzen: 99 Ordner, 255 Tracks je Ordner. Die Systemordner **mp3** und **adv
 
 ### Tracks
 
-- **Tracks hinzufügen** nimmt MP3, WAV, FLAC, OGG, AAC, WMA, M4A und OPUS. Alles außer MP3 wird umgewandelt. Du kannst Dateien auch aus dem Explorer auf die Ordneransicht ziehen.
+- **Tracks hinzufügen** nimmt MP3, WAV, FLAC, OGG, AAC, WMA, M4A und OPUS. Alles außer MP3 wird umgewandelt. Aus dem Explorer kannst du MP3, FLAC, M4A, OGG, Opus und WAV auf die Ordneransicht ziehen; AAC und WMA gehen nur über **Tracks hinzufügen**.
 - **Sortieren:** Track anklicken, dann die Knöpfe mit den Tooltips **Track nach oben verschieben** und **Track nach unten verschieben**. Die Dateien werden lückenlos neu nummeriert.
 - **Mehrfachauswahl** blendet Auswahlkreise ein; Verschieben und **Tracks löschen** gelten dann für alle markierten. **Mehrfachauswahl beenden** kehrt zurück.
 - **Tracks löschen** fragt vorher nach.
@@ -171,14 +175,16 @@ Nur MusicBrainz liefert auch die MusicBrainz-IDs. Mit ihnen funktionieren die Se
 
 ### TonUINO-Systemdateien
 
+![Dialog TonUINO-Systemdateien](screenshots/systemdateien.png)
+
 **Einstellungen** → **TonUINO-Systemdateien …** richtet die Ansagen in den Ordnern **mp3** und **advert** ein oder aktualisiert sie, auch auf einer leeren Karte. Die Dateien kommen aus den Releases von TonUINO-TNG auf GitHub und werden gegen deren Prüfsummen geprüft.
 
 1. Öffne die SD-Karte.
-2. Wähle unter **Firmware** die Version deiner Box. Mit USB-Verbindung liest **Von der Box lesen** sie aus; die Box startet dabei meist neu. Ist die Box schon mit der App verbunden, trenne sie vorher.
+2. Wähle unter **Firmware** die Version deiner Box. Mit USB-Verbindung liest **Von der Box lesen** sie aus; die Box startet dabei meist neu. Ist die Box schon mit der App verbunden, trenne sie vorher. Unter **Sprache** wählst du Deutsch, English oder Français.
 3. Prüfe den Vergleich: **Fehlt**, **Abweichend**, **Identisch**, **Nur auf der Karte**.
 4. Klicke **Dateien schreiben**.
 
-Die Ansagen müssen zur Firmware passen, sonst spielt die Box falsche Sätze. Vorgewählt ist das neueste Release, nicht unbedingt deine Version. Dateien, die nur auf der Karte liegen, bleiben erhalten. **Abweichende Dateien ersetzen** überschreibt nach einer Rückfrage auch geänderte Dateien, etwa eigene Aufnahmen. Ein Abbruch lässt die fertigen Dateien stehen.
+Die Ansagen müssen zur Firmware passen, sonst spielt die Box falsche Sätze. Vorgewählt ist das neueste Release, nicht unbedingt deine Version. Dateien, die nur auf der Karte liegen, bleiben erhalten. **Abweichende Dateien ersetzen** ist vorab gesetzt und überschreibt nach einer Rückfrage auch geänderte Dateien, etwa eigene Aufnahmen. Ein Abbruch lässt die fertigen Dateien stehen.
 
 ### SD-Karte bereinigen
 
@@ -206,6 +212,8 @@ Die App hat keine eigene Backup-Funktion. Sichere die Karte selbst, siehe [Siche
 ---
 
 ## 6. Bibliothek
+
+![Bibliothek als Kachelgitter](screenshots/bibliothek.png)
 
 Deine Sammlung bleibt, wo sie ist. Die App merkt sich nur eine Übersicht davon im Datenordner.
 
@@ -242,11 +250,11 @@ Die SD-Karte muss geöffnet sein. Ziehe dann:
 - **auf einen Ordner mit Tracks:** Die App fragt **Ersetzen**, **Anhängen** oder **Abbrechen**. Bei mehreren Alben ersetzt nur das erste, die weiteren werden angehängt.
 - **auf die Ordneransicht:** Das gilt für den gerade gezeigten Ordner.
 
-Einzelne Tracks: Album öffnen, Tracks markieren (**Alle** markiert alle), auf die Ordnerliste oder einen Ordner ziehen. Sie werden angehängt. Auch Ordner und Audiodateien aus dem Explorer lassen sich so ziehen.
+Einzelne Tracks: Album öffnen, Tracks markieren (**Alle** markiert alle), auf die Ordnerliste oder einen Ordner ziehen. Auf einem Ordner werden sie angehängt, auf der freien Fläche der Ordnerliste kommen sie in einen neuen Ordner. Auch Ordner und Audiodateien aus dem Explorer lassen sich so ziehen.
 
 Beim **Ersetzen** kopiert die App zuerst in einen Zwischenordner. Brichst du ab oder klappt nichts, bleiben die alten Tracks erhalten.
 
-Nach dem Kopieren geschieht von selbst: Die Kopie auf der SD-Karte bekommt die Album-ID, ein fehlendes Album-Cover kommt aus dem Archiv in die Tracks, und ein Kartencover aus dem Archiv wird mit auf die Karte geschrieben.
+Nach dem Kopieren geschieht von selbst: Die Kopie auf der SD-Karte bekommt die Album-ID, ein fehlendes Album-Cover kommt aus dem Archiv in die Tracks, und ein Kartencover aus dem Archiv wird mit auf die Karte geschrieben. Hängst du an einen Ordner an, der schon das Kartencover eines anderen Albums hat, bleibt dieses.
 
 ### Album-ID
 
@@ -262,7 +270,7 @@ Für Dateien mit unklaren Namen und ohne Tags: **Stücke erkennen …** berechne
 
 Sind Tracks markiert, werden nur diese erkannt, sonst das ganze Album. Dann gibt es zwei Ergebnisse:
 
-- **Mindestens die Hälfte der Dateien gehört zu einem Album:** Der Tag-Dialog öffnet sich mit den Ausgaben dieses Albums. Die Tracks werden über die erkannte Aufnahme zugeordnet.
+- **Mindestens die abgerundete Hälfte der Dateien gehört zu einem Album (bei 3 Dateien reicht eine):** Der Tag-Dialog öffnet sich mit den Ausgaben dieses Albums. Die Tracks werden über die erkannte Aufnahme zugeordnet.
 - **Kein gemeinsames Album:** Der Dialog **Stücke erkannt** zeigt je Datei den besten Treffer mit **Sicherheit** in Prozent. Häkchen setzen, **Tags übernehmen**, mit **Ja** bestätigen. Geschrieben werden Titel und Interpret und, sofern bekannt, Album und Albuminterpret.
 
 ### Einsortieren
@@ -291,13 +299,17 @@ Der Cover-Manager verwaltet zwei getrennte Dinge:
 
 So öffnest du ihn:
 
-| Weg | Startet mit |
+Alle Wege öffnen den Reiter **Cover suchen**:
+
+| Weg | Wirkung |
 | --- | --- |
-| Knopf **Cover-Manager** im Ordnerkopf oder Menü **Kartencover** → **Cover-Manager für diesen Ordner …** | Kartencover |
-| Klick auf das Cover im Ordnerkopf (beim Überfahren steht dort **Album-Cover ändern** oder **Album-Cover hinzufügen**) | Album-Cover |
-| **Cover …** in der Bibliothek | Album-Cover des Bibliotheksalbums |
+| Knopf **Cover-Manager** im Ordnerkopf oder Menü **Kartencover** → **Cover-Manager für diesen Ordner …** | Ordner auf der SD-Karte |
+| Klick auf das Cover im Ordnerkopf (beim Überfahren steht dort **Album-Cover ändern** oder **Album-Cover hinzufügen**) | wie oben, mit Hinweis zum Album-Cover |
+| **Cover …** in der Bibliothek | Bibliotheksalbum, mit Hinweis zum Album-Cover |
 
 ### Aufbau
+
+![Cover-Manager, Reiter Cover suchen](screenshots/cover-manager.png)
 
 - **Links oben:** große Vorschau, darunter der Umschalter **Vorderseite** | **Rückseite**, die Zustandszeile und die Knöpfe.
 - **Links unten:** die Galerie mit den Filtern **Alle**, **Aktuell**, **Gefunden**, **Archiv**, **Neu**.
@@ -316,10 +328,10 @@ Die Zeile unter der Vorschau zeigt immer den Stand, etwa `Karte · Vorderseite: 
 Was du dazu wissen solltest:
 
 - **Bilder mit eigener Rückseite** (Zeichen ⧉, etwa aus dem Cover Art Archive): Der Umschalter **Vorderseite** | **Rückseite** bestimmt, welche Seite des Bildes du zuweist. Die Knöpfe zeigen das an: **Als Vorderseite (Bild-Rückseite)**, **Als Rückseite (Bild-Vorderseite)** und so weiter.
-- **Rückseite zuerst gewählt:** Sie wird nur gemerkt und mit der ersten Vorderseite gespeichert. Schließt du vorher, ist die Wahl weg.
+- **Rückseite zuerst gewählt:** Sie wird nur gemerkt und mit der ersten Vorderseite gespeichert. Schließt du vorher, fragt **Rückseite nicht gespeichert** nach: **Verwerfen** oder **Zurück**.
 - **Als Rückseite** stellt das Rückseiten-Motiv automatisch auf **Original-Rückseite / gewähltes Bild**.
 - **Text und Layout** speichern sich kurz nach der letzten Änderung von selbst, spätestens beim Schließen. Das setzt voraus, dass die Karte schon eine Vorderseite hat.
-- **Ein ersetztes Motiv** wandert ohne Rückfrage ins Archiv, unter **Früheres Kartenmotiv**. Du kannst also jederzeit zurück: Bild im Filter **Archiv** anklicken, **Als Vorderseite**. Einen Datenordner braucht die App dafür; hast du seine Abfrage abgebrochen, gibt es kein Archiv.
+- **Ein ersetztes Motiv** wandert ohne Rückfrage ins Archiv; dort steht es unter der Beschriftung **Lokal**. Du kannst also jederzeit zurück: Bild im Filter **Archiv** anklicken, **Als Vorderseite**. Einen Datenordner braucht die App dafür; hast du seine Abfrage abgebrochen, gibt es kein Archiv.
 - **Zugewiesene Bilder** landen automatisch im Archiv.
 
 ### Galerie
@@ -389,6 +401,8 @@ Geschrieben wird dabei noch nichts. Danach öffnet sich der Prüfdialog **Cover 
 
 ## 8. Karte gestalten
 
+![Cover-Manager, Reiter Karte](screenshots/cover-manager-karte.png)
+
 Alles davon ist im Reiter **Karte**. Nur hier zeigt die Vorschau die fertige Karte mit Text; in den anderen Reitern siehst du das Bild selbst. Mit dem Umschalter **Vorderseite** | **Rückseite** wechselst du die angezeigte Seite. Das Format ist 85,6 × 54 mm (Scheckkarte). Änderungen speichern sich automatisch.
 
 ### Text und Layout
@@ -417,8 +431,8 @@ Alles davon ist im Reiter **Karte**. Nur hier zeigt die Vorschau die fertige Kar
 
 Eine gewählte Bild-Rückseite bleibt gemerkt, während du Blur oder Verlauf ausprobierst.
 
-- **Aus Datei …** nimmt ein Bild vom PC als Rückseite und speichert sofort.
-- Der Knopf **Keine Rückseite** entfernt die Rückseite sofort.
+- **Aus Datei …** nimmt ein Bild vom PC als Rückseite und speichert sofort, sobald die Karte eine Vorderseite hat.
+- Der Knopf **Keine Rückseite** entfernt die Rückseite, gespeichert wird kurz danach automatisch.
 - **Trackliste auf Bild (Überschrift + Titel per Code)** setzt eine Überschrift und die Trackliste auf das Motiv. Dazu erscheinen **Überschrift:**, **Trackliste:** (eine Zeile je Track) und **Trackliste aus Tags**. Sie sind bearbeitbar.
 - **KI-Rückseite erzeugen (1 Bildaufruf)** malt ein passendes Gegenstück zur Vorderseite. Dafür muss schon eine Vorderseite zugewiesen sein. Das Ergebnis liegt unter **Neu**; weise es mit **Als Rückseite** zu.
 - **KI-Wunsch:** optional, zum Beispiel eine bestimmte Szene. Leer bleibt die Wahl der KI überlassen. **Idee vorschlagen** lässt das Textmodell drei Szenen zur Auswahl vorschlagen.
@@ -467,6 +481,8 @@ Probiere Stil und Anker zuerst an einem Ordner aus.
 
 ## 10. Drucken
 
+![Dialog Druckbogen](screenshots/druckbogen.png)
+
 Menü **Kartencover** → **Druckbogen (PDF) erstellen …**. Angeboten werden nur Ordner mit gespeichertem Kartencover auf der geöffneten SD-Karte. Karten aus der Bibliothek müssen also zuerst auf die Karte übertragen sein.
 
 1. **Karten auswählen:** Häkchen setzen, **Alle** oder **Keine**.
@@ -474,7 +490,7 @@ Menü **Kartencover** → **Druckbogen (PDF) erstellen …**. Angeboten werden n
    - **HERMA 5028 (83,8 × 50,8 mm, 10/Bogen)**: Die Bogenränder sind nicht offiziell veröffentlicht, das Raster ist angenommen. Drucke deshalb die Testseite.
    - **ISO-Karte 85,6 × 54 mm, Schnittmarken (8/Bogen)**: zum Selbstausschneiden, mit 2 mm Beschnitt.
 3. **Exemplare je Karte:** 1 bis 10.
-4. **Rückseiten mitdrucken (als weitere Etiketten nach den Vorderseiten):** Rückseiten folgen als eigene Etiketten hinter allen Vorderseiten. Hochformat-Karten werden für den Druck gedreht.
+4. **Rückseiten mitdrucken:** Rückseiten folgen als eigene Etiketten hinter allen Vorderseiten. Hochformat-Karten werden für den Druck gedreht.
 5. **Beginnen bei Etikett Nr.:** für angebrochene Bögen. Gezählt wird zeilenweise von links oben.
 6. **Druck-Versatz (mm):** X und Y von −10 bis +10, zum Korrigieren des Druckbilds.
 
@@ -611,6 +627,8 @@ Auf die SD-Karte kommt nur das aktive Kartencover, alles andere bleibt im Archiv
 
 ### Datenordner wechseln
 
+![Dialog Datenordner](screenshots/datenordner.png)
+
 **Einstellungen** → **Datenordner ändern …** zeigt den aktuellen Ort. **Anderen Ordner wählen …** legt einen neuen fest:
 
 - **Der neue Ordner enthält keine Daten der App:** Sie werden dorthin kopiert und geprüft. Erst danach wechselt die App.
@@ -641,11 +659,11 @@ Sichere vor allem vor Schritten, die sich nicht rückgängig machen lassen: **SD
 
 ## 15. Fehlerbehebung
 
+Die Statusleiste unten im Hauptfenster zeigt die letzte Meldung, etwa Ergebnisse von Importen, RFID-Fehler oder fehlende Programme wie FFmpeg. Schau dort zuerst nach.
+
 ### Dateinamen auf der SD-Karte
 
 Die App erkennt `001.mp3` und auch `001_Titel.mp3` als Track, denn der DFPlayer wertet nur die ersten drei Ziffern aus. Gibt es beide mit derselben Nummer, gilt `001.mp3`. Beim Einlesen ändert die App nichts an den Dateien. Löschst du einen Track aus der Mitte oder sortierst um, heißen die Dateien danach `001.mp3`, `002.mp3` und so weiter; der Text im Dateinamen entfällt dann.
-
-Die Statusleiste unten im Hauptfenster zeigt die letzte Meldung, etwa Ergebnisse von Importen, RFID-Fehler oder fehlende Programme wie FFmpeg. Schau dort zuerst nach.
 
 ### Log-Datei
 
@@ -713,7 +731,7 @@ Nein. Beim Öffnen liest die App nur die Tags und sucht Cover in den kostenlosen
 **Bleiben meine RFID-Karten nach dem Bereinigen gültig?**
 Ja. Die Ordnernummern ändern sich nicht. Eine Karte im Modus **Einzelner Track** zeigt aber auf eine Tracknummer; hast du Tracks gelöscht oder verschoben, prüfe sie.
 
-**Warum wird mein Ordnername nicht als Album angezeigt?**
+**Warum zeigt der Ordner nicht den Namen aus dem Album-Tag?**
 Ein eigener Ordnername hat Vorrang vor dem Album-Tag. Leere den Namen beim Umbenennen, dann gilt wieder der Album-Tag.
 
 **Ich habe ein Kartencover in der Bibliothek gestaltet. Warum ist es nicht auf der Karte?**

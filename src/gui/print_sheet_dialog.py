@@ -64,7 +64,8 @@ class PrintSheetDialog(QDialog):
         self.copies_spin.setRange(1, 10)
         form.addRow("Exemplare je Karte:", self.copies_spin)
 
-        self.backs_check = QCheckBox("Rückseiten mitdrucken (als weitere Etiketten nach den Vorderseiten)")
+        self.backs_check = QCheckBox("Rückseiten mitdrucken")
+        self.backs_check.setToolTip("Als weitere Etiketten nach den Vorderseiten")
         self.backs_check.setChecked(any(card_store.has_back(f.path) for f in self.folders))
         self.backs_check.setEnabled(self.backs_check.isChecked())
         form.addRow("", self.backs_check)

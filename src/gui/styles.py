@@ -35,7 +35,7 @@ QDialog, QMessageBox {
 
 /* Dialog ist heller als das Hauptfenster - Eingabefelder und Buttons
    brauchen darin eigene Toene, sonst gehen sie im Dialoggrund unter. */
-QDialog QLineEdit, QDialog QTextEdit, QDialog QPlainTextEdit, QDialog QComboBox, QDialog QSpinBox {
+QDialog QLineEdit, QDialog QTextEdit, QDialog QPlainTextEdit, QDialog QComboBox, QDialog QSpinBox, QDialog QDoubleSpinBox {
     background-color: @BASE@;
 }
 
@@ -660,7 +660,7 @@ QComboBox QAbstractItemView {
 }
 
 /* === Spin Box === */
-QSpinBox {
+QSpinBox, QDoubleSpinBox {
     background-color: @SURFACE0@;
     color: @TEXT@;
     border: 1px solid @BORDER@;
@@ -668,7 +668,7 @@ QSpinBox {
     padding: 8px;
 }
 
-QSpinBox:focus {
+QSpinBox:focus, QDoubleSpinBox:focus {
     border-color: @BLUE@;
 }
 
