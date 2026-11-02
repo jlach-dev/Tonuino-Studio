@@ -592,15 +592,15 @@ class RfidPanel(QFrame):
 
         if folder is not None:
             confirm_text = (
-                f"Lege die Karte auf den TonUINO-eigenen Leser. Soll sie dann für "
+                f"Soll die Karte für "
                 f"Ordner \'{self._resolve_folder_name(self.current_folder)}\' "
-                f"programmiert werden?"
+                f"programmiert werden? Lege sie erst nach dem Bestätigen auf den TonUINO-eigenen Leser."
                 f"{TONUINO_IDLE_HINT}"
             )
         else:
             confirm_text = (
-                f"Lege die Karte auf den TonUINO-eigenen Leser. Soll sie dann als "
-                f"\'{mode_label}\'-Karte programmiert werden?"
+                f"Soll die Karte als "
+                f"\'{mode_label}\'-Karte programmiert werden? Lege sie erst nach dem Bestätigen auf den TonUINO-eigenen Leser."
                 f"{TONUINO_IDLE_HINT}"
             )
 
@@ -623,8 +623,8 @@ class RfidPanel(QFrame):
         confirmed = confirm_action(
             self,
             "Admin-Karte programmieren",
-            "Lege die Karte auf den TonUINO-eigenen Leser. Soll sie dann als "
-            "Admin-Karte programmiert werden?\n\nEine Admin-Karte ist keinem "
+            "Soll die Karte als "
+            "Admin-Karte programmiert werden? Lege sie erst nach dem Bestätigen auf den TonUINO-eigenen Leser.\n\nEine Admin-Karte ist keinem "
             "Ordner zugeordnet und öffnet am TonUINO das Admin-Menü."
             + TONUINO_IDLE_HINT,
             default_no=False

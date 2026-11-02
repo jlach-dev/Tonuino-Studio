@@ -441,6 +441,10 @@ Eine gewählte Bild-Rückseite bleibt gemerkt, während du Blur oder Verlauf aus
 
 ## 9. KI-Motive und Serien
 
+![Cover-Manager, Reiter KI erzeugen](screenshots/ki-erzeugen.png)
+
+*Beispiel mit erfundenem Hörspiel: Die Bilder unter **Neu** sind von Hand gezeichnet und stehen für das, was die KI liefert.*
+
 Alle KI-Funktionen brauchen einen Gemini-Key ([Einstellungen](#13-einstellungen-dienste-und-api-keys)).
 
 **KI-Knöpfe weisen nichts zu.** Sie erzeugen ein neues Bild unter **Neu**. Ob es auf die Karte kommt, entscheidest du mit **Als Vorderseite** oder **Als Rückseite**. Die einzige Ausnahme ist das Charakterblatt, siehe unten.
@@ -732,7 +736,7 @@ Nein. Beim Öffnen liest die App nur die Tags und sucht Cover in den kostenlosen
 Ja. Die Ordnernummern ändern sich nicht. Eine Karte im Modus **Einzelner Track** zeigt aber auf eine Tracknummer; hast du Tracks gelöscht oder verschoben, prüfe sie.
 
 **Warum zeigt der Ordner nicht den Namen aus dem Album-Tag?**
-Ein eigener Ordnername hat Vorrang vor dem Album-Tag. Leere den Namen beim Umbenennen, dann gilt wieder der Album-Tag.
+Ein eigener Ordnername hat Vorrang vor dem Album-Tag. Leere den Namen beim Umbenennen, dann gilt wieder der Album-Tag. Beim **Ersetzen** entfällt ein eigener Name, denn dann liegt ein anderes Album im Ordner; beim **Anhängen** bleibt er.
 
 **Ich habe ein Kartencover in der Bibliothek gestaltet. Warum ist es nicht auf der Karte?**
 Es liegt im Archiv und wird beim Übertragen des Albums auf die SD-Karte geschrieben.

@@ -8,7 +8,6 @@ Aufruf (aus dem Projektordner):  python tools/make_icons.py
 Benoetigt PyQt6 und Pillow (pip install pillow).
 """
 
-import math
 import os
 import sys
 

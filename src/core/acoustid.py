@@ -52,6 +52,11 @@ FPCALC_SHA256 = {
     "darwin": "d4d8faff4b5f7c558d9be053da47804f9501eaa6c2f87906a9f040f38d61c860",
     "linux": "4d7433a7f778e5946d7225230681cbcd634e153316ecac87c538c33ac32387a5",
 }
+# SHA-256 der entpackten Programmdatei in <Datenordner>/tools: Der Ordner liegt oft in
+# einem Sync-Dienst, die Datei wird dort also auch ohne die App veraendert werden koennen.
+FPCALC_BINARY_SHA256 = {
+    "win32": "659ea2dba1a12d7df4fe2b6f23f60fd9414ae61aca1b014ee8fa37c5e09b930b",
+}
 FPCALC_MAX_BYTES = 10 * 1024 * 1024
 
 _last_request = 0.0
@@ -65,17 +70,32 @@ def fpcalc_name(platform: Optional[str] = None) -> str:
     return "fpcalc.exe" if (platform or sys.platform) == "win32" else "fpcalc"
 
 
+def _downloaded_fpcalc_intact(path: str) -> bool:
+    """Stimmt die Pruefsumme? Fuer Systeme ohne hinterlegten Wert gibt es keine Pruefung."""
+    import hashlib
+    import sys
+    expected = FPCALC_BINARY_SHA256.get(sys.platform)
+    if expected is None:
+        return True
+    with open(path, "rb") as handle:
+        intact = hashlib.sha256(handle.read()).hexdigest() == expected
+    if not intact:
+        log.warning("fpcalc in %s weicht vom geprueften Download ab und wird nicht gestartet", path)
+    return intact
+
+
 def find_fpcalc(configured: str = "", data_dir: str = "") -> Optional[str]:
-    """Pfad zu fpcalc: Einstellung, sonst PATH, sonst <Datenordner>/tools"""
+    """Pfad zu fpcalc: Einstellung, sonst PATH, sonst <Datenordner>/tools. Selbst
+    gewaehlte Pfade verantwortet der Nutzer, die Datei in tools/ wird geprueft."""
+    managed = os.path.join(data_dir, "tools", fpcalc_name()) if data_dir else ""
     if configured and os.path.isfile(configured):
-        return configured
+        is_managed = managed and os.path.normcase(os.path.abspath(configured)) == os.path.normcase(os.path.abspath(managed))
+        return configured if not is_managed or _downloaded_fpcalc_intact(configured) else None
     found = shutil.which("fpcalc")
     if found:
         return found
-    if data_dir:
-        candidate = os.path.join(data_dir, "tools", fpcalc_name())
-        if os.path.isfile(candidate):
-            return candidate
+    if managed and os.path.isfile(managed) and _downloaded_fpcalc_intact(managed):
+        return managed
     return None
 
 

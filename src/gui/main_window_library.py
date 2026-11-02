@@ -557,6 +557,7 @@ class LibraryMixin:
         job, self._import_job = self._import_job, None
         if job is None:
             return
+        job["cancelled"] = job["worker"].is_cancelled  # vorher lesen: retire_worker bricht den Worker selbst ab
         retire_worker(job["worker"])  # run() kehrt nach dem Signal erst noch zurueck
         job["dialog"].close()
         folder, album = job["folder"], job["album"]
@@ -581,8 +582,9 @@ class LibraryMixin:
         if result.album_id:
             self._sd_album_map[result.album_id] = folder.index
         self._folder_name_cache.pop(folder.index, None)
-        if album.title:
-            self._folder_name_cache[folder.index] = album.title
+        name = self._manual_folder_name(folder) or album.title
+        if name:
+            self._folder_name_cache[folder.index] = name
         self._populate_folder_list()
         self._select_folder_in_list(folder.index)
         self.status_bar.showMessage(f"Ordner {folder.index:02d}: {result.summary}")
@@ -600,9 +602,9 @@ class LibraryMixin:
         zurueck, ob ersetzt wurde (nur dann folgt der Album-Abgleich)."""
         folder, staging = job["folder"], job["staging"]
         self._release_files()
-        if job["worker"].is_cancelled or added == 0:
+        if job["cancelled"] or added == 0:
             library_import.discard_staging_folder(staging)
-            reason = "abgebrochen" if job["worker"].is_cancelled else "keine Tracks kopiert"
+            reason = "abgebrochen" if job["cancelled"] else "keine Tracks kopiert"
             self.status_bar.showMessage(f"Ordner {folder.index:02d}: Ersetzen {reason} – die bisherigen Tracks "
                                         "bleiben erhalten")
             if job["errors"]:

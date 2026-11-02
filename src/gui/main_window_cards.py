@@ -66,8 +66,9 @@ class CardCoverMixin:
 
     def _after_tags_written(self, folder: Folder, album: str, written: int):
         """Ordnername (Album-Tag) und Trackliste nach dem Tag-Schreiben auffrischen"""
-        if album:
-            self._set_folder_name(folder.index, album)
+        name = self._manual_folder_name(folder) or album
+        if name:
+            self._set_folder_name(folder.index, name)
         else:
             self._folder_name_cache.pop(folder.index, None)
         if self.current_folder is folder:

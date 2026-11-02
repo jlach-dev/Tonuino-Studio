@@ -270,6 +270,36 @@ def test_header_buttons_shrink_to_icons_when_space_is_short(app):
     container.close()
 
 
+def test_header_buttons_second_stage_only_when_needed(app):
+    from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QWidget
+    from gui.compact_buttons import CompactButtons
+
+    container = QWidget()
+    row = QHBoxLayout(container)
+    first, second = QPushButton(" Tracks hinzufügen"), QPushButton(" Lautstärke angleichen")
+    row.addWidget(first)
+    row.addWidget(second)
+    compact = CompactButtons(container, row, [second], later=[first])
+    container.show()
+    icons_only, one_icon = compact.full_width([first, second]), compact.full_width([second])
+
+    container.resize(one_icon + 60, 50)
+    app.processEvents()
+    compact.update_mode()
+    assert compact.level == 1 and first.text() == " Tracks hinzufügen" and second.text() == ""
+
+    container.resize(icons_only + 40, 50)
+    app.processEvents()
+    compact.update_mode()
+    assert compact.level == 2 and first.text() == "" and "Tracks" in first.toolTip()
+
+    container.resize(1200, 50)
+    app.processEvents()
+    compact.update_mode()
+    assert compact.level == 0 and first.text() == " Tracks hinzufügen" and first.toolTip() == ""
+    container.close()
+
+
 def test_replace_with_retry_waits_for_locked_target(tmp_path, monkeypatch):
     """WinError 5: Google Drive/Virenscanner halten die Zieldatei kurz offen"""
     from core import fileutil

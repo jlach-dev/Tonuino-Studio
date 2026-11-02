@@ -98,6 +98,21 @@ def draw_rocket(colors):
     return image
 
 
+def draw_owl(colors, body=(120, 84, 56), belly=(226, 196, 150)):
+    image, draw = background(colors)
+    draw.ellipse([70, 60, 170, 160], fill=(248, 234, 170))
+    draw.rectangle([0, 470, 600, 500], fill=(76, 52, 36))
+    draw.ellipse([170, 170, 430, 480], fill=body)
+    draw.ellipse([225, 290, 375, 465], fill=belly)
+    draw.polygon([(190, 215), (215, 130), (270, 185)], fill=body)
+    draw.polygon([(410, 215), (385, 130), (330, 185)], fill=body)
+    for x in (250, 350):
+        draw.ellipse([x - 44, 205, x + 44, 293], fill=(246, 240, 224))
+        draw.ellipse([x - 18, 231, x + 18, 267], fill=(36, 28, 24))
+    draw.polygon([(285, 280), (315, 280), (300, 315)], fill=(236, 164, 60))
+    return image
+
+
 def draw_notes(colors):
     image, draw = background(colors)
     for x, y in ((190, 360), (400, 310)):
@@ -307,6 +322,21 @@ def render(app, base):
     dialog.tabs.setCurrentIndex(1)
     settle(app, 0.5)
     save(dialog, "cover-manager-karte")
+
+    # KI erzeugen: alles von Hand ausgefuellt, die Bilder unter "Neu" sind eigene Zeichnungen
+    cm.CoverManagerDialog.unsaved_variants = lambda self: []
+    dialog.extra_edit.setText("Eule mit Laterne im Moos")
+    dialog.research_edit.setPlainText(
+        "Die Waldwichtel ist eine Hörspielreihe für Kinder ab vier Jahren. In Folge 1 suchen die Wichtel Moos und Tannzapf einen verschwundenen Pilz und bekommen Hilfe von der Eule Ottilie. Stimmung: warm, freundlich, abendlicher Wald.")
+    dialog.sources_label.setText("")
+    first.reference = True
+    for label, colors, body in (("KI-Variante 1", NIGHT, (120, 84, 56)), ("KI-Variante 2", GREEN, (96, 72, 110)),
+                                ("KI-Variante 3", SAND, (92, 110, 84))):
+        variant = cm.Candidate(cm.SECTION_NEW, label, png(draw_owl(colors, body)), cm.KIND_AI)
+        dialog._add_candidate(variant, select=label.endswith("1"))
+    dialog.tabs.setCurrentIndex(2)
+    settle(app, 0.5)
+    save(dialog, "ki-erzeugen")
     dialog.done(0)
     settle(app, 0.3)
 

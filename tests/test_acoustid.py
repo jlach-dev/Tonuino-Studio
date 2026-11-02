@@ -85,8 +85,29 @@ def test_fingerprint_and_recognize_with_fakes(tmp_path, monkeypatch):
     assert "invalid key" in bad.files[0].error and bad.recognized == 0
 
 
+def test_changed_fpcalc_in_data_folder_is_not_started(tmp_path, monkeypatch):
+    import hashlib
+    import sys
+    monkeypatch.setattr(acoustid.shutil, "which", lambda name: None)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    managed = tools / acoustid.fpcalc_name()
+    managed.write_bytes(b"echt")
+    monkeypatch.setattr(acoustid, "FPCALC_BINARY_SHA256", {sys.platform: hashlib.sha256(b"echt").hexdigest()})
+    assert acoustid.find_fpcalc("", str(tmp_path)) == str(managed)
+    assert acoustid.find_fpcalc(str(managed), str(tmp_path)) == str(managed)
+
+    managed.write_bytes(b"veraendert")
+    assert acoustid.find_fpcalc("", str(tmp_path)) is None
+    assert acoustid.find_fpcalc(str(managed), str(tmp_path)) is None  # auch als gespeicherter Pfad
+    other = tmp_path / "eigenes-fpcalc"
+    other.write_bytes(b"selbst gewaehlt")
+    assert acoustid.find_fpcalc(str(other), str(tmp_path)) == str(other)
+
+
 def test_find_fpcalc_prefers_setting_then_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(acoustid.shutil, "which", lambda name: None)
+    monkeypatch.setattr(acoustid, "FPCALC_BINARY_SHA256", {})
     assert acoustid.find_fpcalc("", str(tmp_path)) is None
     tools = tmp_path / "tools"
     tools.mkdir()

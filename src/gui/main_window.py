@@ -671,8 +671,9 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
 
         actions.addStretch(1)
         info_col.addLayout(actions)
-        # Schmale Fenster: Lautstaerke und Cover-Manager nur als Symbol, statt sich zu ueberlappen
-        self._compact_header_buttons = CompactButtons(folder_header, actions, [btn_normalize, btn_card_cover])
+        # Schmale Fenster: erst Lautstaerke und Cover-Manager nur als Symbol, dann auch die beiden anderen
+        self._compact_header_buttons = CompactButtons(folder_header, actions, [btn_normalize, btn_card_cover],
+                                                      later=[btn_add_tracks, btn_delete_folder])
 
         header_layout.addLayout(info_col, 1)
         folder_layout.addWidget(folder_header)
@@ -963,6 +964,11 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
             worker.cancel()
             worker.wait()
             self._folder_name_worker = None
+
+    def _manual_folder_name(self, folder: Folder) -> str:
+        """Beim Umbenennen vergebener Name aus dem ersten Track, sonst leer"""
+        first = min(folder.tracks, key=lambda t: t.index, default=None)
+        return self.metadata_manager.read_metadata(first.filepath).folder_name if first else ""
 
     def _set_folder_name(self, folder_index: int, name: str):
         """Uebernimmt einen im Hintergrund ermittelten Ordnernamen in Cache,

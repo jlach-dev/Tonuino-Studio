@@ -382,3 +382,113 @@ def test_library_tile_selection_is_visible(app, tmp_path):
     assert not any(tile.is_selected() for tile in tiles)
     assert view.count_label.text() == "3 Alben"
     view.close()
+
+
+@pytest.fixture
+def window_with_folder(app, tmp_path, monkeypatch):
+    """Hauptfenster mit Ordner 01 (zwei Tracks, eigener Name) und einem anderen Album in der Bibliothek"""
+    from core.sd_card import SDCard
+    from gui import main_window as mw
+    from gui.main_window import MainWindow
+
+    QSettings().clear()
+    source = tmp_path / "Musik"
+    other = make_album(source, "Anderes", count=3, album="Anderes Album")
+    data_dir = tmp_path / "data"
+    settings = QSettings()
+    settings.setValue("library/data_dir", str(data_dir))
+    settings.setValue(SETTINGS_SOURCES, [str(source)])
+    settings.setValue("library/write_id_tags", "no")
+    Library(str(data_dir), [str(source)]).save(Library(str(data_dir), [str(source)]).scan())
+
+    sd_root = tmp_path / "sd"
+    folder = make_album(sd_root, "01", count=2, album="Altes Album")
+    (folder / "01.mp3").rename(folder / "001.mp3")
+    (folder / "02.mp3").rename(folder / "002.mp3")
+    for name in ("001.mp3", "002.mp3"):
+        MetadataManager().write_metadata(str(folder / name), folder_name="Mein Name")
+
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    window = MainWindow()
+    window.sd_card = SDCard(str(sd_root))
+    window.sd_card.scan()
+    window._open_sd_dialog = type("D", (), {"close": lambda self: None})()
+    window._on_scan_finished(True)
+    window._select_folder_in_list(1)
+    app.processEvents()
+    yield window, folder, other
+    window.close()
+    QSettings().clear()
+
+
+def finish_import(app, window):
+    for _ in range(100):
+        job = window._import_job
+        if job is None:
+            break
+        job["worker"].wait(500)
+        app.processEvents()
+    assert window._import_job is None
+    app.processEvents()
+
+
+def titles(folder):
+    return [MetadataManager().read_metadata(str(p)).title for p in sorted(folder.glob("*.mp3"))]
+
+
+def test_replace_swaps_tracks_and_drops_the_manual_name(app, window_with_folder, monkeypatch):
+    """Ersetzen ueber das Hauptfenster: danach liegt ein anderes Album im Ordner, also gilt dessen Name"""
+    from core.library_import import MODE_REPLACE
+
+    window, folder, other = window_with_folder
+    assert window.folder_title.text() == "Mein Name"
+    monkeypatch.setattr(window, "_ask_replace_or_append", lambda *_: MODE_REPLACE)
+    window._on_albums_dropped([str(other)], 1)
+    finish_import(app, window)
+
+    assert sorted(p.name for p in folder.glob("*.mp3")) == ["001.mp3", "002.mp3", "003.mp3"]
+    assert titles(folder) == ["Titel 1", "Titel 2", "Titel 3"]
+    assert not list(folder.glob(".tmp_*"))
+    assert MetadataManager().read_metadata(str(folder / "001.mp3")).album == "Anderes Album"
+    assert window.current_folder.track_count == 3
+    assert window.folder_title.text() == "Anderes Album"
+
+
+def test_cancelled_replace_keeps_old_tracks(app, window_with_folder, monkeypatch):
+    from core.library_import import MODE_REPLACE
+    from gui import main_window_library as module
+
+    class CancelledAtOnce(module.TrackAddWorker):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.cancel()
+
+    window, folder, other = window_with_folder
+    before = {p.name: p.read_bytes() for p in folder.glob("*.mp3")}
+    monkeypatch.setattr(module, "TrackAddWorker", CancelledAtOnce)
+    monkeypatch.setattr(window, "_ask_replace_or_append", lambda *_: MODE_REPLACE)
+    window._on_albums_dropped([str(other)], 1)
+    finish_import(app, window)
+
+    assert {p.name: p.read_bytes() for p in folder.glob("*.mp3")} == before
+    assert not list(folder.glob(".tmp_*"))
+    assert "bisherigen Tracks" in window.status_bar.currentMessage()
+
+
+def test_append_keeps_the_manual_name(app, window_with_folder, monkeypatch):
+    from core.library_import import MODE_APPEND
+
+    window, folder, other = window_with_folder
+    monkeypatch.setattr(window, "_ask_replace_or_append", lambda *_: MODE_APPEND)
+    window._on_albums_dropped([str(other)], 1)
+    finish_import(app, window)
+
+    assert len(list(folder.glob("*.mp3"))) == 5
+    assert window.folder_title.text() == "Mein Name"
+    assert MetadataManager().read_metadata(str(folder / "005.mp3")).folder_name == "Mein Name"
+
+
+def test_tags_written_keep_the_manual_name(app, window_with_folder):
+    window, _folder, _other = window_with_folder
+    window._after_tags_written(window.current_folder, "Neuer Album-Tag", 2)
+    assert window.folder_title.text() == "Mein Name"
