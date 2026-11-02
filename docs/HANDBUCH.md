@@ -620,6 +620,10 @@ Sichere vor allem vor Schritten, die sich nicht rückgängig machen lassen: **SD
 
 ## 15. Fehlerbehebung
 
+### Dateinamen auf der SD-Karte
+
+Die App erkennt `001.mp3` und auch `001_Titel.mp3` als Track, denn der DFPlayer wertet nur die ersten drei Ziffern aus. Gibt es beide mit derselben Nummer, gilt `001.mp3`. Beim Einlesen ändert die App nichts an den Dateien. Löschst du einen Track aus der Mitte oder sortierst um, heißen die Dateien danach `001.mp3`, `002.mp3` und so weiter; der Text im Dateinamen entfällt dann.
+
 Die Statusleiste unten im Hauptfenster zeigt die letzte Meldung, etwa Ergebnisse von Importen, RFID-Fehler oder fehlende Programme wie FFmpeg. Schau dort zuerst nach.
 
 ### Log-Datei

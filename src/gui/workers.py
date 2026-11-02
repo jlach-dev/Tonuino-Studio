@@ -164,7 +164,8 @@ class TrackAddWorker(QThread):
             # Auch auf der Karte nachsehen: der Ordner kann seit dem letzten Scan
             # Dateien bekommen haben (z.B. im Explorer kopiert) - nie ueberschreiben
             next_number = 1
-            while next_number in self._used_numbers or (Path(self.folder.path) / f"{next_number:03d}.mp3").exists():
+            on_disk = SDCard.track_numbers_on_disk(Path(self.folder.path))
+            while next_number in self._used_numbers or next_number in on_disk:
                 next_number += 1
             if next_number > MAX_TRACKS_PER_FOLDER:
                 break
