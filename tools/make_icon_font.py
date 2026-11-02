@@ -55,6 +55,7 @@ CODEPOINTS = [
     0xF035,  # edit
     0xF083,  # warning
     0xF097,  # edit
+    0xFFEDF,  # settings_screen
 ]
 
 

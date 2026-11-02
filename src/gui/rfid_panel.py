@@ -143,7 +143,7 @@ class RfidPanel(QFrame):
         card_tile, self.card_icon = self._create_status_tile("", "Karte")
         status_row.addWidget(card_tile)
 
-        programmed_tile, self.programmed_icon = self._create_status_tile("󿻟", "Ordner")
+        programmed_tile, self.programmed_icon = self._create_status_tile("\ue2c7", "Ordner")
         status_row.addWidget(programmed_tile)
         self.programmed_caption = programmed_tile.findChild(QLabel, "statusCaption")
         self.programmed_tile = programmed_tile
