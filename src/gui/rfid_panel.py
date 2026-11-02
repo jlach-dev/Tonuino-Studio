@@ -135,7 +135,7 @@ class RfidPanel(QFrame):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.setSpacing(8)
 
-        # Einheitliche Icons aus Material Icons (Apache-2.0, gebuendelt) statt
+        # Einheitliche Icons aus Material Symbols (Apache-2.0, gebuendelt) statt
         # der Windows-exklusiven Segoe Fluent Icons - funktioniert plattformneutral
         reader_tile, self.reader_icon = self._create_status_tile("", "Reader")
         status_row.addWidget(reader_tile)
@@ -143,7 +143,7 @@ class RfidPanel(QFrame):
         card_tile, self.card_icon = self._create_status_tile("", "Karte")
         status_row.addWidget(card_tile)
 
-        programmed_tile, self.programmed_icon = self._create_status_tile("", "Ordner")
+        programmed_tile, self.programmed_icon = self._create_status_tile("󿻟", "Ordner")
         status_row.addWidget(programmed_tile)
         self.programmed_caption = programmed_tile.findChild(QLabel, "statusCaption")
         self.programmed_tile = programmed_tile
@@ -690,7 +690,7 @@ class RfidPanel(QFrame):
         (nichts zu loeschen) und blockt Klicks im deaktivierten Zustand -
         wie bei einem echten (aber unsichtbaren) Button."""
         color = theme.RED if enabled else theme.DISABLED
-        self.erase_card_icon.setPixmap(icon_from_glyph("", color=color, size=20).pixmap(20, 20))
+        self.erase_card_icon.setPixmap(icon_from_glyph("", color=color, size=20).pixmap(20, 20))
         self.erase_card_icon.setEnabled(enabled)
 
     def _erase_rfid_card(self):
