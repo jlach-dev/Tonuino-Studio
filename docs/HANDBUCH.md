@@ -169,6 +169,17 @@ Die Grenzen: 99 Ordner, 255 Tracks je Ordner. Die Systemordner **mp3** und **adv
 
 Nur MusicBrainz liefert auch die MusicBrainz-IDs. Mit ihnen funktionieren die Serienerkennung und die spätere Cover-Stapelsuche besser.
 
+### TonUINO-Systemdateien
+
+**Einstellungen** → **TonUINO-Systemdateien …** richtet die Ansagen in den Ordnern **mp3** und **advert** ein oder aktualisiert sie, auch auf einer leeren Karte. Die Dateien kommen aus den Releases von TonUINO-TNG auf GitHub und werden gegen deren Prüfsummen geprüft.
+
+1. Öffne die SD-Karte.
+2. Wähle unter **Firmware** die Version deiner Box. Mit USB-Verbindung liest **Von der Box lesen** sie aus; die Box startet dabei meist neu. Ist die Box schon mit der App verbunden, trenne sie vorher.
+3. Prüfe den Vergleich: **Fehlt**, **Abweichend**, **Identisch**, **Nur auf der Karte**.
+4. Klicke **Dateien schreiben**.
+
+Die Ansagen müssen zur Firmware passen, sonst spielt die Box falsche Sätze. Vorgewählt ist das neueste Release, nicht unbedingt deine Version. Dateien, die nur auf der Karte liegen, bleiben erhalten. **Abweichende Dateien ersetzen** überschreibt nach einer Rückfrage auch geänderte Dateien, etwa eigene Aufnahmen. Ein Abbruch lässt die fertigen Dateien stehen.
+
 ### SD-Karte bereinigen
 
 **SD-Karte bereinigen** löscht alles, was nicht zur TonUINO-Struktur gehört, zum Beispiel fremde Dateien und Ordner sowie leere Ordner, und nummeriert die Tracks je Ordner neu. Die Ordnernummern bleiben, deine RFID-Karten gelten also weiter.

@@ -19,7 +19,7 @@ def about_text() -> str:
         "Material Symbols – Apache License 2.0<br>"
         "Qt / PyQt6, Pillow, mutagen, pyscard, pyserial, keyring, google-genai – jeweils eigene Lizenzen</p>"
         "<p><b>Online-Dienste</b> (nur wenn genutzt): MusicBrainz und Cover Art Archive, Deezer, iTunes, "
-        "Spotify, AcoustID sowie Google Gemini für KI-Kartencover. Gefundene Cover sind urheberrechtlich "
+        "Spotify, AcoustID, Google Gemini für KI-Kartencover sowie GitHub für die TonUINO-Ansagen (TonUINO-TNG, GPL-3.0; nicht mitgeliefert, nur auf Wunsch geladen). Gefundene Cover sind urheberrechtlich "
         "geschützt – nur für eigene Karten verwenden.</p>"
     )
 

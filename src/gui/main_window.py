@@ -41,6 +41,7 @@ from gui.card_cover_dialog import AiSettingsDialog
 from gui.cover_manager_dialog import CoverManagerDialog
 from gui.library_dnd import DropArea, FolderListWidget
 from gui.library_view import LibraryView
+from gui.system_files_dialog import SystemFilesDialog
 import logging
 
 log = logging.getLogger(__name__)
@@ -318,6 +319,10 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         action_library_sources.triggered.connect(self._edit_library_sources)
         self.action_library_rescan = menu.addAction("Bibliothek neu einlesen")
         self.action_library_rescan.triggered.connect(lambda: self._start_library_scan(force=True))
+        menu.addSeparator()
+        action_system_files = menu.addAction("TonUINO-Systemdateien …")
+        action_system_files.setToolTip("Ansagen in den Ordnern mp3 und advert einrichten oder aktualisieren")
+        action_system_files.triggered.connect(self._open_system_files)
 
         view_menu = menu_bar.addMenu("Ansicht")
         self.action_full_screen = view_menu.addAction("Vollbild")
@@ -742,6 +747,17 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Bereit")
     
+    def _open_system_files(self):
+        if not self.sd_card:
+            QMessageBox.information(self, "Keine SD-Karte", "Bitte zuerst eine SD-Karte öffnen, auch wenn sie leer ist.")
+            return
+        dialog = SystemFilesDialog(self.sd_card.path, self)
+        dialog.exec()
+        if dialog.card_changed and self.sd_card:
+            self.sd_card.scan()
+            self._populate_folder_list()
+            self.status_bar.showMessage("TonUINO-Systemdateien aktualisiert")
+
     def _check_dependencies(self):
         """Prueft verfuegbare Abhaengigkeiten"""
         missing = []
