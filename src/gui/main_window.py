@@ -741,9 +741,6 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Bereit")
-        # Ausgeblendet: die Leiste brachte kaum Information. Die Objekt-Referenz
-        # bleibt, damit showMessage()-Aufrufe im Code weiter ins Leere laufen.
-        self.status_bar.hide()
     
     def _check_dependencies(self):
         """Prueft verfuegbare Abhaengigkeiten"""

@@ -248,6 +248,7 @@ def test_ai_back_survives_reopen_and_reaches_sd(tmp_path, monkeypatch):
     dialog.btn_extend.click()          # neue Version "KI-Rand", angeklickt
     dialog.btn_card_cover.click()      # als Vorderseite -> gespeichert
     dialog.back_wish_edit.setText("Pferdehalfter auf Holzschemel")
+    dialog._ai_research_done = True
     dialog.btn_ai_back.click()         # neues Bild "KI-Rückseite", angeklickt
     dialog.btn_back_cover.click()      # als Rueckseite -> gespeichert
     card_dir = dialog._card_dir
@@ -337,6 +338,7 @@ def test_pick_back_after_ai_back_with_real_buttons(tmp_path, monkeypatch, librar
     dialog.btn_back_cover.click()
     assert saved_back_color() == yellow
 
+    dialog._ai_research_done = True
     dialog.btn_ai_back.click()      # neues Bild, angeklickt
     dialog.btn_back_cover.click()
     assert saved_back_color() == red

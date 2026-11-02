@@ -267,6 +267,10 @@ class CoverManagerDialog(QDialog):
         self.album_id: Optional[str] = None
         self._album_tagged = False
         self._search_started = False
+        self._ai_research_done = False
+        self._research_used_ai = False
+        self._research_queued = False
+        self._after_research = None  # KI-Aufruf, der auf die Recherche wartet
 
         self.album_cover_changed = False
         self.card_changed = False
@@ -765,13 +769,15 @@ class CoverManagerDialog(QDialog):
 
         header = QHBoxLayout()
         header.addWidget(QLabel("Recherche (bearbeitbar):"), 1)
-        self.btn_research = QPushButton("Neu recherchieren")
+        self.btn_research = QPushButton("Recherchieren")
         self.btn_research.setObjectName("ghostButton")
-        self.btn_research.clicked.connect(self._start_research)
+        self.btn_research.setToolTip("Fragt die KI mit Google-Suche nach dem Album (ein Aufruf bei Google)")
+        self.btn_research.clicked.connect(lambda: self._run_research(ai=True))
         header.addWidget(self.btn_research)
         layout.addLayout(header)
         self.research_edit = QPlainTextEdit()
-        self.research_edit.setPlaceholderText("Recherche läuft …")
+        self.research_edit.setPlaceholderText("Noch keine KI-Recherche. „Recherchieren“ startet sie, "
+                                              "vor einem KI-Bild läuft sie automatisch.")
         layout.addWidget(self.research_edit, 1)
         self.sources_label = QLabel()
         self.sources_label.setOpenExternalLinks(True)
@@ -1157,6 +1163,8 @@ class CoverManagerDialog(QDialog):
                                                           "Kartencover → KI & Online-Dienste einen Gemini-API-Key hinterlegen.")
             return
         if self._bible_worker is not None and self._bible_worker.isRunning():
+            return
+        if self._defer_for_research(self._suggest_style_bible):
             return
         if not self._anchor_images and not confirm_action(
                 self, "Stilbibel ohne Anker", "Es gibt noch keine Anker-Bilder – die Stilbibel würde nur aus der "
@@ -1588,7 +1596,7 @@ class CoverManagerDialog(QDialog):
         self._fill_text_from_tags()
         self._update_basis_label()
         self.search_status.setText(f"Tags in {dialog.written} Track(s) geschrieben – Suchfelder und Kartentext "
-                                   "wurden aus den neuen Tags übernommen; Recherche wird wiederholt.")
+                                   "wurden aus den neuen Tags übernommen. „Recherchieren“ fragt die KI neu.")
         self._start_research()
 
     def _on_online_found(self, cover: cover_sources.OnlineCover, data: bytes):
@@ -1632,16 +1640,49 @@ class CoverManagerDialog(QDialog):
     # --- Recherche & Generierung --------------------------------------------------------------
 
     def _start_research(self):
+        """Beim Oeffnen und nach neuen Tags: nur Tags lesen, das kostet nichts"""
+        self._run_research(ai=False)
+
+    def _run_research(self, ai: bool):
         if self._research_worker is not None and self._research_worker.isRunning():
+            self._research_queued = self._research_queued or ai
             return
-        self.status_label.setText("Recherche läuft …")
-        self._research_worker = CoverResearchWorker(self.folder, self.metadata_manager, self.client, text_model(),
+        self._research_used_ai = ai and self.client is not None
+        self.status_label.setText("Recherche läuft …" if self._research_used_ai else "Tags werden gelesen …")
+        self._research_worker = CoverResearchWorker(self.folder, self.metadata_manager,
+                                                    self.client if self._research_used_ai else None, text_model(),
                                                     self.extra_edit.text(), online_cover=False)
         self._research_worker.completed.connect(self._on_research_done)
-        self._research_worker.failed.connect(lambda m: self.status_label.setText(f"Recherche fehlgeschlagen: {m}"))
-        self._research_worker.finished.connect(self._update_buttons)
+        self._research_worker.failed.connect(self._on_research_failed)
+        self._research_worker.finished.connect(self._on_research_finished)
         self._research_worker.start()
         self._update_buttons()
+
+    def _defer_for_research(self, action) -> bool:
+        """Die KI-Recherche laeuft erst vor dem ersten KI-Aufruf, der sie braucht.
+        True: action startet danach von selbst. Ein selbst geschriebener Text ersetzt sie."""
+        if self.client is None or self._ai_research_done or self.research_edit.document().isModified():
+            return False
+        self._after_research = action
+        self._run_research(ai=True)
+        return True
+
+    def _run_after_research(self):
+        action, self._after_research = self._after_research, None
+        if action is not None:
+            action()
+
+    def _on_research_failed(self, message: str):
+        self.status_label.setText(f"Recherche fehlgeschlagen: {message}")
+        if self._research_used_ai:
+            self._ai_research_done = True  # der wartende KI-Aufruf laeuft trotzdem, ohne zweiten Versuch
+            self._run_after_research()
+
+    def _on_research_finished(self):
+        self._update_buttons()
+        if self._research_queued:
+            self._research_queued = False
+            self._run_research(ai=True)
 
     def _update_basis_label(self):
         work = describe_work(self.info, self.brief)
@@ -1664,8 +1705,13 @@ class CoverManagerDialog(QDialog):
         if brief.sources:
             links = " · ".join(f'<a href="{u}">{i}</a>' for i, u in enumerate(brief.sources, start=1))
             self.sources_label.setText(f"Quellen: {links}")
-        self.status_label.setText("Recherche fertig." if self.client else
-                                  "Ohne API-Key nur Tags gelesen – Cover-Suche läuft trotzdem.")
+        self._ai_research_done = self._research_used_ai
+        if self._research_used_ai:
+            self.status_label.setText("Recherche fertig.")
+        elif self.client:
+            self.status_label.setText("Tags gelesen – die KI-Recherche startet erst bei Bedarf.")
+        else:
+            self.status_label.setText("Ohne API-Key nur Tags gelesen – Cover-Suche läuft trotzdem.")
         if self.archive is not None:
             self._start_series_detection()
         archived_online = any(c.kind == KIND_ONLINE for c in self.candidates if c.kept)
@@ -1673,6 +1719,8 @@ class CoverManagerDialog(QDialog):
             self.search_status.setText("Im Archiv liegen schon gefundene Cover – „Cover suchen“ sucht erneut.")
         elif not self._search_started and self.search_title_edit.text().strip():
             self._start_search()
+        if self._research_used_ai:
+            self._run_after_research()
 
     def _fill_text_from_tags(self):
         series, title = derive_card_text(self.info, self.brief)
@@ -1685,6 +1733,8 @@ class CoverManagerDialog(QDialog):
         if self.client is None:
             QMessageBox.information(self, "Kein API-Key", "Bitte zuerst unter Kartencover → KI & Online-Dienste "
                                                           "einen Gemini-API-Key hinterlegen.")
+            return
+        if self._defer_for_research(self._start_generation):
             return
         refs = [c.data for c in self._references()][:MAX_REFERENCE_IMAGES]
         count = self.count_spin.value()
@@ -2215,6 +2265,8 @@ class CoverManagerDialog(QDialog):
             return
         if self._ideas_worker is not None and self._ideas_worker.isRunning():
             return
+        if self._defer_for_research(self._suggest_back_ideas):
+            return
         request = GenerationRequest(info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText())
         # Ideen beziehen sich auf die aktuell gewaehlte Vorderseite
         front = self.front_source or (SideSource(self.selected) if self.selected else None)
@@ -2253,6 +2305,8 @@ class CoverManagerDialog(QDialog):
         front = self.front_source
         if front is None:
             self._flash("Bitte zuerst eine Vorderseite wählen – die KI-Rückseite passt sich ihr an.")
+            return
+        if self._defer_for_research(self._generate_ai_back):
             return
         request = GenerationRequest(
             info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText(),
@@ -2462,6 +2516,7 @@ class CoverManagerDialog(QDialog):
         return [c for c in self.candidates if c.section == SECTION_NEW and not c.kept]
 
     def done(self, result):
+        self._after_research = None  # kein kostenpflichtiger Aufruf mehr nach dem Schliessen
         self._flush_autosave()  # eine gerade getippte Aenderung nicht verlieren
         unsaved = self.unsaved_variants()
         if unsaved and self.archive is not None:

@@ -351,6 +351,7 @@ def test_ai_back_button_creates_image_to_assign(qt_app, tmp_path, monkeypatch):
 
     monkeypatch.setattr(cm, "CoverBackGenerateWorker", lambda *a: FakeBackWorker(*a))
     dialog.back_wish_edit.setText("Fritzi im Wald")
+    dialog._ai_research_done = True
     dialog.btn_ai_back.click()
 
     new = [c for c in dialog.candidates if c.section == cm.SECTION_NEW]

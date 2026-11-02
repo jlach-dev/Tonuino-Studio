@@ -23,6 +23,7 @@ def test_main_window_full_screen_and_state(app):
     window.show()
     app.processEvents()
     assert window.minimumSize().width() <= 900
+    assert window.status_bar.isVisible()  # sonst sieht niemand Fehlermeldungen
 
     window.toggle_full_screen()
     app.processEvents()

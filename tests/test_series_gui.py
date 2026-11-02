@@ -162,6 +162,7 @@ def test_series_tab_style_bible_and_character_sheet(app, sd, tmp_path, monkeypat
     assert dialog.series_profile.id == profile.id
 
     dialog.research_edit.setPlainText("Inhalt: Detektive im Wald")
+    dialog._ai_research_done = True
     dialog._suggest_style_bible()
     wait_workers(app, dialog)
     assert dialog.bible_edit.toPlainText().startswith("Figuren: Fuchs Finn.")
@@ -223,6 +224,7 @@ def test_series_style_takes_precedence_in_dialog(app, sd, tmp_path, monkeypatch,
             return False
 
     monkeypatch.setattr(cm, "CoverGenerateWorker", lambda *a: FakeWorker(*a))
+    dialog._ai_research_done = True
     dialog._start_generation()
     assert requests[-1].style == "Aquarell"
 

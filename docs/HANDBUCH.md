@@ -427,7 +427,7 @@ Alle KI-Funktionen brauchen einen Gemini-Key ([Einstellungen](#13-einstellungen-
 - **Stil:** **Kinderbuch-Illustration**, **Aquarell**, **Knete / 3D**, **Flach & farbenfroh**, **Original-Cover-Stil**.
 - **Eigener Wunsch:** optional, zum Beispiel „Hexe fliegt nachts über das Dorf“.
 - **Grundlage:** zeigt, woher die App Reihe und Titel nimmt.
-- **Recherche (bearbeitbar):** Mit Key recherchiert die KI beim Öffnen des Cover-Managers automatisch im Internet zum Album. Den Text kannst du korrigieren, **Neu recherchieren** wiederholt das. Das Programm nennt dafür keinen Preis; abgerechnet wird über dein Google-Konto.
+- **Recherche (bearbeitbar):** **Recherchieren** lässt die KI im Internet zum Album suchen. Hast du das nicht getan, läuft die Recherche einmal automatisch vor dem ersten KI-Bild, der ersten KI-Rückseite, den Ideen oder der Stilbibel. Schreibst du selbst einen Text, entfällt sie. Das Programm nennt dafür keinen Preis; abgerechnet wird über dein Google-Konto.
 - **Vorlagen:** In der Galerie markierte Bilder mit **Als KI-Vorlage** gehen mit, insgesamt höchstens 6 zusammen mit den Serien-Ankern.
 - **Varianten:** 1 bis 4, Vorgabe 3. **Motive erzeugen** startet sofort; jede Variante ist ein Bildaufruf.
 
@@ -620,6 +620,8 @@ Sichere vor allem vor Schritten, die sich nicht rückgängig machen lassen: **SD
 
 ## 15. Fehlerbehebung
 
+Die Statusleiste unten im Hauptfenster zeigt die letzte Meldung, etwa Ergebnisse von Importen, RFID-Fehler oder fehlende Programme wie FFmpeg. Schau dort zuerst nach.
+
 ### Log-Datei
 
 Das Protokoll hilft bei der Fehlersuche. Es wird auf etwa 1 MB begrenzt und in bis zu drei älteren Dateien aufbewahrt.
@@ -681,7 +683,7 @@ Nein. Die Karte ist sofort gespeichert.
 Filter **Archiv**, Bild anklicken, **Als Vorderseite**.
 
 **Kostet das Öffnen des Cover-Managers etwas?**
-Mit Gemini-Key startet automatisch eine Recherche über das Textmodell. Das ist ein Aufruf bei Google; Bilder entstehen dabei nicht. Bildaufrufe gibt es nur über die KI-Knöpfe und die Stapel-Funktionen.
+Nein. Beim Öffnen liest die App nur die Tags und sucht Cover in den kostenlosen Quellen. Die Gemini-Recherche startet erst über **Recherchieren** oder vor einem KI-Aufruf, der sie braucht. Bildaufrufe gibt es nur über die KI-Knöpfe und die Stapel-Funktionen.
 
 **Bleiben meine RFID-Karten nach dem Bereinigen gültig?**
 Ja. Die Ordnernummern ändern sich nicht. Eine Karte im Modus **Einzelner Track** zeigt aber auf eine Tracknummer; hast du Tracks gelöscht oder verschoben, prüfe sie.
