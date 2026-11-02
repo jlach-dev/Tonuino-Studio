@@ -67,6 +67,17 @@ class OnlineCover:
         return f"{text} – {self.artist}" if self.artist else text
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Eine Umleitung wird zum HTTP-Fehler statt zu einer neuen Anfrage"""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+# urllib nimmt den Authorization-Header auf jedes Umleitungsziel mit
+_open_without_redirect = urllib.request.build_opener(_NoRedirect()).open
+
+
 def _get(url: str, accept: str = "*/*", max_bytes: int = MAX_IMAGE_BYTES, headers: Optional[dict] = None,
          data: Optional[bytes] = None) -> bytes:
     host = urllib.parse.urlparse(url).hostname or ""
@@ -79,7 +90,8 @@ def _get(url: str, accept: str = "*/*", max_bytes: int = MAX_IMAGE_BYTES, header
             _host_last[host] = time.monotonic()
     request = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT, "Accept": accept,
                                                                **(headers or {})})
-    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+    opener = _open_without_redirect if request.has_header("Authorization") else urllib.request.urlopen
+    with opener(request, timeout=HTTP_TIMEOUT) as response:
         body = response.read(max_bytes + 1)
     if len(body) > max_bytes:
         raise ValueError("Antwort zu gross")

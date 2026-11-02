@@ -218,6 +218,9 @@ def search_itunes(title: str, artist: str = "", limit: int = 6, country: str = "
 
 
 def _spotify_get(url: str) -> dict:
+    # "next" kommt aus der Antwort; das Token geht nur an die Spotify-API
+    if not url.startswith("https://api.spotify.com/"):
+        raise ValueError("Unerwartete Spotify-Adresse")
     token = cover_sources._spotify_access_token()
     return json.loads(cover_sources._get(url, accept="application/json",
                                          headers={"Authorization": f"Bearer {token}"}))

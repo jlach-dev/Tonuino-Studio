@@ -251,7 +251,8 @@ def _collect_urls(obj, found: List[str]):
 
 def make_client(api_key: str):
     from google import genai
-    return genai.Client(api_key=api_key)
+    # httpx nimmt x-goog-api-key sonst auf jedes Umleitungsziel mit
+    return genai.Client(api_key=api_key, http_options={"client_args": {"follow_redirects": False}})
 
 
 def research_with_gemini(client, model: str, info: FolderInfo, extra: str = "") -> CoverBrief:
