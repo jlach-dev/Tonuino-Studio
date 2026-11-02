@@ -10,6 +10,7 @@ MainWindow und greifen auf dessen Attribute zu.
 
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QSettings
@@ -21,7 +22,7 @@ from core.card_layout import ORIENTATION_PORTRAIT
 from core.library import SETTINGS_WRITE_ID_TAGS, Library, LibraryIndex
 from core.sd_card import Folder, Track, MAX_TRACKS_PER_FOLDER
 from gui.card_cover_dialog import AiSettingsDialog
-from gui.common import confirm_action
+from gui.common import confirm_action, keep_open_until_done
 from gui.cover_manager_dialog import CoverManagerDialog, SETTINGS_DATA_DIR, get_archive
 from gui.data_folder_dialog import DataFolderDialog
 from gui.library_settings_dialog import LibrarySourcesDialog, library_sources
@@ -494,6 +495,7 @@ class LibraryMixin:
             self._start_next_import()
             return
         write_tags = True if album.album_id else self._ask_write_id_tags()
+        created = folder is None
         if folder is None:
             free = next((i for i in range(1, 100) if i not in self.sd_card.folders), None)
             if free is None:
@@ -536,13 +538,14 @@ class LibraryMixin:
         worker = TrackAddWorker(target, files, self.audio_converter, self.metadata_manager)
         job = {"album": album, "folder": folder, "mode": mode, "worker": worker, "dialog": dialog,
                "previous": list(folder.tracks) if staging is None else None,
-               "errors": [], "write_tags": write_tags, "staging": staging}
+               "errors": [], "write_tags": write_tags, "staging": staging, "expected": len(files),
+               "created": created}
         self._import_job = job
         worker.progress.connect(lambda cur, total, name: self._on_import_progress(dialog, cur, total, name))
         worker.track_added.connect(lambda track: target.tracks.append(track))
         worker.error.connect(lambda name, msg: job["errors"].append(f"{name}: {msg}"))
         worker.completed.connect(self._on_import_copied)
-        dialog.canceled.connect(worker.cancel)
+        keep_open_until_done(dialog, worker.cancel)
         worker.start()
 
     @staticmethod
@@ -563,10 +566,15 @@ class LibraryMixin:
         folder, album = job["folder"], job["album"]
         if self.sd_card is None:
             return  # Karte wurde waehrend des Kopierens entfernt
+        if job["cancelled"]:
+            self._import_queue.clear()  # Abbrechen gilt fuer alles, was noch wartet
         staging = job["staging"]
         if staging is not None and not self._commit_replace(job, added):
-            if self._import_queue:
-                self._start_next_import()
+            self._import_queue.clear()  # weitere Alben haetten sich an die alten Tracks gehaengt
+            return
+        if job["cancelled"] and added == 0:
+            self._drop_empty_new_folder(job)
+            self.status_bar.showMessage(f"Ordner {folder.index:02d}: Import abgebrochen")
             return
         folder.tracks.sort(key=lambda t: t.index)
         result = library_import.ImportResult(added=added, errors=list(job["errors"]))
@@ -574,9 +582,11 @@ class LibraryMixin:
         try:
             self._release_files()
             orientation = QSettings().value(SETTINGS_ORIENTATION, ORIENTATION_PORTRAIT, type=str)
+            # Nach einem Abbruch die Originaldateien nicht mehr anfassen
+            write_tags = job["write_tags"] and not job["cancelled"]
             result = library_import.finish_import(self.sd_card, folder, album, get_archive(self, ask=False),
-                                                  self.metadata_manager, job["write_tags"], orientation, result,
-                                                  previous_tracks=job["previous"])
+                                                  self.metadata_manager, write_tags, orientation, result,
+                                                  previous_tracks=job["previous"], replaced=staging is not None)
         finally:
             QApplication.restoreOverrideCursor()
         if result.album_id:
@@ -602,14 +612,16 @@ class LibraryMixin:
         zurueck, ob ersetzt wurde (nur dann folgt der Album-Abgleich)."""
         folder, staging = job["folder"], job["staging"]
         self._release_files()
-        if job["cancelled"] or added == 0:
+        incomplete = added < job["expected"]
+        if job["cancelled"] or incomplete:
             library_import.discard_staging_folder(staging)
-            reason = "abgebrochen" if job["cancelled"] else "keine Tracks kopiert"
+            reason = "abgebrochen" if job["cancelled"] else f"nur {added} von {job['expected']} Tracks kopiert"
             self.status_bar.showMessage(f"Ordner {folder.index:02d}: Ersetzen {reason} – die bisherigen Tracks "
                                         "bleiben erhalten")
             if job["errors"]:
                 QMessageBox.warning(self, "Ersetzen fehlgeschlagen",
-                                    "Es wurde nichts ersetzt, die bisherigen Tracks bleiben erhalten.\n\n"
+                                    "Es wurde nichts ersetzt, die bisherigen Tracks bleiben erhalten. Beim Ersetzen "
+                                    "braucht die Karte kurz Platz für alte und neue Tracks.\n\n"
                                     + "\n".join(job["errors"]))
             return False
         try:
@@ -621,6 +633,19 @@ class LibraryMixin:
             self._rescan_after_failed_replace()
             return False
         return True
+
+    def _drop_empty_new_folder(self, job: dict):
+        """Abbruch vor dem ersten Track: der eigens angelegte Ordner soll nicht leer stehen bleiben"""
+        folder = job["folder"]
+        try:
+            if job["created"] and not folder.tracks and not any(Path(folder.path).iterdir()):
+                self.sd_card.delete_folder(folder.index)
+                if self.current_folder is folder:
+                    self.current_folder = None
+                    self._show_welcome()
+                self._populate_folder_list()
+        except OSError:
+            log.exception("Leeren Ordner nach Abbruch nicht entfernt")
 
     def _rescan_after_failed_replace(self):
         """Nach einem halb ausgefuehrten Austausch den Kartenstand neu einlesen"""

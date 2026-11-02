@@ -556,6 +556,10 @@ def folder_signature(files: List[str]) -> str:
     return f"{len(files)}:{newest:.0f}"
 
 
+# Zwei verschiedene Singles gleicher Laenge haetten denselben Fingerabdruck
+MIN_FINGERPRINT_TRACKS = 2
+
+
 def fingerprint(durations: List[float]) -> str:
     """Trackzahl + auf ganze Sekunden gerundete Laengen - erkennt dieselbe
     Aufnahme auch als konvertierte Kopie (z.B. auf der SD-Karte)"""
@@ -757,7 +761,7 @@ class Library:
                 album.state = STATE_OFFLINE
                 continue
             record = records.get(album.album_id) if album.album_id else None
-            if record is None and album.fingerprint and not album.album_id:
+            if record is None and album.fingerprint and not album.album_id and len(album.tracks) >= MIN_FINGERPRINT_TRACKS:
                 record = by_fingerprint.get(album.fingerprint)
             if record is None:
                 album.state = STATE_NEW

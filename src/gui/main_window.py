@@ -31,7 +31,9 @@ from gui.main_window_cards import CardCoverMixin
 from gui.main_window_frame import WindowFrameMixin
 from gui.main_window_library import LibraryMixin
 from gui.compact_buttons import CompactButtons
-from gui.common import resource_path, heading_font, confirm_action, icon_from_glyph, icon_with_hover
+from gui.common import (
+    resource_path, heading_font, confirm_action, icon_from_glyph, icon_with_hover, keep_open_until_done,
+)
 from gui.track_list import ROW_NOT_CHECKABLE_ROLE, HoverListWidget, InlineLineEdit, FloatingIconRow, reorder_with_selection
 from gui.workers import (
     SDCardScanner, TrackAddWorker, FolderNameWorker, FolderRenameWorker, TrackMetaWorker, PurgeWorker,
@@ -879,6 +881,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self._stop_folder_name_worker()
         self._stop_track_meta_worker()
 
+        self._import_queue.clear()  # gehoert zur entfernten Karte
         self.sd_card = None
         self.current_folder = None
         self._folder_name_cache.clear()
@@ -1573,7 +1576,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self._add_tracks_worker.track_added.connect(self._on_track_added)
         self._add_tracks_worker.error.connect(self._on_add_tracks_error)
         self._add_tracks_worker.completed.connect(self._on_add_tracks_finished)
-        self._add_tracks_dialog.canceled.connect(self._add_tracks_worker.cancel)
+        keep_open_until_done(self._add_tracks_dialog, self._add_tracks_worker.cancel)
 
         self._add_tracks_worker.start()
 

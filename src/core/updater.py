@@ -148,6 +148,11 @@ class UpdateChecker(QThread):
                 asset_digest=asset.get("digest") or "",
             )
             self.update_available.emit(info)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:  # GitHub kennt noch kein Release
+                self.no_update.emit()
+            else:
+                self.check_failed.emit(str(e))
         except Exception as e:
             self.check_failed.emit(str(e))
 

@@ -21,8 +21,10 @@ from typing import Callable, List, Optional
 
 from core import album_identity, card_store
 from core.card_layout import BACK_MODE_IMAGE, ORIENTATION_PORTRAIT, prepare_card_art
-from core.cover_archive import ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive
-from core.library import LibraryAlbum, LibraryIndex, read_album, write_album_cover, write_album_id_to_album
+from core.cover_archive import KIND_LOCAL, ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive
+from core.library import (
+    MIN_FINGERPRINT_TRACKS, LibraryAlbum, LibraryIndex, read_album, write_album_cover, write_album_id_to_album,
+)
 from core.sd_card import Folder, SDCard, Track
 
 log = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ class ImportResult:
     card_written: bool = False
     back_written: bool = False
     card_kept: bool = False  # Anhaengen: die Karte des Ordners gehoert zu einem anderen Album und bleibt
+    old_card_archived: bool = False  # Ersetzen: die Karte des alten Albums liegt jetzt im Archiv
     errors: List[str] = field(default_factory=list)
 
     @property
@@ -51,6 +54,8 @@ class ImportResult:
             parts.append("Kartencover übernommen" + (" (mit Rückseite)" if self.back_written else ""))
         if self.card_kept:
             parts.append("bisheriges Kartencover des Ordners beibehalten")
+        if self.old_card_archived:
+            parts.append("Kartencover des alten Albums im Archiv abgelegt")
         if self.library_tagged:
             parts.append(f"Album-ID in {self.library_tagged} Bibliotheksdatei(en) geschrieben")
         return ", ".join(parts)
@@ -101,6 +106,11 @@ def commit_staged_replace(sd_card: SDCard, folder: Folder, staging: Folder) -> b
         discard_staging_folder(staging)
         return False
     clear_folder_tracks(sd_card, folder)
+    # Seit dem Scan kann etwas dazugekommen sein (Explorer) oder als Zweitdatei liegen
+    # (002_Alt.mp3): das wuerde sonst dem Umbenennen im Weg stehen oder als Track gelten
+    for item in Path(folder.path).iterdir():
+        if item.is_file() and SDCard.TRACK_PATTERN.match(item.name):
+            item.unlink()
     moved = []
     for position, track in enumerate(staged, start=1):
         target = Path(folder.path) / f"{position:03d}.mp3"
@@ -118,12 +128,13 @@ def resolve_album_id(album: LibraryAlbum, archive: Optional[CoverArchive]) -> st
     if album.album_id:
         return album.album_id
     if archive is not None:
-        if album.fingerprint:
+        if album.fingerprint and len(album.tracks) >= MIN_FINGERPRINT_TRACKS:
             for record in archive.all_albums():
                 if record.fingerprint and record.fingerprint == album.fingerprint:
                     return record.id
         record = archive.find_album(album.title, album.artist) if album.title else None
-        if record is not None:
+        # Gleicher Titel ohne bekannten Interpreten beweist nichts („Folge 1“)
+        if record is not None and record.artist.strip().lower() == album.artist.strip().lower():
             return record.id
     return album_identity.new_album_id()
 
@@ -211,6 +222,23 @@ def _write_card(folder: Folder, album: LibraryAlbum, album_id: str, archive: Cov
         card_store.delete_back(folder.path)
 
 
+def _retire_old_card(folder: Folder, album_id: str, archive: CoverArchive, result: ImportResult):
+    """Ersetzen: Die Karte zeigt noch das alte Album. Ihr Motiv kommt ins Archiv, dann wird
+    sie entfernt, sonst stimmen Druckbogen und Zuordnung des Ordners nicht mehr."""
+    meta = card_store.load_meta(folder.path)
+    if not card_store.has_card(folder.path) or (meta is not None and meta.album_id == album_id):
+        return
+    owner = (meta.album_id if meta is not None else "") or album_id
+    raw = card_store.card_paths(folder.path)[1]
+    if not raw.exists():
+        raw = card_store.card_paths(folder.path)[0]
+    archive.ensure_album(owner, meta.title if meta is not None else "")
+    archive.add_cover(owner, raw.read_bytes(), KIND_LOCAL, source="Früheres Kartenmotiv")
+    card_store.delete_card(folder.path)
+    folder.card_path = None
+    result.old_card_archived = True
+
+
 def archive_album_cover(archive: CoverArchive, album_id: str) -> Optional[bytes]:
     """Das im Archiv als Album-Cover markierte Bild (Rohdaten) oder None"""
     entry = next((e for e in archive.covers(album_id) if ROLE_ALBUM_COVER in e.roles), None)
@@ -268,11 +296,13 @@ def embed_archive_covers(index: LibraryIndex, archive: CoverArchive,
 
 def finish_import(sd_card: SDCard, folder: Folder, album: LibraryAlbum, archive: Optional[CoverArchive],
                   metadata_manager, write_library_tags: bool, orientation: str = ORIENTATION_PORTRAIT,
-                  result: Optional[ImportResult] = None, previous_tracks: Optional[List] = None) -> ImportResult:
+                  result: Optional[ImportResult] = None, previous_tracks: Optional[List] = None,
+                  replaced: bool = False) -> ImportResult:
     """Schritte 2-5 nach dem Kopieren (siehe Modul-Doku). folder.tracks muss die
     kopierten Tracks enthalten. previous_tracks: beim Anhaengen die Tracks, die
     schon vorher im Ordner lagen - sie behalten ihre Album-ID, und eine Karte
-    eines anderen Albums wird nicht ersetzt."""
+    eines anderen Albums wird nicht ersetzt. replaced: der Ordner hatte ein anderes Album,
+    dessen Karte gehoert nicht mehr hierher."""
     previous_ids = {id(t) for t in previous_tracks or []}
     result = result or ImportResult()
     try:
@@ -305,6 +335,8 @@ def finish_import(sd_card: SDCard, folder: Folder, album: LibraryAlbum, archive:
         if changed:
             archive.save_album(record)
         result.cover_embedded = _embed_album_cover(folder, album_id, archive, metadata_manager)
+        if replaced:
+            _retire_old_card(folder, album_id, archive, result)
         existing = card_store.load_meta(folder.path) if previous_ids else None
         if previous_ids and card_store.has_card(folder.path) and (existing is None or existing.album_id != album_id):
             result.card_kept = True  # Karte (samt Rueckseite) des bisherigen Ordnerinhalts behalten
@@ -328,8 +360,8 @@ def import_album(sd_card: SDCard, folder: Folder, album: LibraryAlbum, audio_con
     result = ImportResult()
     previous = list(folder.tracks) if mode != MODE_REPLACE else None
     target = create_staging_folder(folder) if mode == MODE_REPLACE else folder
-    worker = TrackAddWorker(target, list(tracks) if tracks else list(album.tracks), audio_converter,
-                            metadata_manager)
+    files = list(tracks) if tracks else list(album.tracks)
+    worker = TrackAddWorker(target, files, audio_converter, metadata_manager)
 
     def on_added(track):
         target.tracks.append(track)
@@ -340,11 +372,15 @@ def import_album(sd_card: SDCard, folder: Folder, album: LibraryAlbum, audio_con
     if progress is not None:
         worker.progress.connect(progress)
     worker.run()  # synchron im aufrufenden Thread
-    if target is not folder and not commit_staged_replace(sd_card, folder, target):
-        return result  # nichts kopiert - alte Tracks bleiben, kein Album-Abgleich
+    if target is not folder:
+        if result.added < len(files):
+            discard_staging_folder(target)
+            return result  # nicht alles kopiert - alte Tracks bleiben, kein Album-Abgleich
+        if not commit_staged_replace(sd_card, folder, target):
+            return result
     folder.tracks.sort(key=lambda t: t.index)
     return finish_import(sd_card, folder, album, archive, metadata_manager, write_library_tags, orientation, result,
-                         previous_tracks=previous)
+                         previous_tracks=previous, replaced=mode == MODE_REPLACE)
 
 
 def group_tracks_by_album(paths: List[str]) -> List[tuple]:

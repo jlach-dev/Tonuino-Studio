@@ -335,3 +335,39 @@ def test_scan_keeps_albums_of_unreadable_folders(tmp_path, monkeypatch):
     names = {a.name: a.offline for a in second.albums}
     assert names == {"Eins": False, "Zwei": True}
     assert second.unreadable and second.unreadable[0].endswith("B")
+
+
+def test_album_id_is_not_taken_from_weak_matches(tmp_path):
+    from core.cover_archive import AlbumRecord, CoverArchive
+    from core.library import LibraryAlbum
+    from core.library_import import resolve_album_id
+
+    archive = CoverArchive(str(tmp_path))
+    archive.save_album(AlbumRecord(id="bibi", title="Folge 1", artist="Bibi", fingerprint="fp-single"))
+    archive.save_album(AlbumRecord(id="zwei", title="Doppel", artist="X", fingerprint="fp-zwei"))
+
+    # gleicher Titel, aber ohne Interpret: anderes Album
+    assert resolve_album_id(LibraryAlbum(path="a", title="Folge 1"), archive) != "bibi"
+    assert resolve_album_id(LibraryAlbum(path="a", title="Folge 1", artist="bibi"), archive) == "bibi"
+    # Einzelner Track: gleiche Laenge beweist nichts, ab zwei Tracks gilt der Fingerabdruck
+    single = LibraryAlbum(path="s", fingerprint="fp-single", tracks=["1.mp3"])
+    assert resolve_album_id(single, archive) != "bibi"
+    double = LibraryAlbum(path="d", fingerprint="fp-zwei", tracks=["1.mp3", "2.mp3"])
+    assert resolve_album_id(double, archive) == "zwei"
+
+
+def test_update_check_without_any_release_is_no_failure(monkeypatch):
+    import io
+    import urllib.error
+    from core import updater
+
+    def not_found(request, timeout=0):
+        raise urllib.error.HTTPError(updater.GITHUB_API_URL, 404, "Not Found", {}, io.BytesIO())
+
+    monkeypatch.setattr(updater.urllib.request, "urlopen", not_found)
+    checker = updater.UpdateChecker("2.0.0")
+    results = []
+    checker.no_update.connect(lambda: results.append("none"))
+    checker.check_failed.connect(lambda message: results.append(message))
+    checker.run()
+    assert results == ["none"]

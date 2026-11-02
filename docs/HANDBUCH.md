@@ -256,6 +256,8 @@ Beim **Ersetzen** kopiert die App zuerst in einen Zwischenordner. Brichst du ab 
 
 Nach dem Kopieren geschieht von selbst: Die Kopie auf der SD-Karte bekommt die Album-ID, ein fehlendes Album-Cover kommt aus dem Archiv in die Tracks, und ein Kartencover aus dem Archiv wird mit auf die Karte geschrieben. Hängst du an einen Ordner an, der schon das Kartencover eines anderen Albums hat, bleibt dieses.
 
+**Ersetzen** tauscht die Tracks erst, wenn alle kopiert sind; sonst bleiben die alten, auch nach einem Abbruch. Die Karte braucht dafür kurz Platz für alte und neue Tracks. Das Kartencover des alten Albums kommt ins Archiv. **Abbrechen** gilt auch für weitere Alben, die noch warten.
+
 ### Album-ID
 
 Die Album-ID ist ein kleiner Tag (`TXXX:TONUINO_ALBUM_ID`), an dem die App ein Album wiedererkennt, auch wenn du es umbenennst oder verschiebst. Auf die SD-Karte kommt sie immer. Beim ersten Import fragt die App einmalig, ob sie auch in deine Originaldateien darf (MP3, FLAC, M4A, OGG; WAV wird übersprungen, die Musik selbst bleibt unverändert). Lehnst du ab, bleibt die Bibliothek unangetastet und die Zuordnung ist weniger robust. Unter **Bibliothek-Ordner …** setzt du die Antwort mit **Entscheidung zurücksetzen** zurück.

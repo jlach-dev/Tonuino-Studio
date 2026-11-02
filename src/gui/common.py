@@ -38,6 +38,19 @@ def heading_font(point_size: int) -> QFont:
     return font
 
 
+def keep_open_until_done(dialog, on_cancel):
+    """QProgressDialog schliesst sich beim Abbrechen sofort, der Worker kopiert aber noch
+    die aktuelle Datei zu Ende. Das Fenster bleibt deshalb gesperrt, bis er fertig ist,
+    sonst liesse sich derselbe Ordner in dieser Zeit verschieben oder loeschen."""
+    dialog.canceled.disconnect(dialog.cancel)
+
+    def cancel():
+        on_cancel()
+        dialog.setLabelText("Wird nach der aktuellen Datei abgebrochen …")
+
+    dialog.canceled.connect(cancel)
+
+
 def confirm_action(parent, title: str, text: str, default_no: bool = True) -> bool:
     """Zeigt einen Ja/Nein-Bestaetigungsdialog mit deutschen Buttons.
     Qt uebersetzt die Standard-Yes/No-Buttons von QMessageBox.question() nicht

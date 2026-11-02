@@ -492,3 +492,114 @@ def test_tags_written_keep_the_manual_name(app, window_with_folder):
     window, _folder, _other = window_with_folder
     window._after_tags_written(window.current_folder, "Neuer Album-Tag", 2)
     assert window.folder_title.text() == "Mein Name"
+
+
+def test_incomplete_replace_keeps_old_tracks(app, window_with_folder, monkeypatch):
+    """Karte laeuft beim Zwischenkopieren voll: die alten Tracks duerfen nicht verschwinden"""
+    from core.library_import import MODE_REPLACE
+    from gui import main_window_library as module
+    from gui import workers
+
+    window, folder, other = window_with_folder
+    before = {p.name: p.read_bytes() for p in folder.glob("*.mp3")}
+    real_copy, calls = workers.shutil.copy2, []
+
+    def full_after_first(source, target):
+        calls.append(source)
+        if len(calls) > 1:
+            raise OSError(28, "No space left on device")
+        return real_copy(source, target)
+
+    warnings = []
+    monkeypatch.setattr(workers.shutil, "copy2", full_after_first)
+    monkeypatch.setattr(module.QMessageBox, "warning", lambda *a: warnings.append(a[2]))
+    monkeypatch.setattr(window, "_ask_replace_or_append", lambda *_: MODE_REPLACE)
+    window._on_albums_dropped([str(other)], 1)
+    finish_import(app, window)
+
+    assert {p.name: p.read_bytes() for p in folder.glob("*.mp3")} == before
+    assert not list(folder.glob(".tmp_*"))
+    assert "nichts ersetzt" in warnings[0] and "nur 1 von 3" in window.status_bar.currentMessage()
+
+
+def test_failed_replace_stops_waiting_albums(app, window_with_folder, tmp_path, monkeypatch):
+    from core.library_import import MODE_REPLACE
+    from gui import main_window_library as module
+
+    class CancelledAtOnce(module.TrackAddWorker):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.cancel()
+
+    window, folder, other = window_with_folder
+    second = make_album(tmp_path / "Musik", "Zweites", count=2)
+    monkeypatch.setattr(module, "TrackAddWorker", CancelledAtOnce)
+    monkeypatch.setattr(window, "_ask_replace_or_append", lambda *_: MODE_REPLACE)
+    window._on_albums_dropped([str(other), str(second)], 1)
+    finish_import(app, window)
+    assert not window._import_queue and sorted(p.name for p in folder.glob("*.mp3")) == ["001.mp3", "002.mp3"]
+
+
+def test_cancelled_import_into_new_folder_leaves_nothing(app, window_with_folder, tmp_path, monkeypatch):
+    from core import library_import
+    from gui import main_window_library as module
+
+    class CancelledAtOnce(module.TrackAddWorker):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.cancel()
+
+    window, _folder, other = window_with_folder
+    monkeypatch.setattr(module, "TrackAddWorker", CancelledAtOnce)
+    finished = []
+    monkeypatch.setattr(library_import, "finish_import", lambda *a, **k: finished.append(a))
+    window._on_albums_dropped([str(other)], None)
+    finish_import(app, window)
+    assert 2 not in window.sd_card.folders and not (tmp_path / "sd" / "02").exists()
+    assert not finished and "abgebrochen" in window.status_bar.currentMessage()
+
+
+def test_replace_removes_files_added_since_the_scan(app, window_with_folder, monkeypatch):
+    from core.library_import import MODE_REPLACE
+
+    window, folder, other = window_with_folder
+    (folder / "003.mp3").write_bytes(b"im Explorer dazugekommen")
+    (folder / "002_Alt.mp3").write_bytes(b"Zweitdatei")
+    (folder / "notiz.txt").write_bytes(b"bleibt")
+    monkeypatch.setattr(window, "_ask_replace_or_append", lambda *_: MODE_REPLACE)
+    window._on_albums_dropped([str(other)], 1)
+    finish_import(app, window)
+    assert sorted(p.name for p in folder.glob("*.mp3")) == ["001.mp3", "002.mp3", "003.mp3"]
+    assert titles(folder) == ["Titel 1", "Titel 2", "Titel 3"]
+    assert not list(folder.glob(".tmp_*")) and (folder / "notiz.txt").exists()
+
+
+def test_replace_moves_card_of_old_album_to_archive(app, window_with_folder, tmp_path, monkeypatch):
+    from PIL import Image
+    from core import card_store
+    from core.library_import import MODE_REPLACE
+
+    window, folder, other = window_with_folder
+    card_store.save_card(str(folder), Image.new("RGB", (400, 600), "red"), card_store.CardMeta(title="A", album_id="id-a"), 1)
+    window.current_folder.card_path = str(card_store.card_paths(str(folder))[0])
+    monkeypatch.setattr(window, "_ask_replace_or_append", lambda *_: MODE_REPLACE)
+    window._on_albums_dropped([str(other)], 1)
+    finish_import(app, window)
+
+    assert not card_store.has_card(str(folder)) and not window.current_folder.card_path
+    assert len(CoverArchive(str(tmp_path / "data")).covers("id-a")) == 1
+    assert "im Archiv abgelegt" in window.status_bar.currentMessage()
+
+
+def test_cancel_keeps_progress_dialog_open_until_worker_ends(app):
+    from PyQt6.QtWidgets import QProgressDialog
+    from gui.common import keep_open_until_done
+
+    dialog = QProgressDialog("x", "Abbrechen", 0, 3)
+    dialog.setMinimumDuration(0)
+    cancelled = []
+    keep_open_until_done(dialog, lambda: cancelled.append(1))
+    dialog.show()
+    dialog.canceled.emit()
+    assert cancelled and dialog.isVisible() and "abgebrochen" in dialog.labelText()
+    dialog.close()
