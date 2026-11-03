@@ -1,6 +1,6 @@
 # Tonuino-Studio – Benutzerhandbuch
 
-Gilt für Version 2.0.0. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
+Gilt für Version 2.0.1. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
 
 > Die Bilder zeigen die echte Oberfläche, aber erfundene Hörspiele mit selbst gezeichneten Covern. Sie entstehen mit `tools/make_manual_screenshots.py`.
 
@@ -759,6 +759,6 @@ Nur wenn du die Online-Funktionen nutzt. Suchanfragen gehen an die gewählten Di
 
 ## 17. Lizenz und Herkunft
 
-Tonuino-Studio baut auf [donschoof/tonuino-manager](https://github.com/donschoof/tonuino-manager) von David Schäfer auf und übernimmt dessen Weiterentwicklung. Es steht unter der MIT-Lizenz, siehe `LICENSE`.
+Tonuino-Studio baut auf [donschoof/tonuino-manager](https://github.com/donschoof/tonuino-manager) von David Schäfer auf und übernimmt dessen Weiterentwicklung. Es steht unter der GNU General Public License v3.0, siehe `LICENSE`: Du darfst es nutzen, auch kommerziell, ändern und weitergeben, musst beim Weitergeben aber den Quellcode unter derselben Lizenz bereitstellen. Der übernommene Code des Originals bleibt zusätzlich unter dessen MIT-Lizenz, siehe `LICENSE-MIT-tonuino-manager.txt`.
 
 Weitere mitgelieferte Teile haben eigene Lizenzen, unter anderem FFmpeg (im Windows-Build GPLv3) und Material Symbols (Apache License 2.0). Die Übersicht steht in **Einstellungen** → **Über Tonuino-Studio …** und im `README.md`.

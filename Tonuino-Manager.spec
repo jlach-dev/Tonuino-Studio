@@ -56,6 +56,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ('src/resources', 'src/resources'),
+        ('LICENSE', '.'),
+        ('LICENSE-MIT-tonuino-manager.txt', '.'),
         (_ffmpeg_exe, 'imageio_ffmpeg/binaries'),
     ],
     hiddenimports=[

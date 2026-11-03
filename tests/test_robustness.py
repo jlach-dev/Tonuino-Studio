@@ -237,6 +237,15 @@ def test_tonuino_write_buttons_stay_disabled_while_the_box_waits(app, monkeypatc
         panel.shutdown()
 
 
+def test_license_files_are_bundled_and_keep_the_original_notice():
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    assert "GNU GENERAL PUBLIC LICENSE" in (root / "LICENSE").read_text(encoding="utf-8")
+    assert "David Schäfer" in (root / "LICENSE-MIT-tonuino-manager.txt").read_text(encoding="utf-8")
+    spec = (root / "Tonuino-Manager.spec").read_text(encoding="utf-8")
+    assert "('LICENSE', '.')" in spec and "('LICENSE-MIT-tonuino-manager.txt', '.')" in spec
+
+
 def test_about_text_names_fork_author_and_original():
     from core import __version__
     from gui.about_dialog import about_text

@@ -4,7 +4,7 @@ Ein hübsches Tool zum Verwalten von Tonuino SD-Karten und RFID-Karten für Wind
 
 Tonuino-Studio ist ein Fork von [Tonuino-Manager](https://github.com/donschoof/tonuino-manager) (donschoof) und übernimmt dessen Weiterentwicklung regelmäßig. Beide Programme lassen sich nebeneinander installieren.
 
-![Tonuino-Studio](docs/screenshot.png)
+![Tonuino-Studio](docs/screenshots/hauptfenster.png)
 
 ## Features
 
@@ -181,8 +181,12 @@ Die Bedienungsanleitung steht in [docs/HANDBUCH.md](docs/HANDBUCH.md). Ihre Bild
 
 Tonuino-Studio baut auf [tonuino-manager](https://github.com/donschoof/tonuino-manager) von David Schäfer auf und ergänzt es um Bibliothek, Cover-Manager und Kartendruck.
 
-MIT License, siehe [LICENSE](LICENSE).
+Tonuino-Studio steht unter der **GNU General Public License v3.0**, siehe [LICENSE](LICENSE). Kommerzielle Nutzung ist erlaubt, wer die App weitergibt oder verändert weitergibt, muss den Quellcode aber unter derselben Lizenz bereitstellen. Copyright (c) 2026 jlach-dev; ohne jede Gewährleistung.
 
-Die Releases enthalten FFmpeg (über [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)). Der unter Windows gebündelte Build (FFmpeg 7.1, „essentials“ von [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)) ist mit `--enable-gpl --enable-version3` gebaut und steht damit unter der **GPLv3**; Quellcode und Lizenztext gibt es bei [ffmpeg.org](https://ffmpeg.org/download.html) bzw. beim jeweiligen Builder. Die Linux- und macOS-Builds stammen ebenfalls aus imageio-ffmpeg und wurden hier nicht auf ihre Lizenz geprüft. Für das mitgelieferte FFmpeg gelten dessen Lizenzbedingungen, nicht die MIT-Lizenz dieses Projekts.
+Der aus tonuino-manager übernommene Code bleibt zusätzlich unter dessen MIT-Lizenz, siehe [LICENSE-MIT-tonuino-manager.txt](LICENSE-MIT-tonuino-manager.txt). Für Änderungen, die direkt an das Original gehen (Pull Requests), gilt dessen Lizenz.
+
+Die GPLv3 passt auch zu den mitgelieferten Bibliotheken [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) (GPL-3.0) und [mutagen](https://github.com/quodlibet/mutagen) (GPL-2.0 oder neuer).
+
+Die Releases enthalten FFmpeg (über [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)). Der unter Windows gebündelte Build (FFmpeg 7.1, „essentials“ von [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)) ist mit `--enable-gpl --enable-version3` gebaut und steht damit unter der **GPLv3**; Quellcode und Lizenztext gibt es bei [ffmpeg.org](https://ffmpeg.org/download.html) bzw. beim jeweiligen Builder. Die Linux- und macOS-Builds stammen ebenfalls aus imageio-ffmpeg und wurden hier nicht auf ihre Lizenz geprüft. Für das mitgelieferte FFmpeg gelten dessen eigene Lizenzbedingungen.
 
 Enthält [Material Symbols](https://github.com/google/material-design-icons) (Apache License 2.0, siehe `src/resources/fonts/MaterialIcons-LICENSE.txt`).
