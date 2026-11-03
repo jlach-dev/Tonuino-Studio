@@ -667,6 +667,12 @@ Sichere vor allem vor Schritten, die sich nicht rückgängig machen lassen: **SD
 
 Die Statusleiste unten im Hauptfenster zeigt die letzte Meldung, etwa Ergebnisse von Importen, RFID-Fehler oder fehlende Programme wie FFmpeg. Schau dort zuerst nach.
 
+### Die KI liefert kein Bild
+
+Bei KI-Motiven oder **Rand per KI ergänzen** kann die KI ein Bild ablehnen, gerade bei Covern und Figuren bekannter Hörspiele. Du siehst dann etwa **Das Modell hat kein Bild geliefert**. Das ist kein Fehler der App, sondern vermutlich eine rechtliche Einschränkung beim Anbieter, etwa wegen des Urheberrechts. Den genauen Grund nennt er nicht immer.
+
+Versuche es ohne dieses Bild als Vorlage oder beschreibe unter **Eigener Wunsch** ein eigenes Motiv. Für die Rückseite gehen auch **Ambient Blur der Vorderseite (ohne KI)** und **Farbverlauf aus den Coverfarben (ohne KI)**.
+
 ### Dateinamen auf der SD-Karte
 
 Die App erkennt `001.mp3` und auch `001_Titel.mp3` als Track, denn der DFPlayer wertet nur die ersten drei Ziffern aus. Gibt es beide mit derselben Nummer, gilt `001.mp3`. Beim Einlesen ändert die App nichts an den Dateien. Löschst du einen Track aus der Mitte oder sortierst um, heißen die Dateien danach `001.mp3`, `002.mp3` und so weiter; der Text im Dateinamen entfällt dann.

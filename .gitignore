@@ -34,8 +34,9 @@ desktop.ini
 .mypy_cache/
 .ruff_cache/
 
-# Lokale Werkzeug-Einstellungen und Arbeitskopien
+# Lokale Werkzeug-Einstellungen, Arbeitskopien und Arbeitsliste
 .claude/
+PROGRESS.md
 
 # Lokale Umgebungsvariablen / Secrets
 .env
