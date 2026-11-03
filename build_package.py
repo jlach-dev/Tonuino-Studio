@@ -186,7 +186,7 @@ Priority: optional
 Architecture: {arch}
 Depends: pcscd, libpcsclite1, libpulse0
 Maintainer: Tonuino-Studio <tonuino-studio@localhost>
-Homepage: https://github.com/jlach-dev/Tonuino-manager
+Homepage: https://github.com/jlach-dev/Tonuino-Studio
 Description: Tonuino SD-Karten und RFID-Karten verwalten
  Tonuino-Studio (Fork von Tonuino-Manager) verwaltet SD-Karten (Ordner/Dateien für den DIY-Audio-
  Player Tonuino) und die zugehörigen RFID-Karten.

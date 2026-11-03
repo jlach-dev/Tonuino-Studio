@@ -1,6 +1,6 @@
 # Tonuino-Studio – Benutzerhandbuch
 
-Gilt für Version 2.0.1. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
+Gilt für Version 2.0.2. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
 
 > Die Bilder zeigen die echte Oberfläche, aber erfundene Hörspiele mit selbst gezeichneten Covern. Sie entstehen mit `tools/make_manual_screenshots.py`.
 
@@ -54,7 +54,7 @@ Für das Befüllen und Programmieren brauchst du kein Konto und keinen Key. Keys
 
 ### Installieren
 
-Die fertigen Programme liegen auf der [Releases-Seite](https://github.com/jlach-dev/Tonuino-manager/releases/latest). Python brauchst du dafür nicht, FFmpeg (das Programm zum Umwandeln von Audio) ist enthalten.
+Die fertigen Programme liegen auf der [Releases-Seite](https://github.com/jlach-dev/Tonuino-Studio/releases/latest). Python brauchst du dafür nicht, FFmpeg (das Programm zum Umwandeln von Audio) ist enthalten.
 
 | System | Datei | So geht's |
 | --- | --- | --- |

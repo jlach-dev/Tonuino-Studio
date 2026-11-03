@@ -25,7 +25,7 @@ Tonuino-Studio ist ein Fork von [Tonuino-Manager](https://github.com/donschoof/t
 
 ## Installation
 
-Fertige Builds auf der [Releases-Seite](https://github.com/jlach-dev/Tonuino-manager/releases/latest) – keine Python-Installation nötig, FFmpeg ist enthalten.
+Fertige Builds auf der [Releases-Seite](https://github.com/jlach-dev/Tonuino-Studio/releases/latest) – keine Python-Installation nötig, FFmpeg ist enthalten.
 
 | System | Datei | Hinweise |
 | --- | --- | --- |
@@ -126,8 +126,8 @@ Die eigene Sammlung bleibt, wo sie ist – auf dem PC, auf einem NAS, in mehrere
 Python 3.10+ und ein venv (auf aktuellem Debian/Ubuntu ohnehin Pflicht, siehe [PEP 668](https://peps.python.org/pep-0668/)):
 
 ```bash
-git clone https://github.com/jlach-dev/Tonuino-manager.git
-cd Tonuino-manager
+git clone https://github.com/jlach-dev/Tonuino-Studio.git
+cd Tonuino-Studio
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements-dev.txt   # nur zum Starten reicht requirements.txt
