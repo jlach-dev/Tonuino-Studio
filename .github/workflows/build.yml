@@ -5,10 +5,8 @@ name: Build
 # kompiliert nicht plattformuebergreifend - ein Windows-Build allein sagt
 # nichts darueber aus, ob die App auf Linux/macOS funktioniert).
 #
-# Der Linux-Job baut nicht nur, sondern startet die App zusaetzlich headless
-# (via xvfb) und instanziiert das Hauptfenster, um fehlende Systembibliotheken
-# (Qt xcb-Plugin, PC/SC) fruehzeitig zu erkennen. Der macOS-Job macht denselben
-# Smoketest ohne xvfb (der WindowServer ist auf den Runnern bereits vorhanden).
+# Jeder Job baut nicht nur, sondern startet die gebaute Datei auch einmal (Linux via
+# xvfb), um fehlende Module und Systembibliotheken (Qt xcb-Plugin, PC/SC) frueh zu erkennen.
 
 # Nur fuer Release-Tags (v*) oder von Hand: im privaten Repository zaehlen
 # macOS-Minuten zehnfach. Lint und Tests bei jedem Push: tests.yml.
@@ -110,54 +108,20 @@ jobs:
       - name: Build ausfuehren
         run: python build_package.py
 
-      # Beide Smoketests lassen die Event-Loop kurz laufen (app.exec() statt
-      # nur processEvents()) und schliessen das Fenster ueber window.close(),
-      # bevor der Prozess endet - damit durchlaeuft QMediaPlayer/QAudioOutput
-      # (Audio-Player) denselben Qt-eigenen Init-/Teardown-Pfad wie im echten
-      # Programmablauf. Ohne laufende Event-Loop wird auf macOS das native
-      # CoreAudio-Backend nie sauber initialisiert und stuerzt beim abrupten
-      # Prozessende (CPython-GC-Reihenfolge statt Qt-Objektbaum-Teardown) mit
-      # einem Segfault ab (kein Problem fuer echte Nutzer, die immer app.exec()
-      # durchlaufen - nur ein Artefakt eines zu kurzen Smoketests).
-      - name: Headless-Smoketest (Linux)
-        if: matrix.name == 'linux'
+      # Startet die gebaute Datei, nicht den Quelltext: Nur so fallen Module und Daten auf,
+      # die PyInstaller nicht mitgenommen hat. Mit TONUINO_SMOKE_TEST schliesst sie sich selbst.
+      # Bleibt sie haengen, etwa an einem Dialog, beendet das Zeitlimit den Schritt als Fehler.
+      - name: Smoketest der gebauten Datei
+        shell: bash
+        timeout-minutes: 3
+        env:
+          TONUINO_SMOKE_TEST: "1"
         run: |
-          xvfb-run --auto-servernum python -c "
-          import sys
-          sys.path.insert(0, 'src')
-          from PyQt6.QtWidgets import QApplication
-          from PyQt6.QtCore import QTimer
-          app = QApplication(sys.argv)
-          from gui.styles import MAIN_STYLESHEET
-          app.setStyleSheet(MAIN_STYLESHEET)
-          from gui.main_window import MainWindow
-          window = MainWindow()
-          window.show()
-          print('MainWindow erfolgreich erstellt und angezeigt - kein Crash.')
-          QTimer.singleShot(500, window.close)
-          QTimer.singleShot(700, app.quit)
-          sys.exit(app.exec())
-          "
-
-      - name: Headless-Smoketest (macOS)
-        if: matrix.name == 'macos-arm64' || matrix.name == 'macos-intel'
-        run: |
-          python -c "
-          import sys
-          sys.path.insert(0, 'src')
-          from PyQt6.QtWidgets import QApplication
-          from PyQt6.QtCore import QTimer
-          app = QApplication(sys.argv)
-          from gui.styles import MAIN_STYLESHEET
-          app.setStyleSheet(MAIN_STYLESHEET)
-          from gui.main_window import MainWindow
-          window = MainWindow()
-          window.show()
-          print('MainWindow erfolgreich erstellt und angezeigt - kein Crash.')
-          QTimer.singleShot(500, window.close)
-          QTimer.singleShot(700, app.quit)
-          sys.exit(app.exec())
-          "
+          case "${{ matrix.name }}" in
+            windows) ./dist/Tonuino-Studio.exe ;;
+            linux) xvfb-run --auto-servernum ./dist/Tonuino-Studio ;;
+            *) ./dist/Tonuino-Studio.app/Contents/MacOS/Tonuino-Studio ;;
+          esac
 
       - name: Artefakte hochladen
         uses: actions/upload-artifact@v7

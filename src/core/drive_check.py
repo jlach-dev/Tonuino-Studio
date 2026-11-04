@@ -27,6 +27,22 @@ def get_total_size(path) -> Optional[int]:
         return None
 
 
+def wipe_refusal(path) -> Optional[str]:
+    """Grund, warum path nicht komplett geleert werden darf, sonst None. Anders als beim
+    Bereinigen laesst sich das nicht wegklicken: Ein falsches Laufwerk waere verloren."""
+    target = Path(path).resolve()
+    if not os.path.ismount(target):
+        return (f"{path} ist nicht das Hauptverzeichnis eines Laufwerks. Geleert wird nur eine ganze "
+                "SD-Karte; öffne sie dazu direkt über ihren Laufwerksbuchstaben.")
+    home = Path.home().resolve()
+    if target == home or target in home.parents:
+        return f"Auf {path} liegt dein Benutzerordner. Dieses Laufwerk wird nicht geleert."
+    if is_removable_drive(target) is False:
+        return (f"{path} ist laut Betriebssystem kein Wechseldatenträger. Geleert wird nur eine SD-Karte "
+                "im Kartenleser oder an USB.")
+    return None
+
+
 def is_removable_drive(path) -> Optional[bool]:
     """Prueft, ob path auf einem Wechseldatentraeger (SD-Kartenleser, USB)
     liegt. Gibt None zurueck, wenn sich das auf der aktuellen Plattform nicht

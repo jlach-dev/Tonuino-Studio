@@ -12,7 +12,6 @@ und wird an den Bild-Prompt angehaengt.
 """
 
 import base64
-import io
 import json
 import logging
 import re
@@ -270,20 +269,15 @@ def build_character_sheet_prompt(name: str, style: str, style_bible: str, anchor
 
 
 def generate_character_sheet(client, image_model: str, name: str, style: str, style_bible: str,
-                             anchor_images: List[bytes], image_size: str = "2K") -> Image.Image:
+                             anchor_images: List[bytes], image_size: str = "") -> Image.Image:
     """Ein Bild mit den Hauptfiguren der Reihe (Nano Banana), Anker als Referenz"""
+    from core.ai_settings import get_image_size
+    from core.cover_generator import CONTEXT_SHEET, request_image
     images = anchor_images[:MAX_ANCHORS]
     prompt = build_character_sheet_prompt(name, style, style_bible, len(images))
     model_input = [{"type": "text", "text": prompt}] + _image_parts(images) if images else prompt
-    interaction = client.interactions.create(
+    return request_image(
+        client, CONTEXT_SHEET,
         model=image_model, input=model_input,
-        response_format={"type": "image", "aspect_ratio": "3:2", "image_size": image_size},
+        response_format={"type": "image", "aspect_ratio": "3:2", "image_size": image_size or get_image_size()},
     )
-    image = getattr(interaction, "output_image", None)
-    if image is None or not getattr(image, "data", None):
-        text = getattr(interaction, "output_text", "") or ""
-        raise RuntimeError("Das Modell hat kein Bild geliefert" + (f": {text[:300]}" if text else ""))
-    data = image.data if isinstance(image.data, bytes) else base64.b64decode(image.data)
-    with Image.open(io.BytesIO(data)) as img:
-        img.load()
-        return img.convert("RGB")

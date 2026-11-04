@@ -6,7 +6,7 @@ import os
 import sys
 
 from PyQt6.QtWidgets import QLabel, QMessageBox
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from gui import theme
 
@@ -38,17 +38,58 @@ def heading_font(point_size: int) -> QFont:
     return font
 
 
-def keep_open_until_done(dialog, on_cancel):
+class _ProgressLock(QObject):
+    """Faengt X und Esc am Fortschrittsfenster ab: Beides wuerde es schliessen und das
+    Hauptfenster freigeben, obwohl der Worker noch laeuft. Wo Abbrechen moeglich ist,
+    wirken beide wie der Abbrechen-Knopf."""
+
+    def __init__(self, dialog, cancellable: bool):
+        super().__init__(dialog)
+        self.cancellable = cancellable
+
+    def eventFilter(self, watched, event):
+        escape = event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape
+        if event.type() != QEvent.Type.Close and not escape:
+            return False
+        event.ignore()
+        if self.cancellable:
+            watched.canceled.emit()
+        return True
+
+
+def lock_progress_dialog(dialog, cancellable: bool = False):
+    """Das Fenster bleibt offen, bis close_progress_dialog() es schliesst"""
+    dialog._progress_lock = _ProgressLock(dialog, cancellable)
+    dialog.installEventFilter(dialog._progress_lock)
+
+
+def close_progress_dialog(dialog):
+    """Schliesst ein Fortschrittsfenster, wenn die Arbeit getan ist. close() loest bei
+    QProgressDialog selbst "canceled" aus, das darf den Worker nicht mehr erreichen."""
+    lock = getattr(dialog, "_progress_lock", None)
+    if lock is not None:
+        dialog.removeEventFilter(lock)
+        dialog._progress_lock = None
+    try:
+        dialog.canceled.disconnect()
+    except TypeError:
+        pass  # nichts verbunden
+    dialog.close()
+
+
+def keep_open_until_done(dialog, on_cancel, message: str = "Wird nach der aktuellen Datei abgebrochen …"):
     """QProgressDialog schliesst sich beim Abbrechen sofort, der Worker kopiert aber noch
     die aktuelle Datei zu Ende. Das Fenster bleibt deshalb gesperrt, bis er fertig ist,
-    sonst liesse sich derselbe Ordner in dieser Zeit verschieben oder loeschen."""
+    sonst liesse sich derselbe Ordner in dieser Zeit verschieben oder loeschen. Schliessen
+    mit close_progress_dialog()."""
     dialog.canceled.disconnect(dialog.cancel)
 
     def cancel():
         on_cancel()
-        dialog.setLabelText("Wird nach der aktuellen Datei abgebrochen …")
+        dialog.setLabelText(message)
 
     dialog.canceled.connect(cancel)
+    lock_progress_dialog(dialog, cancellable=True)
 
 
 def confirm_action(parent, title: str, text: str, default_no: bool = True) -> bool:

@@ -22,7 +22,7 @@ from core.card_layout import ORIENTATION_PORTRAIT
 from core.library import SETTINGS_WRITE_ID_TAGS, Library, LibraryIndex
 from core.sd_card import Folder, Track, MAX_TRACKS_PER_FOLDER
 from gui.card_cover_dialog import AiSettingsDialog
-from gui.common import confirm_action, keep_open_until_done
+from gui.common import close_progress_dialog, confirm_action, keep_open_until_done
 from gui.cover_manager_dialog import CoverManagerDialog, SETTINGS_DATA_DIR, get_archive
 from gui.data_folder_dialog import DataFolderDialog
 from gui.library_settings_dialog import LibrarySourcesDialog, library_sources
@@ -418,7 +418,7 @@ class LibraryMixin:
         if job is None:
             return
         retire_worker(job["worker"])  # run() kehrt nach dem Signal erst noch zurueck
-        job["dialog"].close()
+        close_progress_dialog(job["dialog"])
         album, files = job["album"], job["files"]
         if result.recognized == 0:
             QMessageBox.information(self, "Stücke erkennen", "Keine der Dateien wurde erkannt. "
@@ -518,6 +518,7 @@ class LibraryMixin:
                 staging = library_import.create_staging_folder(folder)
             except OSError as e:
                 QMessageBox.warning(self, "Fehler", f"Zwischenordner für das Ersetzen nicht anlegbar: {e}")
+                self._refresh_after_failed_import()
                 self._start_next_import()
                 return
         target = staging or folder
@@ -562,7 +563,7 @@ class LibraryMixin:
             return
         job["cancelled"] = job["worker"].is_cancelled  # vorher lesen: retire_worker bricht den Worker selbst ab
         retire_worker(job["worker"])  # run() kehrt nach dem Signal erst noch zurueck
-        job["dialog"].close()
+        close_progress_dialog(job["dialog"])
         folder, album = job["folder"], job["album"]
         if self.sd_card is None:
             return  # Karte wurde waehrend des Kopierens entfernt
@@ -574,6 +575,7 @@ class LibraryMixin:
             return
         if job["cancelled"] and added == 0:
             self._drop_empty_new_folder(job)
+            self._refresh_after_failed_import()
             self.status_bar.showMessage(f"Ordner {folder.index:02d}: Import abgebrochen")
             return
         folder.tracks.sort(key=lambda t: t.index)
@@ -615,6 +617,7 @@ class LibraryMixin:
         incomplete = added < job["expected"]
         if job["cancelled"] or incomplete:
             library_import.discard_staging_folder(staging)
+            self._refresh_after_failed_import()
             reason = "abgebrochen" if job["cancelled"] else f"nur {added} von {job['expected']} Tracks kopiert"
             self.status_bar.showMessage(f"Ordner {folder.index:02d}: Ersetzen {reason} – die bisherigen Tracks "
                                         "bleiben erhalten")
@@ -630,7 +633,7 @@ class LibraryMixin:
             QMessageBox.warning(self, "Ersetzen fehlgeschlagen",
                                 f"Die Tracks konnten nicht ausgetauscht werden: {e}\n\nDie neu kopierten Tracks "
                                 f"liegen ggf. noch in {staging.path}.")
-            self._rescan_after_failed_replace()
+            self._refresh_after_failed_import(rescan=True, folder_index=folder.index)
             return False
         return True
 
@@ -647,10 +650,25 @@ class LibraryMixin:
         except OSError:
             log.exception("Leeren Ordner nach Abbruch nicht entfernt")
 
-    def _rescan_after_failed_replace(self):
-        """Nach einem halb ausgefuehrten Austausch den Kartenstand neu einlesen"""
-        try:
-            self.sd_card.scan()
-        except OSError:
-            log.exception("Neu-Einlesen nach fehlgeschlagenem Ersetzen")
+    def _refresh_after_failed_import(self, rescan: bool = False, folder_index: Optional[int] = None):
+        """Vor dem Kopieren wurden die Hintergrund-Leser gestoppt: Ohne neuen Aufbau fehlen in der
+        Liste Namen und in der Ansicht die Tags. Nach einem halb ausgefuehrten Austausch
+        (rescan) stimmt ausserdem der Kartenstand nicht mehr, und scan() legt neue
+        Folder-Objekte an, current_folder wuerde also auf den alten Stand zeigen."""
+        current = self.current_folder
+        identity = None if current is None else (current.name if current.is_special else current.index)
+        if rescan:
+            self._folder_name_cache.pop(folder_index, None)
+            try:
+                self.sd_card.scan()
+            except OSError:
+                log.exception("Neu-Einlesen nach fehlgeschlagenem Ersetzen")
         self._populate_folder_list()
+        if identity is None:
+            return
+        self.current_folder = self.sd_card.get_any_folder(identity)
+        if self.current_folder is None:
+            self._show_welcome()
+            self._update_folder_action_buttons()
+        else:
+            self._select_folder_in_list(identity)

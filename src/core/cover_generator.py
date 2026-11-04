@@ -14,6 +14,7 @@ from typing import List, Optional
 
 from PIL import Image
 
+from core.ai_settings import get_image_size
 from core.card_layout import CardSpec, ORIENTATION_PORTRAIT, ambient_blur
 from core.cover_research import CoverBrief, FolderInfo
 
@@ -153,7 +154,73 @@ def _sniff_mime(data: bytes) -> str:
     return "image/jpeg"
 
 
-def generate_ai_art(client, model: str, req: GenerationRequest, image_size: str = "2K") -> Image.Image:
+# Google nennt bei einer Ablehnung meist keinen Grund ("unspecified policy reason"). Die Gruende
+# sind deshalb Erfahrungswerte, die Tipps richten sich danach, was gerade erzeugt werden sollte.
+CONTEXT_MOTIF, CONTEXT_EXTEND, CONTEXT_BACK, CONTEXT_SHEET = "motif", "extend", "back", "sheet"
+REFUSED_SHORT = "von Google abgelehnt"
+REFUSAL_HELP = {
+    CONTEXT_MOTIF: (
+        ["Eine KI-Vorlage ist ein bekanntes Cover oder zeigt geschützte Figuren oder Logos.",
+         "Titel oder Recherche nennen bekannte Figuren, die nachgezeichnet werden sollen.",
+         "Auf einer Vorlage sind Kinder oder echte Personen zu sehen."],
+        ["Nimm „Als KI-Vorlage“ von den Bildern zurück und versuche es ohne Vorlage.",
+         "Beschreibe unter „Eigener Wunsch“ eigene Figuren und Szenen, ohne bekannte Namen.",
+         "Oder weise das Album-Cover mit „Als Vorderseite“ zu: Den Rand ergänzt die App dann ohne KI als Ambient Blur."]),
+    CONTEXT_EXTEND: (
+        ["Das Bild ist ein bekanntes Cover oder zeigt geschützte Figuren, Logos oder Schriftzüge.",
+         "Auf dem Bild sind Kinder oder echte Personen zu sehen."],
+        ["Weise das Bild direkt mit „Als Vorderseite“ zu: Den Rand ergänzt die App dann ohne KI als Ambient Blur.",
+         "Oder erzeuge unter „Eigener Wunsch“ ein eigenes Motiv, ohne dieses Bild als Vorlage."]),
+    CONTEXT_BACK: (
+        ["Die Vorderseite wird als Vorlage mitgeschickt und zeigt vermutlich geschützte Figuren oder Logos.",
+         "Der KI-Wunsch nennt bekannte Figuren oder Marken."],
+        ["Wähle für die Rückseite „Ambient Blur der Vorderseite (ohne KI)“.",
+         "Oder nimm eine selbst erzeugte Vorderseite, und beschreibe unter „KI-Wunsch“ eine Szene ohne bekannte Namen."]),
+    CONTEXT_SHEET: (
+        ["Die Anker-Bilder sind bekannte Cover oder zeigen geschützte Figuren.",
+         "Die Stilbibel nennt bekannte Figuren oder Marken."],
+        ["Entferne bekannte Cover aus den Ankern.",
+         "Beschreibe die Figuren in der Stilbibel mit eigenen Worten, ohne Namen."]),
+}
+REFUSAL_BATCH_HINT = ("Google nennt meist keinen Grund. Häufig liegt es an bekannten Figuren, Logos oder Covern. "
+                      "Für diese Ordner hilft der Cover-Manager: dort ohne Vorlage, mit eigenem Wunsch "
+                      "oder mit dem Album-Cover und „Als Vorderseite“, das läuft ohne KI.")
+
+
+class ImageRefused(RuntimeError):
+    """Der Anbieter hat das Bild abgelehnt. str() erklaert es samt Tipps, short ist fuer Listen."""
+    short = REFUSED_SHORT
+
+    def __init__(self, context: str, answer: str = ""):
+        reasons, tips = REFUSAL_HELP[context]
+        parts = ["Google hat dieses Bild abgelehnt und nennt meist keinen genauen Grund. "
+                 "Das ist kein Fehler der App.",
+                 "Häufige Gründe:\n" + "\n".join(f"• {reason}" for reason in reasons),
+                 "Das kannst du tun:\n" + "\n".join(f"• {tip}" for tip in tips)]
+        if answer:
+            parts.append(f"Antwort des Modells: {answer[:300]}")
+        super().__init__("\n\n".join(parts))
+
+
+def request_image(client, context: str, **request) -> Image.Image:
+    """Bild vom Modell holen. Abgelehnt wird auf zwei Wegen: als API-Fehler (content_blocked)
+    oder als Antwort ohne Bild."""
+    try:
+        interaction = client.interactions.create(**request)
+    except Exception as e:
+        if "content_blocked" in str(e).lower():
+            raise ImageRefused(context) from e
+        raise
+    image = getattr(interaction, "output_image", None)
+    if image is None or not getattr(image, "data", None):
+        raise ImageRefused(context, getattr(interaction, "output_text", "") or "")
+    data = image.data if isinstance(image.data, bytes) else base64.b64decode(image.data)
+    with Image.open(io.BytesIO(data)) as img:
+        img.load()
+        return img.convert("RGB")
+
+
+def generate_ai_art(client, model: str, req: GenerationRequest, image_size: str = "") -> Image.Image:
     """Ein Motiv vom Gemini-Bildmodell (Interactions-API)"""
     prompt = build_prompt(req)
     aspect_ratio = "2:3" if req.orientation == ORIENTATION_PORTRAIT else "3:2"
@@ -167,19 +234,13 @@ def generate_ai_art(client, model: str, req: GenerationRequest, image_size: str 
     else:
         model_input = prompt
 
-    interaction = client.interactions.create(
+    return request_image(
+        client, CONTEXT_MOTIF,
         model=model,
         input=model_input,
-        response_format={"type": "image", "aspect_ratio": aspect_ratio, "image_size": image_size},
+        response_format={"type": "image", "aspect_ratio": aspect_ratio,
+                         "image_size": image_size or get_image_size()},
     )
-    image = getattr(interaction, "output_image", None)
-    if image is None or not getattr(image, "data", None):
-        text = getattr(interaction, "output_text", "") or ""
-        raise RuntimeError("Das Modell hat kein Bild geliefert" + (f": {text[:300]}" if text else ""))
-    data = image.data if isinstance(image.data, bytes) else base64.b64decode(image.data)
-    with Image.open(io.BytesIO(data)) as img:
-        img.load()
-        return img.convert("RGB")
 
 
 def blur_art(req: GenerationRequest) -> Image.Image:
@@ -208,25 +269,20 @@ EXTEND_PROMPT = (
 )
 
 
-def extend_to_card(client, model: str, image_bytes: bytes, orientation: str, image_size: str = "2K") -> Image.Image:
+def extend_to_card(client, model: str, image_bytes: bytes, orientation: str, image_size: str = "") -> Image.Image:
     """Original-Cover/-Rueckseite per Bildmodell auf das Kartenformat erweitern
     (statt zu beschneiden oder Ambient Blur). Ein API-Aufruf, ohne Recherche."""
     portrait = orientation == ORIENTATION_PORTRAIT
     prompt = EXTEND_PROMPT.format(shape="tall portrait 2:3" if portrait else "wide landscape 3:2")
-    interaction = client.interactions.create(
+    return request_image(
+        client, CONTEXT_EXTEND,
         model=model,
         input=[{"type": "text", "text": prompt},
                {"type": "image", "data": base64.b64encode(image_bytes).decode("ascii"),
                 "mime_type": _sniff_mime(image_bytes)}],
-        response_format={"type": "image", "aspect_ratio": "2:3" if portrait else "3:2", "image_size": image_size},
+        response_format={"type": "image", "aspect_ratio": "2:3" if portrait else "3:2",
+                         "image_size": image_size or get_image_size()},
     )
-    image = getattr(interaction, "output_image", None)
-    if image is None or not getattr(image, "data", None):
-        raise RuntimeError("Das Modell hat kein Bild geliefert")
-    data = image.data if isinstance(image.data, bytes) else base64.b64decode(image.data)
-    with Image.open(io.BytesIO(data)) as img:
-        img.load()
-        return img.convert("RGB")
 
 
 # --- Rueckseite ---------------------------------------------------------------------------------
@@ -279,27 +335,20 @@ def build_back_prompt(req: GenerationRequest, wish: str = "", with_tracklist: bo
 
 
 def generate_back_art(client, model: str, req: GenerationRequest, front_bytes: bytes, wish: str = "",
-                      with_tracklist: bool = True, image_size: str = "2K") -> Image.Image:
+                      with_tracklist: bool = True, image_size: str = "") -> Image.Image:
     """Rueckseiten-Motiv vom Bildmodell, mit der Vorderseite als Referenzbild"""
     prompt = build_back_prompt(req, wish, with_tracklist)
     # Vorderseite zuerst, danach die Anker der Serie (zusammen hoechstens MAX_REFERENCE_IMAGES)
     images = [front_bytes] + [a for a in req.anchors() if a != front_bytes][:MAX_REFERENCE_IMAGES - 1]
-    interaction = client.interactions.create(
+    return request_image(
+        client, CONTEXT_BACK,
         model=model,
         input=[{"type": "text", "text": prompt}] + [
             {"type": "image", "data": base64.b64encode(data).decode("ascii"), "mime_type": _sniff_mime(data)}
             for data in images],
         response_format={"type": "image", "aspect_ratio": "2:3" if req.orientation == ORIENTATION_PORTRAIT else "3:2",
-                         "image_size": image_size},
+                         "image_size": image_size or get_image_size()},
     )
-    image = getattr(interaction, "output_image", None)
-    if image is None or not getattr(image, "data", None):
-        text = getattr(interaction, "output_text", "") or ""
-        raise RuntimeError("Das Modell hat kein Bild geliefert" + (f": {text[:300]}" if text else ""))
-    data = image.data if isinstance(image.data, bytes) else base64.b64decode(image.data)
-    with Image.open(io.BytesIO(data)) as img:
-        img.load()
-        return img.convert("RGB")
 
 
 IDEAS_PROMPT_IMAGE = """Das Bild ist die gewählte VORDERSEITE einer Kinder-Hörspielkarte ({title}).

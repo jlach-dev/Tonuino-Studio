@@ -45,7 +45,8 @@ FPCALC_DOWNLOADS = {
 }
 # Exakte Groessen und SHA-256 der offiziellen Archive (GitHub-Release v1.5.1,
 # am 30.10.2026 einmal geladen und berechnet - GitHub selbst meldet fuer diese
-# alten Assets keine Pruefsumme). Ein abweichender Download wird nicht installiert.
+# alten Assets keine Pruefsumme, am 04.11.2026 unabhaengig davon erneut geladen und
+# bestaetigt). Ein abweichender Download wird nicht installiert.
 FPCALC_SIZES = {"win32": 1548264, "darwin": 2400481, "linux": 2752946}
 FPCALC_SHA256 = {
     "win32": "36b478e16aa69f757f376645db0d436073a42c0097b6bb2677109e7835b59bbc",
@@ -56,6 +57,8 @@ FPCALC_SHA256 = {
 # einem Sync-Dienst, die Datei wird dort also auch ohne die App veraendert werden koennen.
 FPCALC_BINARY_SHA256 = {
     "win32": "659ea2dba1a12d7df4fe2b6f23f60fd9414ae61aca1b014ee8fa37c5e09b930b",
+    "darwin": "ede0f92ac30807799872f8700d5e334e9ddef738a6b1b9d154097954619d68f8",
+    "linux": "085a1adf67b4a71a2e57b7b05bc425c1ea21b371b2b43049fc8ba37b53cb472b",
 }
 FPCALC_MAX_BYTES = 10 * 1024 * 1024
 

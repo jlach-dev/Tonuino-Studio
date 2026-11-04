@@ -233,7 +233,8 @@ def test_main_window_library_view_switch_badges_and_drop(app, tmp_path, monkeypa
     from core.sd_card import SDCard
     window.sd_card = SDCard(str(sd_root))
     window.sd_card.scan()
-    window._open_sd_dialog = type("D", (), {"close": lambda self: None})()
+    from PyQt6.QtWidgets import QProgressDialog
+    window._open_sd_dialog = QProgressDialog(window)
     window._on_scan_finished(True)
     assert window.folder_list.drop_enabled
 
@@ -412,7 +413,8 @@ def window_with_folder(app, tmp_path, monkeypatch):
     window = MainWindow()
     window.sd_card = SDCard(str(sd_root))
     window.sd_card.scan()
-    window._open_sd_dialog = type("D", (), {"close": lambda self: None})()
+    from PyQt6.QtWidgets import QProgressDialog
+    window._open_sd_dialog = QProgressDialog(window)
     window._on_scan_finished(True)
     window._select_folder_in_list(1)
     app.processEvents()

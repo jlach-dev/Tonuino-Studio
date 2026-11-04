@@ -13,6 +13,13 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+
+def get_image_size() -> str:
+    """Eingestellte Bildgroesse fuer KI-Bilder; unbekannte Werte fallen auf den Standard zurueck"""
+    from PyQt6.QtCore import QSettings
+    value = QSettings().value(SETTINGS_IMAGE_SIZE, DEFAULT_IMAGE_SIZE, type=str)
+    return value if value in IMAGE_SIZES else DEFAULT_IMAGE_SIZE
+
 KEYRING_SERVICE = "Tonuino-Manager"
 KEYRING_USER = "gemini_api_key"
 ENV_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
@@ -22,6 +29,14 @@ ENV_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
 DEFAULT_IMAGE_MODEL = "gemini-nano-banana-2.1"
 DEFAULT_TEXT_MODEL = "gemini-3.5-flash-lite"
 
+# Bildgroesse beim Anbieter: 1K misst rund 1260 x 850 px und reicht fuer den Druck
+# (1060 x 690 px bei 300 dpi mit Anschnitt), 2K liefert rund 2530 x 1700 px und bis 7,6 MB je Bild
+DEFAULT_IMAGE_SIZE = "1K"
+IMAGE_SIZES = {
+    "1K": "1K: rund 1260 px, reicht für den Druck",
+    "2K": "2K: rund 2530 px, deutlich größere Dateien",
+}
+SETTINGS_IMAGE_SIZE = "covers/image_size"
 SETTINGS_IMAGE_MODEL = "covers/image_model"
 SETTINGS_TEXT_MODEL = "covers/text_model"
 SETTINGS_ORIENTATION = "covers/default_orientation"

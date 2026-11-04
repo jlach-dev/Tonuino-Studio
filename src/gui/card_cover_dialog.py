@@ -97,6 +97,11 @@ class AiSettingsDialog(QDialog):
 
         self.image_model_edit = QLineEdit(image_model())
         form.addRow("Bildmodell:", self.image_model_edit)
+        self.image_size_combo = QComboBox()
+        for size, label in ai_settings.IMAGE_SIZES.items():
+            self.image_size_combo.addItem(label, size)
+        self.image_size_combo.setCurrentIndex(self.image_size_combo.findData(ai_settings.get_image_size()))
+        form.addRow("Bildgröße:", self.image_size_combo)
         self.text_model_edit = QLineEdit(text_model())
         form.addRow("Recherche-Modell:", self.text_model_edit)
         layout.addLayout(form)
@@ -209,6 +214,7 @@ class AiSettingsDialog(QDialog):
     def _save(self):
         settings = QSettings()
         settings.setValue(ai_settings.SETTINGS_FPCALC, self.fpcalc_edit.text().strip())
+        settings.setValue(ai_settings.SETTINGS_IMAGE_SIZE, self.image_size_combo.currentData())
         settings.setValue(ai_settings.SETTINGS_IMAGE_MODEL,
                           self.image_model_edit.text().strip() or ai_settings.DEFAULT_IMAGE_MODEL)
         settings.setValue(ai_settings.SETTINGS_TEXT_MODEL,

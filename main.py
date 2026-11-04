@@ -23,7 +23,7 @@ else:
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QSettings, QTimer
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon, QFontDatabase
 from core import __version__
@@ -75,7 +75,12 @@ def main():
 
     window = MainWindow()
     window.show()
-    
+
+    # CI startet die gebaute Datei und erwartet, dass sie von selbst sauber endet
+    if os.environ.get("TONUINO_SMOKE_TEST"):
+        QTimer.singleShot(1500, window.close)
+        QTimer.singleShot(2000, app.quit)
+
     sys.exit(app.exec())
 
 

@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QFrame, QFileDialog, QMessageBox,
     QStatusBar, QSplitter, QToolButton, QApplication, QLineEdit,
     QAbstractItemView, QProgressDialog,
-    QMenuBar, QStyle, QStyleOptionViewItem, QDialog, QTabBar
+    QMenuBar, QStyle, QStyleOptionViewItem, QDialog, QTabBar, QInputDialog, QMenu
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint, QRect, QProcess, QProcessEnvironment
 from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup, QBrush, QColor, QKeySequence, QShortcut
@@ -19,13 +19,13 @@ from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup, QBrush, QColor, Q
 from core import __version__, loudness
 from core.branding import APP_NAME
 from core.sd_card import SDCard, Folder, Track, PurgeFolderInfo, PurgePreview, MAX_TRACKS_PER_FOLDER
-from core.drive_check import get_total_size, is_removable_drive, MAX_SD_CARD_BYTES
+from core.drive_check import get_total_size, is_removable_drive, wipe_refusal, MAX_SD_CARD_BYTES
 from core.audio_converter import AudioConverter
 from core.metadata import MetadataManager
 from core.card_text import derive_card_text
 from core.cover_research import gather_folder_info
 from core.library import Library, LibraryIndex, format_time
-from core import library_import
+from core import ai_settings, library_import
 from gui.about_dialog import show_about
 from gui.main_window_cards import CardCoverMixin
 from gui.main_window_frame import WindowFrameMixin
@@ -33,11 +33,13 @@ from gui.main_window_library import LibraryMixin
 from gui.compact_buttons import CompactButtons
 from gui.common import (
     resource_path, heading_font, confirm_action, icon_from_glyph, icon_with_hover, keep_open_until_done,
+    lock_progress_dialog, close_progress_dialog,
 )
 from gui.track_list import ROW_NOT_CHECKABLE_ROLE, HoverListWidget, InlineLineEdit, FloatingIconRow, reorder_with_selection
 from gui.workers import (
     SDCardScanner, TrackAddWorker, FolderNameWorker, FolderRenameWorker, TrackMetaWorker, PurgeWorker,
     LoudnessAnalysisWorker, LoudnessApplyWorker, CoverBatchWorker, LibraryScanWorker, wait_for_retired_workers,
+    BackgroundTask, retire_worker,
 )
 from gui.card_cover_dialog import AiSettingsDialog
 from gui.cover_manager_dialog import CoverManagerDialog
@@ -102,6 +104,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self._add_tracks_worker: TrackAddWorker = None
         self._add_tracks_folder: Folder = None
         self._purge_worker: PurgeWorker = None
+        self._card_job: BackgroundTask = None
         self._cover_batch_worker: CoverBatchWorker = None
         self._loudness_analysis_worker: LoudnessAnalysisWorker = None
         self._loudness_apply_worker: LoudnessApplyWorker = None
@@ -322,10 +325,23 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         action_data_folder = menu.addAction("Datenordner ändern …")
         action_data_folder.setToolTip("Cover-Archiv, Serienprofile und Bibliotheks-Übersicht an einen anderen Ort legen")
         action_data_folder.triggered.connect(self._change_data_folder)
+        self.image_size_menu = menu.addMenu("KI-Bildgröße")
+        self.image_size_menu.setToolTip("Größe der KI-Bilder; gilt für alle neu erzeugten Bilder")
+        image_size_group = QActionGroup(self)
+        for size, label in ai_settings.IMAGE_SIZES.items():
+            action = self.image_size_menu.addAction(label)
+            action.setCheckable(True)
+            action.setData(size)
+            image_size_group.addAction(action)
+            action.triggered.connect(lambda _checked, s=size: QSettings().setValue(ai_settings.SETTINGS_IMAGE_SIZE, s))
+        self.image_size_menu.aboutToShow.connect(self._sync_image_size_menu)
         menu.addSeparator()
         action_system_files = menu.addAction("TonUINO-Systemdateien …")
         action_system_files.setToolTip("Ansagen in den Ordnern mp3 und advert einrichten oder aktualisieren")
         action_system_files.triggered.connect(self._open_system_files)
+        action_wipe_card = menu.addAction("SD-Karte leeren und neu einrichten …")
+        action_wipe_card.setToolTip("Löscht alles auf der Karte und richtet danach die Systemdateien ein")
+        action_wipe_card.triggered.connect(self._wipe_sd_card)
 
         view_menu = menu_bar.addMenu("Ansicht")
         self.action_full_screen = view_menu.addAction("Vollbild")
@@ -484,6 +500,13 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self.folder_list.setObjectName("folderList")
         self.folder_list.setToolTip("Alben aus der Bibliothek oder dem Explorer hierher ziehen: auf freie Fläche "
                                     "= neuer Ordner, auf einen Ordner = ersetzen oder anhängen")
+        self.folder_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.folder_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.folder_list.customContextMenuRequested.connect(self._show_folder_menu)
+        QShortcut(QKeySequence(Qt.Key.Key_Delete), self.folder_list, context=Qt.ShortcutContext.WidgetShortcut,
+                  activated=self._delete_selected_folders)
+        QShortcut(QKeySequence(Qt.Key.Key_F2), self.folder_list, context=Qt.ShortcutContext.WidgetShortcut,
+                  activated=self._rename_selected_folder)
         self.folder_list.itemClicked.connect(self._on_folder_selected)
         self.folder_list.itemDoubleClicked.connect(self._on_folder_double_clicked)
         self.folder_list.albums_dropped.connect(self._on_albums_dropped)
@@ -760,6 +783,11 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Bereit")
     
+    def _sync_image_size_menu(self):
+        current = ai_settings.get_image_size()
+        for action in self.image_size_menu.actions():
+            action.setChecked(action.data() == current)
+
     def _open_system_files(self):
         if not self.sd_card:
             QMessageBox.information(self, "Keine SD-Karte", "Bitte zuerst eine SD-Karte öffnen, auch wenn sie leer ist.")
@@ -824,6 +852,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self._open_sd_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self._open_sd_dialog.setMinimumDuration(0)
         self._open_sd_dialog.setCancelButton(None)
+        lock_progress_dialog(self._open_sd_dialog)
         self._open_sd_dialog.setValue(0)
 
         self.scanner = SDCardScanner(self.sd_card)
@@ -833,7 +862,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
 
     def _on_scan_finished(self, success: bool):
         """Wird aufgerufen wenn der Scan abgeschlossen ist"""
-        self._open_sd_dialog.close()
+        close_progress_dialog(self._open_sd_dialog)
 
         if success:
             self.status_bar.showMessage(
@@ -1053,6 +1082,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self._rename_dialog.setWindowTitle("Ordner umbenennen")
         self._rename_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self._rename_dialog.setMinimumDuration(400)
+        lock_progress_dialog(self._rename_dialog)
         self._rename_dialog.setValue(0)
 
         self._rename_worker = FolderRenameWorker(folder, name, self.metadata_manager)
@@ -1061,7 +1091,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self._rename_worker.start()
 
     def _on_folder_renamed(self, folder_index: int, name: str, error: str):
-        self._rename_dialog.close()
+        close_progress_dialog(self._rename_dialog)
         if error:
             QMessageBox.warning(self, "Fehler beim Umbenennen", error)
         if self.sd_card is None or folder_index not in self.sd_card.folders:
@@ -1113,6 +1143,9 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
 
     def _on_folder_selected(self, item: QListWidgetItem):
         """Wird aufgerufen wenn ein Ordner ausgewaehlt wird"""
+        # Strg-Klick nimmt einen Ordner aus der Auswahl: nicht zu ihm wechseln
+        if not item.isSelected() and self.folder_list.selectedItems():
+            return
         identity = item.data(Qt.ItemDataRole.UserRole)
         self.current_folder = self.sd_card.get_any_folder(identity)
 
@@ -1459,6 +1492,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self._purge_dialog.setWindowTitle("SD-Karte bereinigen")
         self._purge_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self._purge_dialog.setCancelButton(None)
+        lock_progress_dialog(self._purge_dialog)
         self._purge_dialog.setMinimumDuration(0)
         self._purge_dialog.show()
 
@@ -1468,7 +1502,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
 
     def _on_purge_finished(self, success: bool, error_message: str):
         """Wird aufgerufen, wenn der Bereinigungs-Thread fertig ist"""
-        self._purge_dialog.close()
+        close_progress_dialog(self._purge_dialog)
 
         if self.sd_card is None:
             return  # Karte wurde waehrend des Bereinigens entfernt (UI ist schon zurueckgesetzt)
@@ -1491,35 +1525,223 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         )
 
     def _delete_folder(self):
-        """Loescht den aktuellen Ordner samt Inhalt unwiderruflich von der SD-Karte"""
-        if not self.current_folder or self._is_special_folder(self.current_folder):
-            return
+        """Knopf im Kopfbereich: nur der gezeigte Ordner"""
+        if self.current_folder is not None and not self._is_special_folder(self.current_folder):
+            self._delete_folders([self.current_folder])
 
+    def _delete_selected_folders(self):
+        """Entf und Rechtsklick: alle markierten Ordner, sonst der gezeigte"""
+        self._delete_folders(self._folders_to_delete())
+
+    def _folder_menu(self, pos: QPoint) -> Optional[QMenu]:
+        """Rechtsklick in der Ordnerliste: Befehle fuer die markierten Ordner und die Karte"""
+        if not self.sd_card:
+            return None
+        item = self.folder_list.itemAt(pos)
+        if item is not None and not item.isSelected():
+            self.folder_list.setCurrentItem(item)  # setzt die Markierung auf diesen Ordner
+            self._on_folder_selected(item)
+        menu = QMenu(self)
+        folders = self._folders_to_delete() if item is not None else []
+        if len(folders) == 1:
+            action_rename = menu.addAction("Umbenennen", self._start_folder_title_edit)
+            action_rename.setShortcut("F2")
+            action_rename.setEnabled(bool(folders[0].tracks))
+            menu.addAction("Ordnernummer ändern …", self._change_folder_number)
+        if folders:
+            label = "Ordner löschen …" if len(folders) == 1 else f"{len(folders)} Ordner löschen …"
+            menu.addAction(label, self._delete_selected_folders).setShortcut("Del")
+            menu.addSeparator()
+        menu.addAction("Neuer Ordner", self._create_new_folder)
+        menu.addAction("SD-Karte bereinigen …", self._purge_sd_card)
+        menu.addAction("SD-Karte leeren und neu einrichten …", self._wipe_sd_card)
+        return menu
+
+    def _show_folder_menu(self, pos: QPoint):
+        menu = self._folder_menu(pos)
+        if menu is not None:
+            menu.exec(self.folder_list.viewport().mapToGlobal(pos))
+
+    def _rename_selected_folder(self):
+        if len(self.folder_list.selectedItems()) <= 1:
+            self._start_folder_title_edit()
+
+    def _change_folder_number(self):
+        """Andere Nummer fuer den gezeigten Ordner; ist sie belegt, tauschen beide"""
         folder = self.current_folder
-        name = self._resolve_folder_name(folder)
-
-        confirmed = confirm_action(
-            self,
-            "Ordner löschen",
-            f"Soll der Ordner '{name}' (Ordner {folder.index:02d}) mit allen "
-            f"{folder.track_count} Track(s) unwiderruflich von der SD-Karte "
-            f"gelöscht werden?"
-        )
-        if not confirmed:
+        if folder is None or self._is_special_folder(folder) or self._file_job_running():
             return
-
+        old = folder.index
+        new, accepted = QInputDialog.getInt(
+            self, "Ordnernummer ändern", f"Neue Nummer für „{self._resolve_folder_name(folder)}“ (1 bis 99):",
+            old, 1, 99)
+        if not accepted or new == old:
+            return
+        other = self.sd_card.folders.get(new)
+        action = (f"Ordner {new:02d} ist schon belegt mit „{self._resolve_folder_name(other)}“. Sollen die beiden "
+                  f"Ordner ihre Nummern tauschen?" if other else f"Ordner {old:02d} wirklich zu Ordner {new:02d} machen?")
+        if not confirm_action(self, "Ordnernummer ändern",
+                              action + "\n\nRFID-Karten gehen nach der Nummer: Sie spielen danach einen anderen "
+                                       "Ordner oder nichts, bis du sie neu programmierst."):
+            return
         self._release_files()
         try:
-            self.sd_card.delete_folder(folder.index)
-            self._folder_name_cache.pop(folder.index, None)
-            self.current_folder = None
-            self._show_welcome()
+            self.sd_card.change_folder_number(old, new)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Fehler", f"Die Nummer ließ sich nicht ändern: {e}")
             self._populate_folder_list()
-            self.rfid_panel.refresh()
-            self._update_folder_action_buttons()
-            self.status_bar.showMessage(f"Ordner {folder.index:02d} gelöscht")
-        except Exception as e:
-            QMessageBox.warning(self, "Fehler", f"Fehler beim Löschen: {e}")
+            self._select_folder_in_list(old)
+            return
+        swap = {old: new, new: old}
+        self._folder_name_cache = {swap.get(i, i): name for i, name in self._folder_name_cache.items()}
+        self._sd_album_map = {album: swap.get(i, i) for album, i in self._sd_album_map.items()}
+        self.library_view.set_sd_map(self._sd_album_map)
+        self._populate_folder_list()
+        self._select_folder_in_list(new)
+        self.status_bar.showMessage(f"Ordner {old:02d} ist jetzt Ordner {new:02d}")
+
+    def _delete_folders(self, folders: list):
+        """Loescht Ordner samt Inhalt nach einer Rueckfrage unwiderruflich von der SD-Karte"""
+        if not folders or self._file_job_running():
+            return
+        if not confirm_action(self, "Ordner löschen", self._delete_confirmation_text(folders)):
+            return
+
+        card = self.sd_card
+
+        def work(task):
+            errors = []
+            for folder in folders:
+                try:
+                    card.delete_folder(folder.index)
+                except Exception as e:
+                    errors.append(f"Ordner {folder.index:02d}: {e}")
+            return errors
+
+        self._run_card_job("Ordner löschen", "Ordner werden gelöscht, bitte warten...", work,
+                           lambda errors, failure: self._on_folders_deleted(folders, errors, failure))
+
+    def _folders_to_delete(self) -> list:
+        """Mehrere markierte Ordner, sonst der gezeigte. Systemordner zaehlen nie mit."""
+        if not self.sd_card:
+            return []
+        identities = [item.data(Qt.ItemDataRole.UserRole) for item in self.folder_list.selectedItems()]
+        selected = sorted(i for i in identities if isinstance(i, int) and i in self.sd_card.folders)
+        if len(selected) > 1:
+            return [self.sd_card.folders[i] for i in selected]
+        current = self.current_folder
+        return [current] if current is not None and not self._is_special_folder(current) else []
+
+    def _delete_confirmation_text(self, folders: list) -> str:
+        rfid_hint = ("\n\nRFID-Karten, die auf {} zeigen, laufen danach ins Leere, bis du sie neu "
+                     "programmierst.")
+        if len(folders) == 1:
+            folder = folders[0]
+            return (f"Ordner {folder.index:02d} „{self._resolve_folder_name(folder)}“ mit "
+                    f"{folder.track_count} Track(s) wirklich von der SD-Karte löschen? Das lässt sich nicht "
+                    "rückgängig machen."
+                    + rfid_hint.format("diesen Ordner"))
+        names = [f"{f.index:02d} {self._resolve_folder_name(f)}" for f in folders[:12]]
+        if len(folders) > 12:
+            names.append(f"… und {len(folders) - 12} weitere")
+        tracks = sum(f.track_count for f in folders)
+        return (f"{len(folders)} Ordner mit zusammen {tracks} Track(s) wirklich von der SD-Karte löschen? Das "
+                "lässt sich nicht rückgängig machen.\n\n" + "\n".join(names) + rfid_hint.format("diese Ordner"))
+
+    def _on_folders_deleted(self, folders: list, errors: Optional[list], failure: str):
+        if self.sd_card is None:
+            return  # Karte wurde waehrend des Loeschens entfernt (UI ist schon zurueckgesetzt)
+        deleted = [f.index for f in folders if f.index not in self.sd_card.folders]
+        for index in deleted:
+            self._folder_name_cache.pop(index, None)
+        self._sd_album_map = {album: index for album, index in self._sd_album_map.items() if index not in deleted}
+        self.library_view.set_sd_map(self._sd_album_map)
+        self.current_folder = None
+        self._show_welcome()
+        self._populate_folder_list()
+        self.rfid_panel.refresh()
+        self._update_folder_action_buttons()
+        self.status_bar.showMessage(f"Ordner {deleted[0]:02d} gelöscht" if len(deleted) == 1
+                                    else f"{len(deleted)} Ordner gelöscht")
+        problems = list(errors or []) + ([failure] if failure else [])
+        if problems:
+            QMessageBox.warning(self, "Fehler", "Fehler beim Löschen:\n" + "\n".join(problems))
+
+    def _run_card_job(self, title: str, label: str, work, on_done):
+        """Laengere Arbeit auf der Karte im Hintergrund, das Fenster bleibt so lange gesperrt.
+        on_done(Ergebnis, Fehlermeldung) laeuft danach im GUI-Thread."""
+        self._release_files()
+        dialog = QProgressDialog(label, None, 0, 0, self)
+        dialog.setWindowTitle(title)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumDuration(0)
+        lock_progress_dialog(dialog)
+        dialog.show()
+
+        def finish(result, failure: str):
+            task, self._card_job = self._card_job, None
+            retire_worker(task)  # run() kehrt nach dem Signal erst noch zurueck
+            close_progress_dialog(dialog)
+            on_done(result, failure)
+
+        self._card_job = BackgroundTask(work)
+        self._card_job.done.connect(lambda result: finish(result, ""))
+        self._card_job.failed.connect(lambda message: finish(None, message))
+        self._card_job.start()
+
+    def _wipe_sd_card(self):
+        """Loescht alles von der Karte und bietet danach die Systemdateien an. Kein echtes
+        Formatieren: das braucht erhoehte Rechte, und FAT32 ueber 32 GB kann Windows nicht."""
+        if not self.sd_card:
+            QMessageBox.information(self, "Keine SD-Karte", "Bitte zuerst eine SD-Karte öffnen.")
+            return
+        if self._file_job_running():
+            return
+        refusal = wipe_refusal(self.sd_card.path)
+        if refusal:
+            QMessageBox.warning(self, "SD-Karte leeren", refusal)
+            return
+        if not self._confirm_purge_target_is_sd_card():
+            return
+
+        preview = self.sd_card.preview_wipe()
+        size_gb = preview.total_bytes / 1024 ** 3
+        if not confirm_action(
+                self, "SD-Karte leeren",
+                f"Auf {self.sd_card.path} werden {preview.file_count} Datei(en) in {preview.folder_count} "
+                f"Ordner(n) unwiderruflich gelöscht ({size_gb:.1f} GB), auch alle Tracks und Kartencover.\n\n"
+                "Alle RFID-Karten laufen danach ins Leere, bis die Ordner wieder belegt sind. Die Karte wird "
+                "nicht formatiert, das Dateisystem bleibt, wie es ist.\n\nFortfahren?"):
+            return
+        typed, accepted = QInputDialog.getText(
+            self, "SD-Karte leeren", f"Letzte Rückfrage: Alles auf {self.sd_card.path} wird gelöscht.\n"
+                                     "Tippe zur Bestätigung LÖSCHEN ein:")
+        if not accepted or typed.strip() != "LÖSCHEN":
+            self.status_bar.showMessage("SD-Karte nicht geleert")
+            return
+
+        card = self.sd_card
+        self._run_card_job("SD-Karte leeren", "SD-Karte wird geleert, bitte warten...",
+                           lambda task: card.wipe(), self._on_card_wiped)
+
+    def _on_card_wiped(self, errors: Optional[list], failure: str):
+        if self.sd_card is None:
+            return  # Karte wurde waehrend des Leerens entfernt (UI ist schon zurueckgesetzt)
+        self.current_folder = None
+        self._folder_name_cache.clear()
+        self._sd_album_map = {}
+        self.library_view.set_sd_map(self._sd_album_map)
+        self._show_welcome()
+        self._populate_folder_list()
+        self.rfid_panel.refresh()
+        self._update_folder_action_buttons()
+        problems = list(errors or []) + ([failure] if failure else [])
+        if problems:
+            self.status_bar.showMessage("SD-Karte nicht vollständig geleert")
+            QMessageBox.warning(self, "SD-Karte leeren", "Das ließ sich nicht löschen:\n" + "\n".join(problems[:10]))
+            return
+        self.status_bar.showMessage("SD-Karte geleert")
+        self._open_system_files()
 
     def _add_tracks(self):
         """Fuegt Tracks zum aktuellen Ordner hinzu (im Hintergrund, mit Fortschrittsanzeige)"""
@@ -1595,7 +1817,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self._add_tracks_errors.append(f"{filename}: {message}")
 
     def _on_add_tracks_finished(self, added_count: int):
-        self._add_tracks_dialog.close()
+        close_progress_dialog(self._add_tracks_dialog)
         folder = self._add_tracks_folder
 
         if self.sd_card is None or folder is None:
@@ -1724,22 +1946,26 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         worker.progress.connect(self._on_loudness_progress)
         worker.measured.connect(lambda track, lufs, error: self._loudness_rows.append((track, lufs, error)))
         worker.completed.connect(self._on_loudness_analysis_finished)
-        self._loudness_dialog.canceled.connect(worker.cancel)
+        keep_open_until_done(self._loudness_dialog, self._cancel_loudness, "Wird nach dem aktuellen Track abgebrochen …")
         self._loudness_analysis_worker = worker
         worker.start()
+
+    def _cancel_loudness(self):
+        for worker in (self._loudness_analysis_worker, self._loudness_apply_worker):
+            if worker is not None:
+                worker.cancel()
 
     def _on_loudness_progress(self, current: int, total: int, filename: str):
         self._loudness_dialog.setValue(current - 1)
         self._loudness_dialog.setLabelText(f"{self._loudness_phase}: {current}/{total} - {filename}")
 
     def _on_loudness_analysis_finished(self):
-        # Vor dem Schliessen lesen: QProgressDialog.close() loest selbst "canceled" aus
         if self._loudness_analysis_worker.was_cancelled:
-            self._loudness_dialog.close()
+            close_progress_dialog(self._loudness_dialog)
             self.status_bar.showMessage("Lautstärke-Angleichung abgebrochen")
             return
         if self.current_folder is None:
-            self._loudness_dialog.close()
+            close_progress_dialog(self._loudness_dialog)
             return  # Karte wurde waehrend der Messung entfernt (UI ist schon zurueckgesetzt)
 
         changes = []
@@ -1755,7 +1981,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self._loudness_unchanged = len(self._loudness_rows) - len(changes) - len(self._loudness_errors)
 
         if not changes:
-            self._loudness_dialog.close()
+            close_progress_dialog(self._loudness_dialog)
             self._finish_loudness(0)
             return
 
@@ -1768,13 +1994,12 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         worker.progress.connect(self._on_loudness_progress)
         worker.error.connect(lambda name, message: self._loudness_errors.append(f"{name}: {message}"))
         worker.completed.connect(self._on_loudness_apply_finished)
-        self._loudness_dialog.canceled.connect(worker.cancel)
         self._loudness_apply_worker = worker
         self._loudness_phase = "Anpassen"
         worker.start()
 
     def _on_loudness_apply_finished(self, done: int):
-        self._loudness_dialog.close()
+        close_progress_dialog(self._loudness_dialog)
         self._finish_loudness(done)
 
     def _finish_loudness(self, done: int):
@@ -2171,7 +2396,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
             self._cover_batch_worker.cancel()
             self._cover_batch_worker.wait(3000)
 
-        for worker in (self.scanner, self._purge_worker):
+        for worker in (self.scanner, self._purge_worker, self._card_job):
             if worker is not None and worker.isRunning():
                 worker.wait(3000)
 

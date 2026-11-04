@@ -148,7 +148,10 @@ Die Grenzen: 99 Ordner, 255 Tracks je Ordner. Die Systemordner **mp3** und **adv
 
 - **Neuer Ordner** legt den Ordner mit der nächsten freien Nummer an.
 - **Umbenennen:** Doppelklick auf den Ordner oder Titel, oder der Knopf mit dem Tooltip **Ordner umbenennen (der Name wird in die Tags der Tracks geschrieben)**. Der Name landet in einem eigenen Tag aller Tracks; dein Album-Tag bleibt unberührt. Leerst du das Feld, gilt wieder der Album-Tag. Enter oder ein Klick daneben übernimmt, Esc verwirft. Der Ordner muss dafür Tracks enthalten. Die Nummer auf der Karte ändert sich nie.
-- **Ordner löschen** entfernt den Ordner samt Inhalt nach einer Rückfrage endgültig.
+- **Ordner löschen** im Kopfbereich entfernt den gezeigten Ordner samt Inhalt nach einer Rückfrage endgültig. RFID-Karten dieses Ordners laufen danach ins Leere.
+- **Rechtsklick in der Ordnerliste:** **Umbenennen** (F2), **Ordnernummer ändern …**, **Ordner löschen …** (Entf), dazu **Neuer Ordner**, **SD-Karte bereinigen …** und **SD-Karte leeren und neu einrichten …**.
+- **Mehrere Ordner löschen:** Markiere sie mit **Strg**- oder **Umschalt**-Klick und drücke **Entf** oder wähle im Rechtsklick-Menü **… Ordner löschen …**. Die Rückfrage zählt die Ordner auf.
+- **Ordnernummer ändern …:** Ist die Nummer belegt, tauschen beide Ordner ihre Nummern. RFID-Karten gehen nach der Nummer und spielen danach einen anderen Ordner oder nichts, bis du sie neu programmierst.
 - Der Kopf des Ordners zeigt **aus Bibliothek: …**, wenn der Ordner zu einem Bibliotheksalbum gehört, und warnt, wenn die Bibliothek mehr Tracks hat als die Karte.
 
 ### Tracks
@@ -172,6 +175,14 @@ Die Grenzen: 99 Ordner, 255 Tracks je Ordner. Die Systemordner **mp3** und **adv
 5. **Übernehmen** und mit **Ja** bestätigen.
 
 Nur MusicBrainz liefert auch die MusicBrainz-IDs. Mit ihnen funktionieren die Serienerkennung und die spätere Cover-Stapelsuche besser.
+
+### SD-Karte leeren und neu einrichten
+
+**Einstellungen** → **SD-Karte leeren und neu einrichten …** löscht alles auf der Karte und öffnet danach den Dialog **TonUINO-Systemdateien**. Du bestätigst zweimal und tippst beim zweiten Mal **LÖSCHEN** ein.
+
+- **Nur echte Karten:** Die App lehnt Festplatten und einzelne Ordner ab. Öffne die Karte direkt über ihren Laufwerksbuchstaben.
+- **Kein Formatieren:** Das Dateisystem bleibt, wie es ist. Für ein anderes Dateisystem brauchst du das Werkzeug deines Betriebssystems.
+- **RFID-Karten:** Sie laufen ins Leere, bis die Ordner wieder belegt sind.
 
 ### TonUINO-Systemdateien
 
@@ -574,7 +585,7 @@ Eingabe im Menü **Kartencover** → **KI & Online-Dienste (Gemini, Spotify) …
 
 Ohne Spotify-Zugang ist die Quelle **Spotify** ausgegraut. Ohne Gemini-Key funktionieren Suche, Zuweisen, Blur, Verlauf und Druck weiterhin.
 
-**Bildmodell:** und **Recherche-Modell:** sind vorbelegt und müssen nur geändert werden, wenn Google neue Bezeichnungen einführt.
+**Bildmodell:** und **Recherche-Modell:** sind vorbelegt und müssen nur geändert werden, wenn Google neue Bezeichnungen einführt. **Bildgröße:** steht auf **1K**, das reicht für den Druck. **2K** liefert deutlich größere Dateien. Du findest sie auch unter **Einstellungen** → **KI-Bildgröße**.
 
 ### AcoustID und fpcalc
 
@@ -659,7 +670,7 @@ Die App sichert nichts von selbst, außer dass ersetzte Kartenmotive ins Archiv 
 
 Keys sicherst du nicht mit: Du kannst sie beim Anbieter jederzeit einsehen oder neu erstellen.
 
-Sichere vor allem vor Schritten, die sich nicht rückgängig machen lassen: **SD-Karte bereinigen**, **Ordner löschen**, **Tracks löschen**, **Lautstärke angleichen**, **Ersetzen** beim Übertragen und **Verwerfen** von archivierten Bildern. Auch **Einsortieren …** und Tag-Änderungen an der Bibliothek betreffen deine Originale.
+Sichere vor allem vor Schritten, die sich nicht rückgängig machen lassen: **SD-Karte leeren**, **Ordnernummer ändern**, **SD-Karte bereinigen**, **Ordner löschen**, **Tracks löschen**, **Lautstärke angleichen**, **Ersetzen** beim Übertragen und **Verwerfen** von archivierten Bildern. Auch **Einsortieren …** und Tag-Änderungen an der Bibliothek betreffen deine Originale.
 
 ---
 
@@ -669,7 +680,7 @@ Die Statusleiste unten im Hauptfenster zeigt die letzte Meldung, etwa Ergebnisse
 
 ### Die KI liefert kein Bild
 
-Bei KI-Motiven oder **Rand per KI ergänzen** kann die KI ein Bild ablehnen, gerade bei Covern und Figuren bekannter Hörspiele. Du siehst dann etwa **Das Modell hat kein Bild geliefert**. Das ist kein Fehler der App, sondern vermutlich eine rechtliche Einschränkung beim Anbieter, etwa wegen des Urheberrechts. Den genauen Grund nennt er nicht immer.
+Bei KI-Motiven oder **Rand per KI ergänzen** kann die KI ein Bild ablehnen, gerade bei Covern und Figuren bekannter Hörspiele. Du siehst dann **Google hat dieses Bild abgelehnt** mit häufigen Gründen und passenden Tipps. Das ist kein Fehler der App, sondern vermutlich eine rechtliche Einschränkung beim Anbieter, etwa wegen des Urheberrechts. Den genauen Grund nennt er nicht immer.
 
 Versuche es ohne dieses Bild als Vorlage oder beschreibe unter **Eigener Wunsch** ein eigenes Motiv. Für die Rückseite gehen auch **Ambient Blur der Vorderseite (ohne KI)** und **Farbverlauf aus den Coverfarben (ohne KI)**.
 

@@ -643,7 +643,7 @@ class CoverBatchWorker(QThread):
                 self.folder_done.emit(folder.index)
             except Exception as e:
                 log.exception("Batch-Cover fuer %s fehlgeschlagen", label)
-                self.error.emit(label, str(e))
+                self.error.emit(label, getattr(e, "short", str(e)))  # Tipps nur einmal, siehe Hauptfenster
         self.completed.emit(done)
 
 

@@ -9,6 +9,8 @@ MainWindow und greifen auf dessen Attribute zu.
 
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtWidgets import QMessageBox, QApplication, QProgressDialog, QInputDialog, QDialog
+from core.cover_generator import REFUSAL_BATCH_HINT, REFUSED_SHORT
+from gui.common import close_progress_dialog, keep_open_until_done
 
 from core.ai_settings import SETTINGS_ORIENTATION, SETTINGS_STYLE
 from core.card_layout import ORIENTATION_PORTRAIT
@@ -200,7 +202,7 @@ class CardCoverMixin:
         worker.folder_done.connect(self._on_card_cover_batch_folder_done)
         worker.error.connect(lambda name, msg: self._cover_batch_errors.append(f"{name}: {msg}"))
         worker.completed.connect(self._on_card_cover_batch_finished)
-        self._cover_batch_dialog.canceled.connect(worker.cancel)
+        keep_open_until_done(self._cover_batch_dialog, worker.cancel, "Wird nach dem aktuellen Cover abgebrochen …")
         self._cover_batch_worker = worker
         worker.start()
 
@@ -214,7 +216,10 @@ class CardCoverMixin:
             folder.card_path = str(card_paths(folder.path)[0])
 
     def _on_card_cover_batch_finished(self, done: int):
-        self._cover_batch_dialog.close()
+        close_progress_dialog(self._cover_batch_dialog)
         self.status_bar.showMessage(f"{done} Kartencover erzeugt")
         if self._cover_batch_errors:
-            QMessageBox.warning(self, "Einige Kartencover fehlgeschlagen", "\n".join(self._cover_batch_errors))
+            text = "\n".join(self._cover_batch_errors)
+            if REFUSED_SHORT in text:
+                text += "\n\n" + REFUSAL_BATCH_HINT
+            QMessageBox.warning(self, "Einige Kartencover fehlgeschlagen", text)

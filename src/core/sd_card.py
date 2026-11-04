@@ -108,6 +108,14 @@ class PurgePreview:
                 and not self.folders_to_delete)
 
 
+@dataclass
+class WipePreview:
+    """Was wipe() von der Karte entfernen wuerde"""
+    file_count: int = 0
+    folder_count: int = 0
+    total_bytes: int = 0
+
+
 class SDCard:
     """Repraesentiert eine Tonuio SD-Karte"""
 
@@ -323,6 +331,27 @@ class SDCard:
         if isinstance(identity, int):
             return self.folders.get(identity)
         return self.special_folders.get(str(identity).lower())
+
+    def change_folder_number(self, old: int, new: int):
+        """Gibt einem Ordner eine andere Nummer. Ist sie belegt, tauschen beide Ordner ihre
+        Nummern. Danach ist die Karte neu eingelesen (neue Folder-Objekte)."""
+        if not 1 <= new <= 99:
+            raise ValueError("Ordner-Nummer muss zwischen 1 und 99 liegen")
+        if old not in self.folders:
+            raise ValueError(f"Ordner {old:02d} nicht gefunden")
+        source, target = self.path / f"{old:02d}", self.path / f"{new:02d}"
+        if not target.exists():
+            os.rename(source, target)
+        else:
+            parked = self.path / f".tmp_renumber_{new:02d}"
+            os.rename(target, parked)
+            try:
+                os.rename(source, target)
+            except OSError:
+                os.rename(parked, target)
+                raise
+            os.rename(parked, source)
+        self.scan()
 
     def delete_folder(self, folder_index: int):
         """Loescht einen Ordner samt Inhalt von der SD-Karte"""
@@ -628,6 +657,41 @@ class SDCard:
         #    Metadatendateien anzulegen (siehe _remove_foreign_items) - ein
         #    Durchgang danach erfasst deshalb alles.
         self._remove_foreign_items()
+
+    # Windows schuetzt diesen Ordner, und TonUINO stoert er nicht
+    WIPE_KEEP_NAMES = ("system volume information",)
+
+    def _wipe_items(self) -> List[Path]:
+        return [item for item in self.path.iterdir() if item.name.lower() not in self.WIPE_KEEP_NAMES]
+
+    def preview_wipe(self) -> WipePreview:
+        """Zaehlt, was wipe() loeschen wuerde, ohne etwas zu aendern"""
+        preview = WipePreview()
+        for item in self._wipe_items():
+            entries = [item] if not item.is_dir() else [item] + list(item.rglob("*"))
+            for entry in entries:
+                if entry.is_dir():
+                    preview.folder_count += 1
+                else:
+                    preview.file_count += 1
+                    preview.total_bytes += entry.stat().st_size
+        return preview
+
+    def wipe(self) -> List[str]:
+        """Loescht alles auf der Karte und liest sie neu ein. Die Laufwerkspruefung ist Sache des
+        Aufrufers (drive_check.wipe_refusal). Gibt zurueck, was sich nicht loeschen liess."""
+        errors = []
+        for item in self._wipe_items():
+            try:
+                if item.is_dir() and not item.is_symlink():
+                    shutil.rmtree(item, onerror=self._clear_readonly_or_raise)
+                else:
+                    os.chmod(item, stat.S_IWRITE)
+                    item.unlink()
+            except OSError as e:
+                errors.append(f"{item.name}: {e}")
+        self.scan()
+        return errors
 
     @property
     def folder_count(self) -> int:
