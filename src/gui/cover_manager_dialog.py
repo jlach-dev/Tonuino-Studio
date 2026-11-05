@@ -311,15 +311,25 @@ class CoverManagerDialog(QDialog):
     FOCUS_ALBUM = "album"
 
     def __init__(self, folder: Folder, folder_name: str, metadata_manager, archive: Optional[CoverArchive],
-                 parent=None, focus: str = "card", library: bool = False, album_id: str = ""):
+                 parent=None, focus: str = "card", library: bool = False, album_id: str = "",
+                 mediahub: bool = False):
         """library=True: der 'Ordner' ist ein Bibliotheksalbum (folder.index None).
         Das Album-Cover wird dann in die Bibliotheksdateien und als cover.jpg
-        geschrieben; Kartendateien landen im Archiv statt auf einer SD-Karte."""
+        geschrieben; Kartendateien landen im Archiv statt auf einer SD-Karte.
+        mediahub=True: eine Karte aus dem ESPuino-Mediahub (core/mediahub_cards.py).
+        Wie library, aber die Album-ID ist fest (album_id), es werden nie Tags
+        geschrieben und kein Album-Cover gesetzt - die Dateien gehoeren oft zu
+        anderen Alben (Wiedergabelisten) und liegen in der Mediathek."""
         super().__init__(parent)
         self.focus = focus
+        self.mediahub_mode = mediahub
+        library = library or mediahub
         self.library_mode = library
         self._album_id_hint = album_id
-        where = f"Bibliothek: {folder_name}" if library else f"Ordner {folder.index:02d}"
+        if mediahub:
+            where = f"Mediahub-Karte: {folder_name}"
+        else:
+            where = f"Bibliothek: {folder_name}" if library else f"Ordner {folder.index:02d}"
         self.setWindowTitle(f"Cover-Manager – Album-Cover & Kartencover – {where}")
         # Wie das Hauptfenster: maximierbar (Dialoge haben den Knopf sonst nicht)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint
@@ -581,6 +591,9 @@ class CoverManagerDialog(QDialog):
         self.btn_album_cover.setToolTip("Das gerade groß angezeigte Bild quadratisch zuschneiden und in alle "
                                         "Tracks des Ordners schreiben – sofort wirksam")
         self.btn_album_cover.clicked.connect(self._set_album_cover)
+        if self.mediahub_mode:
+            self.btn_album_cover.setToolTip("Bei Mediahub-Karten aus: Die Dateien liegen in der Mediathek und "
+                                            "gehören oft zu verschiedenen Alben. Album-Cover über die Bibliothek setzen.")
         self.btn_card_cover = QPushButton("Als Vorderseite")
         self.btn_card_cover.setToolTip("Die groß angezeigte Seite als Vorderseite der Karte – wird sofort gespeichert")
         self.btn_card_cover.clicked.connect(lambda: self._pick_source(back=False))
@@ -752,6 +765,7 @@ class CoverManagerDialog(QDialog):
         self.btn_tags.setToolTip("Album, Titel, Tracknummern und MusicBrainz-IDs der Tracks aus MusicBrainz "
                                  "(bzw. Deezer/iTunes/Spotify) übernehmen - mit Prüfung alt → neu")
         self.btn_tags.clicked.connect(self._open_tag_lookup)
+        self.btn_tags.setVisible(not self.mediahub_mode)  # Mediathek-Dateien nicht aus dem Kartenfenster taggen
         button_row.addWidget(self.btn_tags)
         button_row.addStretch(1)
         layout.addLayout(button_row)
@@ -1450,6 +1464,10 @@ class CoverManagerDialog(QDialog):
         """Album-ID aus card.json bzw. ID-Tag der Tracks; sonst Treffer im
         Archiv ueber den Titel; sonst neu (wird erst beim ersten Speichern
         dauerhaft angelegt)."""
+        if self.mediahub_mode:
+            self.album_id = self._album_id_hint  # fest je Karte, Tags der Dateien zaehlen nicht
+            self._album_tagged = True  # nie taggen
+            return
         tagged_id = album_identity.read_album_id(self._track_paths())
         album_id = (self._card_meta.album_id if self._card_meta else "") or tagged_id or self._album_id_hint
         self._album_tagged = bool(album_id) and tagged_id == album_id
@@ -1463,12 +1481,16 @@ class CoverManagerDialog(QDialog):
         if self.archive is None:
             return
         title = self.info.album or self.brief.album_title or self.search_title_edit.text().strip()
-        self.archive.ensure_album(self.album_id, title, self.info.artist, path=self.folder.path)
+        # Mediahub-Karten ohne Pfad: sonst hielte die Bibliothek den Mediathek-Ordner
+        # fuer ein verschobenes oder verwaistes Album
+        path = "" if self.mediahub_mode else self.folder.path
+        self.archive.ensure_album(self.album_id, title, self.info.artist, path=path)
         if self.series_profile is not None:
             self.archive.assign_album(self.album_id, self.series_profile.id)
         # In der Bibliothek sind die Tracks die Originaldateien: dort nur mit der
         # beim ersten Import erteilten Erlaubnis taggen (sonst Verknuepfung ueber Pfad)
-        if not self._album_tagged and self.folder.tracks and (not self.library_mode or library_id_tags_allowed()):
+        if not self._album_tagged and self.folder.tracks and not self.mediahub_mode and (
+                not self.library_mode or library_id_tags_allowed()):
             self._release_player()
             album_identity.write_album_id(self._track_paths(), self.album_id)
             self._album_tagged = True
@@ -1954,6 +1976,11 @@ class CoverManagerDialog(QDialog):
             self._run_after_research()
 
     def _fill_text_from_tags(self):
+        if self.mediahub_mode and self.folder_name:
+            # Kartenname aus dem Mediahub; die Tags gehoeren bei Wiedergabelisten zu fremden Alben
+            self.series_edit.setText("")
+            self.title_edit.setPlainText(self.folder_name)
+            return
         series, title = derive_card_text(self.info, self.brief)
         if not title:
             title = suggest_search_title(self.info, self.brief) or self.folder_name
@@ -2224,6 +2251,8 @@ class CoverManagerDialog(QDialog):
                                 "Das Kartenbild ist gespeichert, im Cover-Archiv konnte es aber nicht als "
                                 f"Kartencover vermerkt werden:\n\n{role_error}\n\n"
                                 "Bitte „Als Vorderseite“ noch einmal klicken." + back_note)
+        elif self.mediahub_mode:
+            self._flash("✓ Karte gespeichert (Archiv) – zum Drucken: Kartencover → Druckbogen." + back_note)
         elif self.library_mode:
             self._flash("✓ Karte gespeichert (Archiv) – wird beim Übertragen auf die SD-Karte geschrieben."
                         + back_note)
@@ -2819,7 +2848,8 @@ class CoverManagerDialog(QDialog):
         selected = self.selected is not None
         busy = any(w is not None and w.isRunning() for w in (self._research_worker, self._generate_worker))
         searching = self._search_worker is not None and self._search_worker.isRunning()
-        self.btn_album_cover.setEnabled(selected and bool(self.folder.tracks) and not self.selected.is_album_cover)
+        self.btn_album_cover.setEnabled(selected and bool(self.folder.tracks) and not self.selected.is_album_cover
+                                        and not self.mediahub_mode)
         browse = self._browse_source()
         self.btn_card_cover.setEnabled(browse is not None)
         self.btn_back_cover.setEnabled(browse is not None)

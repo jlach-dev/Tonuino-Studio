@@ -34,6 +34,8 @@ KIND_FILE = "file"  # vom PC gewaehlt
 ROLE_ALBUM_COVER = "album_cover"
 ROLE_CARD_COVER = "card_cover"
 ROLE_SERIES_ANCHOR = "series_anchor"
+# Album-IDs der Karten aus dem ESPuino-Mediahub (core/mediahub_cards.py)
+MEDIAHUB_ALBUM_PREFIX = "mediahub"
 
 KIND_LABELS = {
     KIND_AI: "KI",
@@ -199,6 +201,8 @@ class CoverArchive:
             return None
         title_key, artist_key = title.strip().lower(), artist.strip().lower()
         for record in self.all_albums():
+            if record.id.startswith(MEDIAHUB_ALBUM_PREFIX):
+                continue  # Karten aus dem ESPuino-Mediahub sind keine Alben (core/mediahub_cards.py)
             if record.title.strip().lower() == title_key and (
                     not artist_key or not record.artist or record.artist.strip().lower() == artist_key):
                 return record

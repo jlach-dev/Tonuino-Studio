@@ -566,9 +566,12 @@ class CoverGenerateWorker(QThread):
 
 class CoverBatchWorker(QThread):
     """Erzeugt fuer mehrere Ordner je ein Kartencover und speichert es direkt
-    (Recherche -> eine Variante -> card.png/card.json im Ordner)."""
+    (Recherche -> eine Variante -> card.png/card.json im Ordner).
+    Karten aus dem ESPuino-Mediahub (core/mediahub_cards.MediahubFolder, ohne
+    Nummer) haben eine feste Album-ID, ihre Kartendateien liegen im Archiv, und
+    die Dateien der Mediathek werden nie getaggt."""
     progress = pyqtSignal(int, int, str)  # aktueller Index, Gesamtzahl, Ordnername
-    folder_done = pyqtSignal(int)  # Ordnernummer
+    folder_done = pyqtSignal(object)  # Ordnernummer bzw. der Folder ohne Nummer
     error = pyqtSignal(str, str)  # Ordner, Fehlermeldung
     completed = pyqtSignal(int)  # Anzahl erfolgreich
 
@@ -607,7 +610,9 @@ class CoverBatchWorker(QThread):
         for i, folder in enumerate(self.folders, start=1):
             if self._cancelled:
                 break
-            label = f"Ordner {folder.index:02d}"
+            fixed_album_id = getattr(folder, "album_id", "")  # Mediahub-Karte
+            card_dir = getattr(folder, "card_dir", "") or folder.path
+            label = f"Ordner {folder.index:02d}" if folder.index is not None else (folder.name or "Karte")
             self.progress.emit(i, len(self.folders), label)
             try:
                 info = gather_folder_info(folder, self.metadata_manager)
@@ -619,6 +624,9 @@ class CoverBatchWorker(QThread):
                     request.anchor_images = list(self.anchor_images)
                 art = generate_art(self.source, request, self.client, self.image_model)
                 series, title = derive_card_text(info, brief)
+                if fixed_album_id and folder.name:
+                    # der im Mediahub vergebene Kartenname; Tags gehoeren bei Wiedergabelisten zu fremden Alben
+                    series, title = "", folder.name
                 meta = card_store.CardMeta(
                     title=title or info.album or label, series=series, orientation=self.orientation,
                     source=self.source,
@@ -626,20 +634,22 @@ class CoverBatchWorker(QThread):
                     research_sources=brief.sources)
                 if self.archive is not None:
                     paths = [t.filepath for t in folder.tracks]
-                    album_id = album_identity.read_album_id(paths)
+                    album_id = fixed_album_id or album_identity.read_album_id(paths)
                     if not album_id:
                         album_id = album_identity.new_album_id()
                         album_identity.write_album_id(paths, album_id)
-                    self.archive.ensure_album(album_id, info.album or label, info.artist, path=folder.path)
+                    self.archive.ensure_album(album_id, label if fixed_album_id else (info.album or label),
+                                              info.artist, path="" if fixed_album_id else folder.path)
                     if self.series_profile is not None:
                         self.archive.assign_album(album_id, self.series_profile.id)
                     entry = self.archive.add_cover(album_id, art, self.source, style=self.style,
                                                    model=meta.model)
                     self.archive.set_role(album_id, entry.id, ROLE_CARD_COVER)
                     meta.album_id, meta.archive_cover_id = album_id, entry.id
-                card_store.save_card(folder.path, art, meta, folder.index)
+                Path(card_dir).mkdir(parents=True, exist_ok=True)
+                card_store.save_card(card_dir, art, meta, folder.index)
                 done += 1
-                self.folder_done.emit(folder.index)
+                self.folder_done.emit(folder.index if folder.index is not None else folder)
             except Exception as e:
                 log.exception("Batch-Cover fuer %s fehlgeschlagen", label)
                 self.error.emit(label, getattr(e, "short", str(e)))  # Tipps nur einmal, siehe Hauptfenster

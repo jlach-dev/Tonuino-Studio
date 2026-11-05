@@ -17,12 +17,13 @@ Gilt für Version 2.1.0. Fett gesetzte Wörter sind die Beschriftungen aus dem P
 9. [KI-Motive und Serien](#9-ki-motive-und-serien)
 10. [Drucken](#10-drucken)
 11. [RFID-Karten](#11-rfid-karten)
-12. [Audio-Player](#12-audio-player)
-13. [Einstellungen, Dienste und API-Keys](#13-einstellungen-dienste-und-api-keys)
-14. [Wo Daten liegen und Sicherung](#14-wo-daten-liegen-und-sicherung)
-15. [Fehlerbehebung](#15-fehlerbehebung)
-16. [Häufige Fragen](#16-häufige-fragen)
-17. [Lizenz und Herkunft](#17-lizenz-und-herkunft)
+12. [ESPuino und Mediahub](#12-espuino-und-mediahub)
+13. [Audio-Player](#13-audio-player)
+14. [Einstellungen, Dienste und API-Keys](#14-einstellungen-dienste-und-api-keys)
+15. [Wo Daten liegen und Sicherung](#15-wo-daten-liegen-und-sicherung)
+16. [Fehlerbehebung](#16-fehlerbehebung)
+17. [Häufige Fragen](#17-häufige-fragen)
+18. [Lizenz und Herkunft](#18-lizenz-und-herkunft)
 
 ---
 
@@ -37,6 +38,7 @@ Tonuino-Studio befüllt die SD-Karte einer TonUINO-Box und erstellt die passende
 - **Drucken:** Kartencover als A4-PDF für Etikettenbögen oder zum Selbstausschneiden.
 - **RFID-Karten programmieren:** RFID ist die Funktechnik der Karten, die du auf die Box legst. Die App beschreibt sie über einen USB-Leser oder über den TonUINO selbst.
 - **Anhören:** Tracks direkt im Programm abspielen.
+- **ESPuino:** Kartencover für die Karten aus dem ESPuino-Mediahub gestalten und drucken, siehe [ESPuino und Mediahub](#12-espuino-und-mediahub).
 
 Für das Befüllen und Programmieren brauchst du kein Konto und keinen Key. Keys sind nur für KI-Funktionen, Spotify und die Stückerkennung nötig.
 
@@ -102,7 +104,7 @@ Beim Start sucht die App nach einer neuen Version. Abschalten kannst du das im M
 
 | Menü | Einträge |
 | --- | --- |
-| **Einstellungen** | **Nach Updates suchen**, **Über Tonuino-Studio …**, **Automatisch nach Updates suchen**, **Alle MP3 Dateien anzeigen**, **Design** (**Dunkel**, **Hell**), **RFID-Leser** (**ACR122U**, **TonUINO (seriell)**), **Bibliothek-Ordner …**, **Bibliothek neu einlesen**, **Datenordner ändern …**, **TonUINO-Systemdateien …** |
+| **Einstellungen** | **Nach Updates suchen**, **Über Tonuino-Studio …**, **Automatisch nach Updates suchen**, **Alle MP3 Dateien anzeigen**, **Design** (**Dunkel**, **Hell**), **Modus** (TonUINO oder ESPuino), **RFID-Leser** (**ACR122U**, **TonUINO (seriell)**), **Bibliothek-Ordner …**, **Bibliothek neu einlesen**, **Datenordner ändern …**, **TonUINO-Systemdateien …** |
 | **Ansicht** | **Vollbild** (F11, Esc beendet es), **Maximieren / Wiederherstellen** |
 | **Kartencover** | **Cover-Manager für diesen Ordner …**, **Kartencover für alle Ordner ohne Cover …**, **Kartencover für alle Folgen der Serie ohne Cover …**, **Druckbogen (PDF) erstellen …**, **Tags von MusicBrainz …**, **KI & Online-Dienste (Gemini, Spotify) …** |
 
@@ -477,7 +479,7 @@ Eine gewählte Bild-Rückseite bleibt gemerkt, während du Blur oder Verlauf aus
 
 *Beispiel mit erfundenem Hörspiel: Die Bilder unter **Neu** sind von Hand gezeichnet und stehen für das, was die KI liefert.*
 
-Alle KI-Funktionen brauchen einen Gemini-Key ([Einstellungen](#13-einstellungen-dienste-und-api-keys)).
+Alle KI-Funktionen brauchen einen Gemini-Key ([Einstellungen](#14-einstellungen-dienste-und-api-keys)).
 
 **KI-Knöpfe weisen nichts zu.** Sie erzeugen ein neues Bild unter **Neu**. Ob es auf die Karte kommt, entscheidest du mit **Als Vorderseite** oder **Als Rückseite**. Die einzige Ausnahme ist das Charakterblatt, siehe unten.
 
@@ -581,7 +583,52 @@ Die Karte wird über den per USB verbundenen TonUINO und dessen eigenen Leser ge
 
 ---
 
-## 12. Audio-Player
+## 12. ESPuino und Mediahub
+
+![Mediahub-Karten im ESPuino-Modus](screenshots/mediahub-karten.png)
+
+Für den ESPuino, eine Hörbox mit ESP32, gibt es einen eigenen Modus. Welche Karte welche Musik spielt, legst du dort im ESPuino-Mediahub fest, einem eigenen Programm von biologist79, das meist per Docker auf dem NAS läuft. Die App liest die Karten des Mediahub und gestaltet die Kartencover dazu.
+
+### Modus wechseln
+
+**Einstellungen** → **Modus** → **ESPuino – Karten aus dem Mediahub**. Der Wechsel wirkt nach einem Neustart; die App bietet **Jetzt neu starten** an. Zurück geht es mit **TonUINO – SD-Karte und RFID-Karten**.
+
+Im ESPuino-Modus heißt die App **ESPuino-Studio**. Der erste Reiter heißt **Mediahub-Karten**, die **Bibliothek** bleibt. Ausgeblendet ist alles rund um die SD-Karte (**SD-Karte öffnen**, die Ordnerliste, **Alle MP3 Dateien anzeigen**, **TonUINO-Systemdateien …**, **SD-Karte leeren und neu einrichten …**), außerdem der Bereich **RFID-Karte** mit dem Menü **RFID-Leser**, **Kartencover für alle Folgen der Serie ohne Cover …** und **Tags von MusicBrainz …**.
+
+Der ESPuino speichert nichts auf der Karte. Er erkennt sie an ihrer Nummer, die Zuordnung zur Musik steht im Mediahub. Deshalb gibt es hier nichts zu programmieren.
+
+### Mediahub einrichten
+
+**Mediahub einrichten …** fragt zwei Orte ab:
+
+- **db.json:** die Datei im Datenordner des Mediahub (im Docker der Ordner, der als `/data` eingebunden ist), etwa über eine Netzwerkfreigabe des NAS.
+- **Mediathek:** derselbe Musikordner, den der Mediahub als `/media` nutzt, so wie er auf diesem PC erreichbar ist.
+
+Die App liest `db.json` nur. Sie schreibt nichts hinein und spricht den Mediahub nicht an. Die Kartencover liegen im Datenordner der App.
+
+**Karten neu einlesen** liest die Datei erneut, etwa nachdem du im Mediahub eine Karte zugewiesen hast.
+
+### Kartenliste und Kartenseite
+
+Links stehen alle zugewiesenen Karten mit Dateien. Karten ohne Kartencover sind grau und kursiv. **Karten filtern …** sucht im Namen und in der Kartennummer. Webradio-Karten, Karten ohne Dateien und noch nicht zugewiesene Karten fehlen in der Liste; die Übersicht nennt ihre Zahl.
+
+Ist dieselbe Karte auf mehreren ESPuinos zugewiesen, erscheint sie nur einmal. Ist sie dort unterschiedlich belegt, gilt die neueste Zuweisung, und die Kartenseite weist darauf hin.
+
+Die Kartenseite zeigt das Kartencover, den Namen, die Kartennummer, die ESPuinos, den Abspielmodus und die Dateien. Fehlt eine Datei in der gewählten Mediathek, steht **(fehlt)** dahinter.
+
+### Kartencover und Druck
+
+**Cover-Manager …** öffnet den [Cover-Manager](#7-cover-manager) für die Karte. Er arbeitet wie gewohnt, mit drei Unterschieden:
+
+- Als Kartentext ist der Name aus dem Mediahub vorbelegt.
+- **Als Album-Cover setzen** und **Tags von MusicBrainz …** sind aus. Die Dateien liegen in der Mediathek und gehören oft zu verschiedenen Alben. Album-Cover setzt du über die [Bibliothek](#6-bibliothek).
+- Die App schreibt keine Album-ID in die Dateien. Jede Karte hat im Archiv die feste ID `mediahub` plus Kartennummer.
+
+**Kartencover** → **Kartencover für alle Karten ohne Cover …** erzeugt per KI je ein Cover für alle Karten ohne Cover, wie unter [Karten im Stapel erzeugen](#karten-im-stapel-erzeugen) beschrieben. **Druckbogen (PDF) erstellen …** funktioniert wie unter [Drucken](#10-drucken).
+
+---
+
+## 13. Audio-Player
 
 Der Player steht unten im Fenster. Fährst du über eine Trackzeile, erscheint dort ein Symbol zum Abspielen und Pausieren. Der Player zeigt Cover, Titel, Interpret und Album und hat Knöpfe mit den Tooltips **Vorheriger Track**, **Wiedergabe starten/pausieren**, **Nächster Track**, **Stumm schalten** und **Lautstärke**. Mit der Leiste springst du im Track.
 
@@ -589,7 +636,7 @@ Vor Dateiänderungen stoppt die App die Wiedergabe selbst, damit die Dateien nic
 
 ---
 
-## 13. Einstellungen, Dienste und API-Keys
+## 14. Einstellungen, Dienste und API-Keys
 
 Ein API-Key ist ein Zugangsschlüssel, mit dem die App einen Online-Dienst in deinem Namen nutzt. Du erhältst ihn beim jeweiligen Anbieter.
 
@@ -629,7 +676,7 @@ Die App legt Keys **im Schlüsselbund des Betriebssystems** ab, also im sicheren
 
 ---
 
-## 14. Wo Daten liegen und Sicherung
+## 15. Wo Daten liegen und Sicherung
 
 ### Auf der SD-Karte
 
@@ -655,6 +702,7 @@ Der Ort wird beim ersten Bedarf abgefragt. Vorschlag ist `Tonuino/Bibliothek-Dat
 | `albums/<Album-ID>/covers.json` | Liste der Cover mit Herkunft und Verwendung |
 | `albums/<Album-ID>/covers/` | die Bilder des Archivs |
 | `albums/<Album-ID>/card/` | Kartencover, das aus der Bibliothek heraus gestaltet wurde |
+| `albums/mediahub<Kartennummer>/card/` | Kartencover einer Karte aus dem ESPuino-Mediahub |
 | `series/<Serien-ID>/series.json` | Serienprofile |
 | `library_index.json`, `library_thumbs/` | Übersicht und Vorschaubilder der Bibliothek |
 | `tools/` | heruntergeladenes `fpcalc` |
@@ -693,7 +741,7 @@ Sichere vor allem vor Schritten, die sich nicht rückgängig machen lassen: **SD
 
 ---
 
-## 15. Fehlerbehebung
+## 16. Fehlerbehebung
 
 Die Statusleiste unten im Hauptfenster zeigt die letzte Meldung, etwa Ergebnisse von Importen, RFID-Fehler oder fehlende Programme wie FFmpeg. Schau dort zuerst nach.
 
@@ -759,7 +807,7 @@ Liegt dein Datenordner oder deine Bibliothek in einem synchronisierten Ordner, k
 
 ---
 
-## 16. Häufige Fragen
+## 17. Häufige Fragen
 
 **Muss ich nach „Als Vorderseite“ noch etwas speichern?**
 Nein. Die Karte ist sofort gespeichert.
@@ -793,7 +841,7 @@ Nur wenn du die Online-Funktionen nutzt. Suchanfragen gehen an die gewählten Di
 
 ---
 
-## 17. Lizenz und Herkunft
+## 18. Lizenz und Herkunft
 
 Tonuino-Studio baut auf [donschoof/tonuino-manager](https://github.com/donschoof/tonuino-manager) von David Schäfer auf und übernimmt dessen Weiterentwicklung. Es steht unter der GNU General Public License v3.0, siehe `LICENSE`: Du darfst es nutzen, auch kommerziell, ändern und weitergeben, musst beim Weitergeben aber den Quellcode unter derselben Lizenz bereitstellen. Der übernommene Code des Originals bleibt zusätzlich unter dessen MIT-Lizenz, siehe `LICENSE-MIT-tonuino-manager.txt`.
 

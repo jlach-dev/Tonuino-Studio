@@ -96,6 +96,11 @@ class CardCoverMixin:
         if not folders:
             QMessageBox.information(self, "Nichts zu tun", "Alle Ordner mit Tracks haben bereits ein Kartencover.")
             return
+        self._confirm_and_start_cover_batch(folders, "Ordner", get_archive(self))
+
+    def _confirm_and_start_cover_batch(self, folders: list, unit: str, archive):
+        """API-Key pruefen, Stil/Format und Kosten bestaetigen lassen, Stapel starten.
+        unit: "Ordner" (SD-Karte) bzw. "Karten" (Mediahub)"""
         client = gemini_client()
         if client is None:
             QMessageBox.information(self, "Kein API-Key",
@@ -108,12 +113,12 @@ class CardCoverMixin:
         orientation_label = "Hochformat" if orientation == ORIENTATION_PORTRAIT else "Querformat"
         if not confirm_action(
                 self, "Kartencover erzeugen",
-                f"Für {len(folders)} Ordner wird je ein Kartencover erzeugt "
+                f"Für {len(folders)} {unit} wird je ein Kartencover erzeugt "
                 f"(Stil „{style}“, {orientation_label}).\n\n"
                 f"Geschätzte Kosten: ca. {len(folders) * ESTIMATED_COST_PER_IMAGE:.2f} USD. Fortfahren?",
                 default_no=False):
             return
-        self._start_cover_batch(folders, client, style, orientation, archive=get_archive(self))
+        self._start_cover_batch(folders, client, style, orientation, archive=archive)
 
     def _series_folders(self, profile, archive) -> list:
         """Ordner ohne Kartencover, die zur Serie gehoeren: ueber die Album-ID im

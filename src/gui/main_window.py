@@ -30,6 +30,7 @@ from gui.about_dialog import show_about
 from gui.main_window_cards import CardCoverMixin
 from gui.main_window_frame import WindowFrameMixin
 from gui.main_window_library import LibraryMixin
+from gui.main_window_mediahub import MediahubMixin
 from gui.compact_buttons import CompactButtons
 from gui.common import (
     resource_path, heading_font, confirm_action, icon_from_glyph, icon_with_hover, keep_open_until_done,
@@ -63,7 +64,7 @@ LAST_SD_PATH_KEY = "library/last_sd_path"
 READER_MODE_KEY = "rfid/reader_mode"
 
 
-class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
+class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
     """Hauptfenster des Tonuino-Managers"""
 
     # Zwei alternative Wege, eine RFID-Karte zu programmieren - siehe
@@ -133,6 +134,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self.update_controller = UpdateController(self)
 
         self._setup_ui()
+        self._apply_app_mode()  # TonUINO oder ESPuino, siehe gui/main_window_mediahub.py
         self._restore_reader_mode()
         self._setup_statusbar()
         self._check_dependencies()
@@ -262,11 +264,13 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         """Erstellt das Menue Einstellungen in der Menueleiste des Fensters
         (Updates, RFID-Leser)."""
         menu = menu_bar.addMenu("Einstellungen")
+        self.settings_menu = menu
 
         action_check_now = menu.addAction("Nach Updates suchen")
         action_check_now.triggered.connect(self.update_controller.check_manual)
         action_about = menu.addAction(f"Über {APP_NAME} …")
         action_about.triggered.connect(lambda: show_about(self))
+        self.action_about = action_about
 
         menu.addSeparator()
 
@@ -286,6 +290,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
             "entsprechen. Sie lassen sich abspielen, löschen und in ihren Tags bearbeiten, aber nicht umsortieren."
         )
         action_show_all_mp3.toggled.connect(self._on_show_all_mp3_toggled)
+        self.action_show_all_mp3 = action_show_all_mp3
 
         menu.addSeparator()
 
@@ -302,6 +307,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         menu.addSeparator()
 
         reader_menu = menu.addMenu("RFID-Leser")
+        self.reader_menu = reader_menu
         reader_group = QActionGroup(self)
         reader_group.setExclusive(True)
 
@@ -342,6 +348,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         action_wipe_card = menu.addAction("SD-Karte leeren und neu einrichten …")
         action_wipe_card.setToolTip("Löscht alles auf der Karte und richtet danach die Systemdateien ein")
         action_wipe_card.triggered.connect(self._wipe_sd_card)
+        self.action_system_files, self.action_wipe_card = action_system_files, action_wipe_card
 
         view_menu = menu_bar.addMenu("Ansicht")
         self.action_full_screen = view_menu.addAction("Vollbild")
@@ -455,6 +462,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
 
         title = QLabel(APP_NAME)
         title.setObjectName("sidebarTitle")
+        self.sidebar_title = title
         title.setFont(heading_font(14))
 
         version_label = QLabel(f"Version {__version__}")
@@ -480,6 +488,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         btn_open_sd = QPushButton("SD-Karte öffnen")
         btn_open_sd.setObjectName("primaryButton")
         btn_open_sd.clicked.connect(self._open_sd_card)
+        self.btn_open_sd = btn_open_sd
         layout.addWidget(btn_open_sd)
         
         btn_new_folder = QPushButton("Neuer Ordner")
@@ -495,7 +504,8 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         self.btn_purge_card = btn_purge_card
         layout.addWidget(btn_purge_card)
 
-        layout.addWidget(QLabel("Ordner:"))
+        self.folder_list_label = QLabel("Ordner:")
+        layout.addWidget(self.folder_list_label)
         self.folder_list = FolderListWidget()
         self.folder_list.setObjectName("folderList")
         self.folder_list.setToolTip("Alben aus der Bibliothek oder dem Explorer hierher ziehen: auf freie Fläche "
@@ -554,6 +564,7 @@ class MainWindow(WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
         welcome_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         welcome_label = QLabel(f"Willkommen bei {APP_NAME}!")
+        self.welcome_label = welcome_label
         welcome_label.setFont(heading_font(18))
         welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         welcome_layout.addWidget(welcome_label)

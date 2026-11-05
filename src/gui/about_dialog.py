@@ -8,9 +8,11 @@ from core import __version__
 from core.branding import APP_NAME, AUTHOR, HOMEPAGE, UPSTREAM_REPO
 
 
-def about_text() -> str:
+def about_text(name: str = APP_NAME) -> str:
+    # name: im ESPuino-Modus "ESPuino-Studio" (core/app_mode.py), dasselbe Programm
+    edition = f"<p>{APP_NAME} im ESPuino-Modus</p>" if name != APP_NAME else ""
     return (
-        f"<h3>{APP_NAME} {__version__}</h3>"
+        f"<h3>{name} {__version__}</h3>{edition}"
         f"<p>von {AUTHOR} – <a href=\"{HOMEPAGE}\">{HOMEPAGE}</a></p>"
         f"<p>Basiert auf <a href=\"https://github.com/{UPSTREAM_REPO}\">Tonuino-Manager</a> von donschoof "
         "(MIT-Lizenz) und übernimmt dessen Weiterentwicklung.</p>"
@@ -27,5 +29,5 @@ def about_text() -> str:
     )
 
 
-def show_about(parent: QWidget):
-    QMessageBox.about(parent, f"Über {APP_NAME}", about_text())
+def show_about(parent: QWidget, name: str = APP_NAME):
+    QMessageBox.about(parent, f"Über {name}", about_text(name))

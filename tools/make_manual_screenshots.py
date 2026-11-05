@@ -6,6 +6,7 @@ Arbeitet nur in einem Temp-Ordner mit eigenen Einstellungen, oeffnet keine echte
 SD-Karte und sperrt jede Netzwerkverbindung. Aufruf aus dem Projektordner:
 
     python tools/make_manual_screenshots.py
+    python tools/make_manual_screenshots.py --mediahub   (nur das Bild zum ESPuino-Modus)
 """
 
 import os
@@ -234,7 +235,15 @@ def main():
         QCoreApplication.setApplicationName("Bilder")
         app = QApplication([])
         QFontDatabase.addApplicationFont(str(ROOT / "src" / "resources" / "fonts" / "MaterialSymbolsOutlined-subset.ttf"))
-        render(app, base)
+        if "--mediahub" in sys.argv[1:]:
+            from gui import theme
+            theme.set_theme("dark")
+            from gui.styles import MAIN_STYLESHEET
+            app.setStyleSheet(MAIN_STYLESHEET)
+            _sd_root, library, _source = build_data(base)
+        else:
+            library = render(app, base)
+        render_mediahub(app, base, library)
         return 0
     finally:
         shutil.rmtree(base, ignore_errors=True)
@@ -391,6 +400,67 @@ def render(app, base):
     save(folder_dialog, "datenordner")
     folder_dialog.done(0)
 
+    window.close()
+    settle(app, 0.3)
+    return library
+
+
+# ESPuino-Modus: Karten aus einem erfundenen Mediahub; die Mediathek ist der Bibliotheksordner.
+# (Kartennummer, Kartenname, Dateien relativ zur Mediathek, Zeichnung fuer ein Kartencover oder None)
+MEDIAHUB_CARDS = [
+    ("012045178233", "Waldwichtel – Folge 1", [f"Die Waldwichtel/{i:03d}.mp3" for i in range(1, 5)],
+     (draw_forest, GREEN)),
+    ("034201077150", "Kapitän Kuckuck", [f"Kapitän Kuckuck/{i:03d}.mp3" for i in range(1, 5)], (draw_boat, BLUE)),
+    ("101033240019", "Einschlafmix", ["Gute-Nacht-Geschichten/001.mp3", "Gute-Nacht-Geschichten/003.mp3",
+                                      "Der Leuchtturm/001.mp3", "Lieder für die Reise/003.mp3"], None),
+    ("150150150150", "Der Leuchtturm", [f"Der Leuchtturm/{i:03d}.mp3" for i in range(1, 4)], None),
+]
+
+
+def render_mediahub(app, base, library):
+    import json
+    from core import card_store
+    from core.app_mode import MODE_ESPUINO, SETTINGS_APP_MODE
+    from core.cover_archive import CoverArchive
+    from core.mediahub_cards import SETTINGS_DB_PATH, SETTINGS_MEDIA_ROOT, album_id_for
+    from gui.main_window import MainWindow
+
+    data_dir = base / "daten"
+    hub = base / "mediahub-daten"
+    hub.mkdir()
+    cards = {}
+    for card_id, name, files, _art in MEDIAHUB_CARDS:
+        cards[f"esp-kinderzimmer/{card_id}"] = {
+            "esp_id": "esp-kinderzimmer", "card_id": card_id, "status": "assigned", "name": name, "kind": "files",
+            "play_mode": 5, "files": [{"path": f} for f in files], "updated_at": "2026-11-01T10:00:00+00:00"}
+    cards["esp-kinderzimmer/200000000001"] = {"esp_id": "esp-kinderzimmer", "card_id": "200000000001",
+                                              "status": "assigned", "name": "Radio", "kind": "webradio",
+                                              "stream_url": "http://radio.invalid/stream"}
+    (hub / "db.json").write_text(json.dumps({"settings": {}, "devices": {
+        "esp-kinderzimmer": {"alias": "Kinderzimmer"}}, "cards": cards}), encoding="utf-8")
+    settings = QSettings()
+    settings.setValue("library/data_dir", str(data_dir))
+    settings.setValue("library/sources", [str(library)])
+    settings.setValue(SETTINGS_APP_MODE, MODE_ESPUINO)
+    settings.setValue(SETTINGS_DB_PATH, str(hub / "db.json"))
+    settings.setValue(SETTINGS_MEDIA_ROOT, str(library))
+    archive = CoverArchive(str(data_dir))
+    for card_id, name, _files, art in MEDIAHUB_CARDS:
+        if art is not None:
+            painter, colors = art
+            card_dir = archive.card_dir(album_id_for(card_id))
+            card_dir.mkdir(parents=True, exist_ok=True)
+            card_store.save_card(str(card_dir), painter(colors), card_store.CardMeta(title=name), None)
+
+    window = MainWindow()
+    window.resize(1280, 800)
+    window.show()
+    settle(app, 0.8)
+    window.mediahub_sidebar.select(MEDIAHUB_CARDS[0][0])
+    settle(app, 0.5)
+    window.status_bar.showMessage("Bereit")
+    settle(app, 0.2)
+    save(window, "mediahub-karten")
     window.close()
     settle(app, 0.3)
 

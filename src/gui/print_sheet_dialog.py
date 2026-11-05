@@ -16,6 +16,19 @@ from core.sd_card import Folder
 from core.sheet_pdf import DEFAULT_TEMPLATE, LABEL_TEMPLATES, SheetItem, build_sheets, save_pdf
 
 
+def _card_dir(folder: Folder) -> str:
+    """Ordner mit card.png/card.json: auf der SD-Karte der Ordner selbst, bei
+    Mediahub-Karten (core/mediahub_cards.py) der Kartenordner im Archiv"""
+    return getattr(folder, "card_dir", "") or folder.path
+
+
+def _label(folder: Folder, folder_names: dict) -> str:
+    if folder.index is None:
+        return folder.name or "Karte"
+    name = folder_names.get(folder.index) or f"Ordner {folder.index:02d}"
+    return f"{folder.index:02d} – {name}"
+
+
 class PrintSheetDialog(QDialog):
     def __init__(self, folders: List[Folder], folder_names: dict, parent=None):
         super().__init__(parent)
@@ -26,12 +39,11 @@ class PrintSheetDialog(QDialog):
         settings = QSettings()
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Karten auswählen (nur Ordner mit gespeichertem Kartencover):"))
+        layout.addWidget(QLabel("Karten auswählen (nur Karten mit gespeichertem Kartencover):"))
 
         self.folder_list = QListWidget()
         for folder in self.folders:
-            name = folder_names.get(folder.index) or f"Ordner {folder.index:02d}"
-            item = QListWidgetItem(f"{folder.index:02d} – {name}")
+            item = QListWidgetItem(_label(folder, folder_names))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked)
             item.setData(Qt.ItemDataRole.UserRole, folder)
@@ -66,7 +78,7 @@ class PrintSheetDialog(QDialog):
 
         self.backs_check = QCheckBox("Rückseiten mitdrucken")
         self.backs_check.setToolTip("Als weitere Etiketten nach den Vorderseiten")
-        self.backs_check.setChecked(any(card_store.has_back(f.path) for f in self.folders))
+        self.backs_check.setChecked(any(card_store.has_back(_card_dir(f)) for f in self.folders))
         self.backs_check.setEnabled(self.backs_check.isChecked())
         form.addRow("", self.backs_check)
 
@@ -138,8 +150,9 @@ class PrintSheetDialog(QDialog):
             if item.checkState() != Qt.CheckState.Checked:
                 continue
             folder: Folder = item.data(Qt.ItemDataRole.UserRole)
-            meta = card_store.load_meta(folder.path) or card_store.CardMeta()
-            art = card_store.load_raw_art(folder.path)
+            card_dir = _card_dir(folder)
+            meta = card_store.load_meta(card_dir) or card_store.CardMeta()
+            art = card_store.load_raw_art(card_dir)
             if art is not None:
                 image = card_store.render_from_meta(art, meta, folder.index, spec)
             else:
@@ -147,7 +160,7 @@ class PrintSheetDialog(QDialog):
                     image = img.convert("RGB")
             items.extend([SheetItem(image, meta.orientation)] * self.copies_spin.value())
             if self.backs_check.isChecked():
-                back_raw = card_store.load_back_raw(folder.path)
+                back_raw = card_store.load_back_raw(card_dir)
                 if back_raw is not None:
                     back = card_store.render_back_from_meta(back_raw, meta, spec)
                     backs.extend([SheetItem(back, meta.orientation)] * self.copies_spin.value())
