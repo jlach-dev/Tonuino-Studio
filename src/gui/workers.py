@@ -648,8 +648,9 @@ class CoverBatchWorker(QThread):
 
 class CoverExtendWorker(QThread):
     """Erweitert ein Bild per Bildmodell auf das Kartenformat (Outpainting). Mit masking geht
-    es abgedeckt an Google, und das Original wird danach wieder eingesetzt."""
+    es abgedeckt an Google, und die abgedeckten Stellen kommen danach aus dem Original zurueck."""
     done = pyqtSignal(object)  # PIL.Image
+    doubtful = pyqtSignal()  # vor done: Das Motiv weicht stark vom Original ab
     failed = pyqtSignal(str)
     refused = pyqtSignal(str)  # von Google abgelehnt: hier hilft das Abdecken
 
@@ -665,8 +666,11 @@ class CoverExtendWorker(QThread):
         from core.cover_generator import ImageRefused, extend_masked, extend_to_card
         try:
             if self.masking is not None:
-                image = extend_masked(self.client, self.image_model, self.image_bytes, self.orientation,
-                                      self.masking)
+                result = extend_masked(self.client, self.image_model, self.image_bytes, self.orientation,
+                                       self.masking)
+                image = result.image
+                if result.doubtful:
+                    self.doubtful.emit()
             else:
                 image = extend_to_card(self.client, self.image_model, self.image_bytes, self.orientation)
             self.done.emit(image)

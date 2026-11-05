@@ -188,6 +188,7 @@ def _instant_worker(result, calls):
     class Worker:
         def __init__(self, *_args):
             self.done, self.failed, self.finished, self.refused = _Signal(), _Signal(), _Signal(), _Signal()
+            self.doubtful = _Signal()
 
         def start(self):
             calls.append(1)

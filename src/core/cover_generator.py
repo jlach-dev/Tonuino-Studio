@@ -13,12 +13,12 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageFilter, ImageOps, ImageStat
 
 from core.ai_settings import get_image_size
 from core.card_layout import CardSpec, ORIENTATION_PORTRAIT, ambient_blur
 from core.cover_research import CoverBrief, FolderInfo
-from core.image_masking import EFFECT_BLUR, apply_masks, shape_mask
+from core.image_masking import EFFECT_FILL, apply_masks, shape_mask
 
 log = logging.getLogger(__name__)
 
@@ -291,60 +291,122 @@ def extend_to_card(client, model: str, image_bytes: bytes, orientation: str, ima
     )
 
 
-# Abgedeckte Bereiche: Die KI bekommt das Bild ohne Schrift und Gesichter, das Original setzt die
-# App danach selbst wieder ein. Die Kante liegt knapp innerhalb des Bildes, im Streifen dazwischen
-# bleibt die Fassung der KI: So trifft die Naht nicht genau auf den Bildrand.
+# Abgedeckte Bereiche: Die KI bekommt das Bild ohne Schrift und Gesichter. Ihr Bild bleibt stehen, die App
+# holt nur die abgedeckten Stellen aus dem Original zurueck. Die KI gibt das Motiv je Lauf etwas anders
+# skaliert zurueck (in Tests 0,96 bis 1,03 in der Breite), deshalb wird seine Lage zuerst gemessen.
 EXTEND_MASKED_NOTE = (" Blurred or flat patches in the image are placeholders: leave them as they are and do "
                       "not paint anything new into them.")
-EXTEND_SEAM_INSET = 0.025
+EXTEND_PATCH_SOFTNESS = 0.012  # weicher Uebergang um die Formen, Anteil der kurzen Bildseite
+EXTEND_MAX_SHIFT = 0.10  # weiter weicht keine Kante ab; schuetzt vor Fehlmessungen an einfarbigen Bildern
+EXTEND_STRIP_WIDTH = 0.03
+EXTEND_STRIP_INSET = 0.025
+EXTEND_DOUBTFUL_DIFFERENCE = 15.0  # Erfahrungswert aus 27 Testbildern: Darueber hat die KI das Motiv oft veraendert
 
 
 @dataclass(frozen=True)
 class ExtendMasking:
     shapes: tuple
-    effect: str = EFFECT_BLUR
-    soft: bool = False
+    effect: str = EFFECT_FILL
 
 
-def _extension_layout(size, generated_size):
-    """(Breite, Hoehe, x, y) der Flaeche, in der das Bild mittig liegt. Das Seitenverhaeltnis kommt vom
-    gelieferten Bild: Die KI liefert nicht exakt 3:2 (2528 x 1696), und schon 0,6 % Verzerrung ergaeben an
-    der Naht einen sichtbaren Versatz."""
-    width, height = size
-    ratio_w, ratio_h = generated_size
-    if width * ratio_h > height * ratio_w:
-        canvas = (width, round(width * ratio_h / ratio_w))
-    else:
-        canvas = (round(height * ratio_w / ratio_h), height)
-    return canvas[0], canvas[1], (canvas[0] - width) // 2, (canvas[1] - height) // 2
+@dataclass(frozen=True)
+class MaskedExtension:
+    image: Image.Image
+    edge_difference: float
+
+    @property
+    def doubtful(self) -> bool:
+        return self.edge_difference > EXTEND_DOUBTFUL_DIFFERENCE
 
 
-def insert_original(background: Image.Image, original: Image.Image, shapes, soft: bool = False) -> Image.Image:
-    """Setzt das Original in das Bild der KI ein. Nur an den erweiterten Seiten bleibt ein Streifen der
-    KI stehen (harte Kante oder weicher Verlauf); abgedeckte Bereiche kommen immer aus dem Original,
-    sonst bliebe dort die unkenntliche Fassung sichtbar."""
-    canvas_w, canvas_h, x, y = _extension_layout(original.size, background.size)
-    result = background.convert("RGB").resize((canvas_w, canvas_h), Image.Resampling.LANCZOS)
+def _weighted_mean(image: Image.Image, weight: Image.Image) -> float:
+    """Mittelwert ohne die abgedeckten Stellen; ganz abgedeckt zaehlt als kein Unterschied"""
+    if weight.getbbox() is None:
+        return 0.0
+    return ImageStat.Stat(image, weight).mean[0]
+
+
+def _expected_box(generated_size, size):
+    """Wo das Motiv laege, wenn die KI es genau mittig und unveraendert liesse"""
+    generated_w, generated_h = generated_size
+    scale = min(generated_w / size[0], generated_h / size[1])
+    width, height = size[0] * scale, size[1] * scale
+    return ((generated_w - width) / 2, (generated_h - height) / 2,
+            (generated_w + width) / 2, (generated_h + height) / 2)
+
+
+def locate_original(generated: Image.Image, original: Image.Image, weight: Image.Image):
+    """Sucht die Stelle im KI-Bild (links, oben, rechts, unten), an der das Original am besten liegt:
+    verschieben und je Achse skalieren, von grob nach fein. Abgedeckte Stellen zaehlen nicht mit."""
+    start = _expected_box(generated.size, original.size)
+    box = list(start)
+    if weight.getbbox() is None:
+        return tuple(box)
+    reference = max(start[2] - start[0], start[3] - start[1])
+    limit = reference * EXTEND_MAX_SHIFT
+    for work, steps in ((256, (0.04, 0.02, 0.01)), (512, (0.005, 0.0025)), (900, (0.00125, 0.0006))):
+        small = original.resize((work, work), Image.Resampling.BILINEAR)
+        small_weight = weight.resize((work, work))
+
+        def difference(candidate):
+            region = generated.transform((work, work), Image.Transform.EXTENT, candidate, Image.Resampling.BILINEAR)
+            return _weighted_mean(ImageChops.difference(region, small), small_weight)
+
+        for step in steps:
+            delta = step * reference
+            moves = ((delta, 0, delta, 0), (-delta, 0, -delta, 0), (0, delta, 0, delta), (0, -delta, 0, -delta),
+                     (-delta, 0, delta, 0), (delta, 0, -delta, 0), (0, -delta, 0, delta), (0, delta, 0, -delta))
+            best = difference(tuple(box))
+            improved = True
+            while improved:
+                improved = False
+                for move in moves:
+                    trial = tuple(b + m for b, m in zip(box, move))
+                    if any(abs(t - s) > limit for t, s in zip(trial, start)):
+                        continue
+                    value = difference(trial)
+                    if value < best - 1e-4:
+                        box, best, improved = list(trial), value, True
+    return tuple(box)
+
+
+def _edge_difference(generated: Image.Image, original: Image.Image, weight: Image.Image, box) -> float:
+    """Helligkeitsunterschied in zwei Streifen nahe den erweiterten Seiten. Hoch heisst: Die KI hat das
+    Motiv dort neu gezeichnet oder verdoppelt, das Ausrichten kann das nicht beheben."""
     width, height = original.size
-    vertical = canvas_h > height
-    band = max(1, round((height if vertical else width) * EXTEND_SEAM_INSET))
-    mask = Image.new("L", original.size, 255)
-    for i in range(band):
-        value = round(255 * i / band) if soft else 0
-        if vertical:
-            mask.paste(value, (0, i, width, i + 1))
-            mask.paste(value, (0, height - 1 - i, width, height - i))
-        else:
-            mask.paste(value, (i, 0, i + 1, height))
-            mask.paste(value, (width - 1 - i, 0, width - i, height))
-    mask.paste(255, (0, 0, width, height), shape_mask(original.size, shapes))
-    result.paste(original.convert("RGB"), (x, y), mask)
-    return result
+    region = generated.transform(original.size, Image.Transform.EXTENT, box, Image.Resampling.BILINEAR)
+    difference = ImageChops.difference(region, original)
+    wide = (box[2] - box[0]) * generated.height < (box[3] - box[1]) * generated.width  # links und rechts erweitert
+    length = width if wide else height
+    strip = max(4, round(length * EXTEND_STRIP_WIDTH))
+    near = round(length * EXTEND_STRIP_INSET) - strip // 2
+    values = []
+    for position in (near, length - near - strip):
+        area = (position, 0, position + strip, height) if wide else (0, position, width, position + strip)
+        values.append(_weighted_mean(difference.crop(area), weight.crop(area)))
+    return sum(values) / 2
+
+
+def restore_covered(generated: Image.Image, original: Image.Image, shapes) -> MaskedExtension:
+    """Das Bild der KI, in dem nur die abgedeckten Stellen wieder aus dem Original kommen, mit weicher Kante"""
+    generated, original = generated.convert("RGB"), original.convert("RGB")
+    covered = shape_mask(original.size, shapes)
+    gray, original_gray, weight = generated.convert("L"), original.convert("L"), ImageOps.invert(covered)
+    box = locate_original(gray, original_gray, weight)
+    edge_difference = _edge_difference(gray, original_gray, weight, box)
+    scale_x, scale_y = original.width / (box[2] - box[0]), original.height / (box[3] - box[1])
+    result = generated.resize((round(generated.width * scale_x), round(generated.height * scale_y)),
+                              Image.Resampling.LANCZOS)
+    radius = max(2, round(min(original.size) * EXTEND_PATCH_SOFTNESS))
+    # Die Form selbst bleibt voll deckend, weich wird es nur nach aussen
+    patch = covered.filter(ImageFilter.GaussianBlur(radius)).point(lambda value: min(255, value * 2))
+    result.paste(original, (round(box[0] * scale_x), round(box[1] * scale_y)), patch)
+    return MaskedExtension(result, edge_difference)
 
 
 def extend_masked(client, model: str, image_bytes: bytes, orientation: str, masking: ExtendMasking,
-                  image_size: str = "") -> Image.Image:
-    """Wie extend_to_card, aber Google bekommt das abgedeckte Bild; das Original setzt die App wieder ein"""
+                  image_size: str = "") -> MaskedExtension:
+    """Wie extend_to_card, aber Google bekommt das abgedeckte Bild; die abgedeckten Stellen holt die App zurueck"""
     with Image.open(io.BytesIO(image_bytes)) as img:
         img.load()
         original = img.convert("RGB")
@@ -352,7 +414,7 @@ def extend_masked(client, model: str, image_bytes: bytes, orientation: str, mask
     apply_masks(original, list(masking.shapes), masking.effect).save(buffer, "PNG")
     portrait = orientation == ORIENTATION_PORTRAIT
     prompt = EXTEND_PROMPT.format(shape="tall portrait 2:3" if portrait else "wide landscape 3:2")
-    background = request_image(
+    generated = request_image(
         client, CONTEXT_EXTEND,
         model=model,
         input=[{"type": "text", "text": prompt + EXTEND_MASKED_NOTE},
@@ -361,7 +423,9 @@ def extend_masked(client, model: str, image_bytes: bytes, orientation: str, mask
         response_format={"type": "image", "aspect_ratio": "2:3" if portrait else "3:2",
                          "image_size": image_size or get_image_size()},
     )
-    return insert_original(background, original, masking.shapes, masking.soft)
+    result = restore_covered(generated, original, masking.shapes)
+    log.info("KI-Rand abgedeckt: Abweichung am Rand %.1f", result.edge_difference)
+    return result
 
 
 # --- Rueckseite ---------------------------------------------------------------------------------

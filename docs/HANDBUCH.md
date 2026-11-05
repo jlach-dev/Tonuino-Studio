@@ -1,6 +1,6 @@
 # Tonuino-Studio – Benutzerhandbuch
 
-Gilt für Version 2.0.2. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
+Gilt für Version 2.1.0. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
 
 > Die Bilder zeigen die echte Oberfläche, aber erfundene Hörspiele mit selbst gezeichneten Covern. Sie entstehen mit `tools/make_manual_screenshots.py`.
 
@@ -432,17 +432,21 @@ Alles davon ist im Reiter **Karte**. Nur hier zeigt die Vorschau die fertige Kar
 
 Soll das ganze Bild sichtbar bleiben, legen zwei Knöpfe neben der Vorschau eine neue Version des Bildes im Kartenformat an: **Rand per KI (1 Bildaufruf)** erweitert es per KI, **Rand per Blur (ohne KI)** ergänzt sofort und kostenlos einen weichgezeichneten Rand. Hat das Bild das Format schon, meldet die App das, und es entsteht kein Aufruf. Das Ergebnis erscheint unter **Neu**; weise es dann mit **Als Vorderseite** oder **Als Rückseite** zu.
 
+Während ein längerer Vorgang läuft, etwa die KI oder die Cover-Suche, zeigt eine Zeile über dem Statustext einen malenden Pinsel, den Vorgang und die verstrichene Zeit. Du kannst währenddessen weiterarbeiten. Einen Prozentwert gibt es nicht, weil die KI keinen Fortschritt meldet.
+
 #### Wenn Google den Rand ablehnt
 
-Die Meldung bietet **Bereiche abdecken und erneut versuchen …** an. Im Fenster **Bereiche abdecken** deckst du Schriftzüge und Gesichter von Hand ab:
+Die Meldung bietet **Bereiche abdecken und erneut versuchen …** an. Im Fenster **Bereiche abdecken** deckst du von Hand ab, was nötig ist, etwa Schriftzüge und Gesichter. Nimm nur so viele Formen wie nötig, jede davon kommt später aus dem Original zurück und kann sichtbar werden, wenn die KI die Stelle verschoben hat:
 
 ![Fenster Bereiche abdecken](screenshots/bereiche-abdecken.png)
 
 1. **Rechteck** oder **Kreis** wählen und im Bild aufziehen. Formen lassen sich verschieben und an den Ecken in der Größe ändern. **Entf** löscht die gewählte Form, **Strg+Z** oder **Rückgängig** nimmt den letzten Schritt zurück.
-2. **Wirkung** wählen: **Weichzeichnen** oder **Farbfläche**. **Vorschau** zeigt genau das Bild, das an Google geht.
+2. **Wirkung** wählen: **Farbfläche** (Standard) oder **Weichzeichnen**. Weichgezeichnete Stellen am Bildrand setzt die KI gern als unscharfe Flecken im neuen Rand fort. **Vorschau** zeigt genau das Bild, das an Google geht.
 3. **An Google senden (1 Bildaufruf)** klicken.
 
-Das Ergebnis heißt **KI-Rand (abgedeckt)**. Die App setzt dein Original wieder ein, die abgedeckten Stellen bleiben also scharf. Die Kante liegt 2,5 % innerhalb des Bildes, nur an den erweiterten Seiten. Wird dort ein Sprung sichtbar, wähle **Übergang zum Original weich überblenden** und versuche es erneut.
+Das Ergebnis heißt **KI-Rand (abgedeckt)**. Die App misst, wo das Motiv im Bild der KI liegt, und holt nur die abgedeckten Stellen aus deinem Original zurück, mit weichem Übergang. Alles andere bleibt so, wie die KI es gezeichnet hat, kleine Änderungen am Motiv sind also möglich. Prüfe das Bild deshalb, bevor du es zuweist.
+
+Weicht das Motiv am Bildrand stark vom Original ab, zeigt die App **Ergebnis bitte prüfen**. Die KI hat dann vermutlich Figuren verändert oder verdoppelt. Das Bild liegt trotzdem unter **Neu**. **Neuer Versuch …** öffnet das Fenster wieder mit deinen Formen und kostet erneut einen Bildaufruf. Die Warnung ist ein Hinweis und erkennt nicht jeden Fehler.
 
 Lehnt Google auch dieses Bild ab, kannst du mit deinen Formen weiterarbeiten. Nichts wird automatisch wiederholt, jeder Versuch ist ein eigener Bildaufruf. Das Abdecken garantiert keine Annahme. Googles Nutzungsregeln verbieten das Umgehen von Sicherheitsfiltern; nutze die Funktion nur für eigene Karten und auf eigene Verantwortung.
 

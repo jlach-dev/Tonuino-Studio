@@ -11,16 +11,15 @@ from PIL import Image
 from PyQt6.QtCore import QPointF, QRectF, QSettings, Qt
 from PyQt6.QtGui import QBrush, QColor, QKeySequence, QPen, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QDialog, QGraphicsItem, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
+    QButtonGroup, QComboBox, QDialog, QGraphicsItem, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
     QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
 )
 
-from core.image_masking import EFFECTS, EFFECT_BLUR, MaskShape, SHAPE_ELLIPSE, SHAPE_RECT, apply_masks
+from core.image_masking import EFFECTS, EFFECT_FILL, MaskShape, SHAPE_ELLIPSE, SHAPE_RECT, apply_masks
 from gui import theme
 from gui.card_cover_dialog import _select_data, pil_to_pixmap
 
 SETTINGS_EFFECT = "covers/mask_effect"
-SETTINGS_SOFT = "covers/mask_soft"
 SHAPE_COLOR = QColor(243, 139, 168)
 
 
@@ -184,9 +183,10 @@ class CoverMaskDialog(QDialog):
         self._image_pixmap: QPixmap = pil_to_pixmap(self.image)
 
         layout = QVBoxLayout(self)
-        hint = QLabel("Decke Schriftzüge und Gesichter ab: Form wählen und im Bild aufziehen. An Google geht nur das "
-                      "abgedeckte Bild. Die App setzt danach dein Original wieder ein, die abgedeckten Stellen bleiben "
-                      "auf der Karte also scharf. Ob Google das Bild dann annimmt, ist nicht garantiert.")
+        hint = QLabel("Decke nur ab, was nötig ist, etwa Schriftzüge und Gesichter: Form wählen und im Bild aufziehen. "
+                      "An Google geht nur das abgedeckte Bild. Danach holt die App genau diese Stellen aus deinem "
+                      "Original zurück, alles andere bleibt so, wie die KI es zeichnet. Ob Google das Bild annimmt, "
+                      "ist nicht garantiert.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
@@ -205,7 +205,7 @@ class CoverMaskDialog(QDialog):
         for label, value in EFFECTS:
             self.effect_combo.addItem(label, value)
         settings = QSettings()
-        _select_data(self.effect_combo, settings.value(SETTINGS_EFFECT, EFFECT_BLUR, type=str))
+        _select_data(self.effect_combo, settings.value(SETTINGS_EFFECT, EFFECT_FILL, type=str))
         self.effect_combo.currentIndexChanged.connect(self._refresh_preview)
         tools.addWidget(QLabel("Wirkung:"))
         tools.addWidget(self.effect_combo)
@@ -238,11 +238,6 @@ class CoverMaskDialog(QDialog):
             self.add_item(shape.kind, QRectF(left, top, right - left, bottom - top))
 
         bottom_row = QHBoxLayout()
-        self.soft_check = QCheckBox("Übergang zum Original weich überblenden")
-        self.soft_check.setToolTip("Normalerweise setzt die App das Original mit harter Kante knapp innerhalb des "
-                                   "Bildrands ein. Wähle das, falls dabei ein Sprung sichtbar wird.")
-        self.soft_check.setChecked(settings.value(SETTINGS_SOFT, False, type=bool))
-        bottom_row.addWidget(self.soft_check)
         bottom_row.addStretch(1)
         btn_cancel = QPushButton("Abbrechen")
         btn_cancel.setAutoDefault(False)
@@ -318,9 +313,6 @@ class CoverMaskDialog(QDialog):
     def effect(self) -> str:
         return self.effect_combo.currentData()
 
-    def soft(self) -> bool:
-        return self.soft_check.isChecked()
-
     # --- Anzeige ------------------------------------------------------------------------------
 
     def _update_state(self):
@@ -339,7 +331,5 @@ class CoverMaskDialog(QDialog):
             item.setVisible(not previewing)
 
     def _send(self):
-        settings = QSettings()
-        settings.setValue(SETTINGS_EFFECT, self.effect())
-        settings.setValue(SETTINGS_SOFT, self.soft())
+        QSettings().setValue(SETTINGS_EFFECT, self.effect())
         self.accept()

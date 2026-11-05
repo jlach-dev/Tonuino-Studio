@@ -13,8 +13,8 @@ from PIL import Image, ImageDraw, ImageFilter
 SHAPE_RECT, SHAPE_ELLIPSE = "rect", "ellipse"
 EFFECT_BLUR, EFFECT_FILL = "blur", "fill"
 EFFECTS = [
-    ("Weichzeichnen", EFFECT_BLUR),
     ("Farbfläche", EFFECT_FILL),
+    ("Weichzeichnen", EFFECT_BLUR),
 ]
 BLUR_SHARE = 1 / 20  # Radius als Anteil der langen Bildseite: Gesichter und Schrift sind danach nicht mehr erkennbar
 

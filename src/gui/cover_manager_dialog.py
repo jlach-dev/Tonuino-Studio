@@ -49,6 +49,7 @@ from core.sd_card import Folder
 from gui.card_cover_dialog import (
     ORIENTATIONS, _select_data, gemini_client, image_model, pil_to_pixmap, text_model,
 )
+from gui.activity_bar import ActivityBar
 from gui.common import confirm_action, icon_from_glyph
 from gui.cover_mask_dialog import CoverMaskDialog
 from gui.text_style_dialog import TextStylesPopup
@@ -382,6 +383,7 @@ class CoverManagerDialog(QDialog):
         self._extend_source: Optional[SideSource] = None
         self._extend_masking: Optional[ExtendMasking] = None
         self._mask_shapes: list = []  # bleiben nach einer erneuten Ablehnung stehen
+        self._extend_doubtful = False
 
         # Kartendateien: auf der SD-Karte im Ordner, aus der Bibliothek heraus im Archiv
         self._card_dir = folder.path
@@ -499,6 +501,9 @@ class CoverManagerDialog(QDialog):
         self.tabs.currentChanged.connect(self._update_side_bar)
         self.tabs.currentChanged.connect(self._render_preview)
         right.addWidget(self.tabs, 1)
+
+        self.activity = ActivityBar()
+        right.addWidget(self.activity)
 
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
@@ -1360,6 +1365,7 @@ class CoverManagerDialog(QDialog):
         self._bible_worker.failed.connect(lambda m: QMessageBox.warning(self, "Keine Stilbibel", m))
         self._bible_worker.finished.connect(lambda: (self.btn_bible_suggest.setEnabled(True),
                                                      self.btn_bible_suggest.setText("Vorschlagen")))
+        self.activity.track(self._bible_worker, "Stilbibel wird vorgeschlagen")
         self._bible_worker.start()
 
     def _on_style_bible(self, text: str):
@@ -1386,6 +1392,7 @@ class CoverManagerDialog(QDialog):
         self._sheet_worker.done.connect(self._on_character_sheet)
         self._sheet_worker.failed.connect(lambda m: QMessageBox.warning(self, "Charakterblatt nicht erzeugt", m))
         self._sheet_worker.finished.connect(self._update_series_ui)
+        self.activity.track(self._sheet_worker, "Charakterblatt wird erzeugt")
         self._sheet_worker.start()
 
     @guarded_slot("Charakterblatt speichern")
@@ -1793,6 +1800,7 @@ class CoverManagerDialog(QDialog):
         self._search_worker.back_found.connect(self._on_online_back_found)
         self._search_worker.status.connect(self.search_status.setText)
         self._search_worker.finished.connect(self._update_buttons)
+        self.activity.track(self._search_worker, "Cover werden gesucht")
         self._search_worker.start()
         self._update_buttons()
 
@@ -1876,6 +1884,8 @@ class CoverManagerDialog(QDialog):
         self._research_worker.completed.connect(self._on_research_done)
         self._research_worker.failed.connect(self._on_research_failed)
         self._research_worker.finished.connect(self._on_research_finished)
+        self.activity.track(self._research_worker,
+                            "Recherche läuft" if self._research_used_ai else "Tags werden gelesen")
         self._research_worker.start()
         self._update_buttons()
 
@@ -1976,6 +1986,7 @@ class CoverManagerDialog(QDialog):
         self._generate_worker.completed.connect(
             lambda: self.status_label.setText("Fertig – Varianten prüfen und gewünschte behalten."))
         self._generate_worker.finished.connect(self._update_buttons)
+        self.activity.track(self._generate_worker, "Motive werden erzeugt")
         self._generate_worker.start()
         self._update_buttons()
 
@@ -2469,16 +2480,21 @@ class CoverManagerDialog(QDialog):
         self._start_extend(source)
 
     def _start_extend(self, source: SideSource, masking: Optional[ExtendMasking] = None):
-        self._extend_source, self._extend_masking = source, masking
+        self._extend_source, self._extend_masking, self._extend_doubtful = source, masking, False
         self.status_label.setText(f"Rand wird per KI ergänzt: {source.label} …")
         args = (self.client, image_model(), source.data(), self.orientation_combo.currentData())
         self._extend_worker = CoverExtendWorker(*args, masking) if masking else CoverExtendWorker(*args)
+        self._extend_worker.doubtful.connect(self._on_extend_doubtful)
         self._extend_worker.done.connect(self._on_extended)
         self._extend_worker.failed.connect(self._on_extend_failed)
         self._extend_worker.refused.connect(self._on_extend_refused)
         self._extend_worker.finished.connect(self._update_buttons)
+        self.activity.track(self._extend_worker, f"Rand wird per KI ergänzt: {source.label}")
         self._extend_worker.start()
         self._update_buttons()
+
+    def _on_extend_doubtful(self):
+        self._extend_doubtful = True
 
     def _on_extend_failed(self, message: str):
         QMessageBox.warning(self, "Rand nicht ergänzt", message)
@@ -2505,7 +2521,7 @@ class CoverManagerDialog(QDialog):
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         self._mask_shapes = dialog.shapes()
         if accepted:
-            self._start_extend(source, ExtendMasking(tuple(self._mask_shapes), dialog.effect(), dialog.soft()))
+            self._start_extend(source, ExtendMasking(tuple(self._mask_shapes), dialog.effect()))
 
     @guarded_slot("Rand per Blur")
     def _blur_selected(self):
@@ -2529,6 +2545,22 @@ class CoverManagerDialog(QDialog):
         meta = {"style": "Rand ergänzt", "model": image_model(), "prompt": f"Outpainting von {source.label}"}
         self._add_edge_version(source, image, name, KIND_AI, meta)
         self._flash("Rand ergänzt – neues Bild unter „Neu“. Mit „Als Vorderseite“ bzw. „Als Rückseite“ zuweisen.")
+        if self._extend_doubtful:
+            self._warn_doubtful()
+
+    def _warn_doubtful(self):
+        """Das Bild liegt schon unter "Neu". Ein neuer Versuch nur nach Klick, denn er kostet einen Bildaufruf."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Ergebnis bitte prüfen")
+        box.setText("Das Motiv weicht stark vom Original ab. Die KI hat es vermutlich verändert, zum Beispiel Figuren "
+                    "doppelt gezeichnet oder verschoben, und die zurückgeholten Stellen passen dann nicht mehr.\n\n"
+                    "Sieh dir das Bild an, bevor du es zuweist. Ein neuer Versuch fällt oft besser aus.")
+        btn_again = box.addButton("Neuer Versuch …", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Bild behalten", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() == btn_again:
+            self._open_mask_dialog()
 
     def _add_edge_version(self, source: SideSource, image: Image.Image, name: str, kind: str, meta: dict):
         base = source.candidate
@@ -2563,6 +2595,7 @@ class CoverManagerDialog(QDialog):
         self._ideas_worker.failed.connect(lambda m: QMessageBox.warning(self, "Keine Vorschläge", m))
         self._ideas_worker.finished.connect(lambda: (self.btn_back_ideas.setEnabled(True),
                                                      self.btn_back_ideas.setText("Idee vorschlagen")))
+        self.activity.track(self._ideas_worker, "Rückseiten-Ideen werden gesucht")
         self._ideas_worker.start()
 
     def _show_back_ideas(self, ideas):
@@ -2604,6 +2637,7 @@ class CoverManagerDialog(QDialog):
         self._back_worker.done.connect(self._on_back_generated)
         self._back_worker.failed.connect(self._on_back_failed)
         self._back_worker.finished.connect(self._update_buttons)
+        self.activity.track(self._back_worker, "KI-Rückseite wird erzeugt")
         self._back_worker.start()
         self._update_buttons()
 

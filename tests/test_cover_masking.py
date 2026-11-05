@@ -3,12 +3,13 @@ import io
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
 
 from core import card_store
 from core.card_layout import CardSpec, ORIENTATION_LANDSCAPE, ORIENTATION_PORTRAIT, fits_card_format
 from core.cover_archive import KIND_ONLINE, CoverArchive
-from core.cover_generator import EXTEND_SEAM_INSET, ExtendMasking, ImageRefused, extend_masked, insert_original
+from core.cover_generator import (EXTEND_DOUBTFUL_DIFFERENCE, ExtendMasking, ImageRefused, MaskedExtension,
+                                  extend_masked, locate_original, restore_covered)
 from core.image_masking import EFFECT_BLUR, EFFECT_FILL, MaskShape, SHAPE_ELLIPSE, SHAPE_RECT, apply_masks, shape_mask
 from core.sd_card import SDCard
 
@@ -72,65 +73,118 @@ def test_shape_at_the_very_edge_stays_inside_the_image():
     assert MaskShape(SHAPE_RECT, 0.99, 0.99, 0.5, 0.5).box((100, 100)) == (99, 99, 100, 100)
 
 
-# --- Original wieder einsetzen -------------------------------------------------------------------
+# --- Abgedeckte Stellen zurueckholen -------------------------------------------------------------
 
-@pytest.mark.parametrize("size, orientation, canvas", [
-    ((400, 400), ORIENTATION_PORTRAIT, (400, 600)),  # oben und unten erweitert
-    ((400, 400), ORIENTATION_LANDSCAPE, (600, 400)),  # links und rechts erweitert
-])
-def test_hard_seam_is_inset_only_on_extended_sides(size, orientation, canvas):
-    original = Image.new("RGB", size, (255, 0, 0))
-    ai_image = Image.new("RGB", (canvas[0] * 2, canvas[1] * 2), (0, 255, 0))
-    result = insert_original(ai_image, original, ())
-    assert result.size == canvas
-    band = round(400 * EXTEND_SEAM_INSET)
-    assert band == 10
-    if canvas[1] > 400:
-        assert result.getpixel((200, 100)) == (0, 255, 0)  # erster Streifen des Bildes noch von der KI
-        assert result.getpixel((200, 100 + band - 1)) == (0, 255, 0)
-        assert result.getpixel((200, 100 + band)) == (255, 0, 0)  # harte Kante: sofort das Original
-        assert result.getpixel((200, 500 - band - 1)) == (255, 0, 0)
-        assert result.getpixel((200, 500 - band)) == (0, 255, 0)
-        assert result.getpixel((0, 300)) == (255, 0, 0)  # nicht erweiterte Seite: bis ganz an den Rand
-    else:
-        assert result.getpixel((100 + band - 1, 200)) == (0, 255, 0)
-        assert result.getpixel((100 + band, 200)) == (255, 0, 0)
-        assert result.getpixel((300, 0)) == (255, 0, 0)
+def motif(size=(400, 400)):
+    """Ein Bild mit Struktur, an dem sich die Lage messen laesst"""
+    image = Image.new("RGB", size, (40, 60, 90))
+    draw = ImageDraw.Draw(image)
+    for index, x in enumerate(range(0, size[0], 37)):
+        draw.rectangle((x, 0, x + 11, size[1]), fill=(200 - index * 7, 120, 40 + index * 9))
+    for index, y in enumerate(range(0, size[1], 53)):
+        draw.rectangle((0, y, size[0], y + 9), fill=(30, 180 - index * 11, 200))
+    return image
 
 
-def test_generated_image_is_not_distorted_to_exact_three_two():
-    """Die KI liefert 2528 x 1696, nicht 3:2. Gleichmaessig skalieren, sonst springen Linien an der Naht."""
-    original = Image.new("RGB", (640, 640), (0, 0, 0))
-    ai_image = Image.new("RGB", (2528, 1696), (0, 0, 0))
-    ai_scale = 1696 / 640
-    ai_left = (2528 - 1696) // 2
-    for x in (17, 620):  # senkrechte Linien im Original und an derselben Stelle im KI-Bild
-        original.paste((255, 255, 255), (x, 0, x + 3, 640))
-        ai_image.paste((255, 255, 255), (ai_left + round(x * ai_scale), 0, ai_left + round((x + 3) * ai_scale), 1696))
-    result = insert_original(ai_image, original, ())
-    assert result.size == (954, 640)
-    x0 = (954 - 640) // 2
-    for x in (17, 620):  # liegt im KI-Streifen der Naht und bleibt genau dort
-        assert result.getpixel((x0 + x + 1, 320))[0] > 200
-        assert result.getpixel((x0 + x - 3, 320))[0] < 60
+def generated_from(image, canvas=(600, 400), scale_x=1.0, scale_y=1.0, shift=(0, 0)):
+    """So liefert die KI: das Motiv etwas anders skaliert und verschoben auf einer groesseren Flaeche"""
+    width, height = round(image.width * canvas[1] / image.height * scale_x), round(canvas[1] * scale_y)
+    result = Image.new("RGB", canvas, (90, 90, 90))
+    result.paste(image.resize((width, height), Image.Resampling.BILINEAR),
+                 ((canvas[0] - width) // 2 + shift[0], (canvas[1] - height) // 2 + shift[1]))
+    return result
 
 
-def test_covered_area_comes_from_the_original_up_to_the_edge():
+@pytest.mark.parametrize("scale_x, shift", [(1.0, (0, 0)), (0.96, (0, 0)), (1.03, (0, 0)), (0.97, (9, 0))])
+def test_locate_finds_the_motif_when_the_ai_scales_it(scale_x, shift):
+    original = motif()
+    weight = Image.new("L", original.size, 255)
+    generated = generated_from(original, scale_x=scale_x, shift=shift)
+    left, top, right, bottom = locate_original(generated.convert("L"), original.convert("L"), weight)
+    assert right - left == pytest.approx(400 * scale_x, abs=3)
+    assert (left + right) / 2 == pytest.approx(300 + shift[0], abs=3)
+    assert bottom - top == pytest.approx(400, abs=3)
+
+
+def test_locate_ignores_what_is_covered():
+    original = motif()
+    shape = MaskShape(SHAPE_RECT, 0.2, 0.2, 0.3, 0.3)
+    generated = generated_from(apply_masks(original, [shape], EFFECT_FILL), scale_x=0.96)
+    weight = ImageOps.invert(shape_mask(original.size, [shape]))
+    left, _, right, _ = locate_original(generated.convert("L"), original.convert("L"), weight)
+    assert right - left == pytest.approx(384, abs=3)
+
+
+def test_locate_stays_near_the_expected_place():
+    """Dunkles Bild auf hellem Rand: Ausserhalb des KI-Bildes ist alles schwarz, das darf nicht locken"""
+    original = Image.new("RGB", (400, 400), (0, 0, 0))
+    generated = Image.new("RGB", (600, 400), (255, 255, 255))
+    left, top, right, bottom = locate_original(generated.convert("L"), original.convert("L"),
+                                               Image.new("L", original.size, 255))
+    assert abs(left - 100) <= 40 and abs(right - 500) <= 40 and abs(top) <= 40 and abs(bottom - 400) <= 40
+
+
+def test_only_covered_area_comes_from_the_original():
     original = Image.new("RGB", (400, 400), (255, 0, 0))
-    ai_image = Image.new("RGB", (400, 600), (0, 255, 0))
-    logo = MaskShape(SHAPE_RECT, 0.25, 0.0, 0.5, 0.2)  # Schriftzug am oberen Rand
-    result = insert_original(ai_image, original, (logo,))
-    assert result.getpixel((200, 100)) == (255, 0, 0)  # im Streifen, aber abgedeckt
-    assert result.getpixel((50, 100)) == (0, 255, 0)  # im Streifen, nicht abgedeckt
+    generated = Image.new("RGB", (600, 400), (0, 255, 0))
+    shape = MaskShape(SHAPE_RECT, 0.25, 0.25, 0.5, 0.5)
+    result = restore_covered(generated, original, (shape,)).image
+    assert result.size == (600, 400)
+    assert result.getpixel((300, 200)) == (255, 0, 0)  # in der Form
+    assert result.getpixel((150, 200)) == (0, 255, 0)  # im Motiv, aber nicht abgedeckt: bleibt von der KI
+    assert result.getpixel((50, 200)) == (0, 255, 0)  # im neuen Rand
 
 
-def test_soft_seam_blends():
+def test_patch_edge_is_soft_only_outside_the_shape():
     original = Image.new("RGB", (400, 400), (255, 0, 0))
-    ai_image = Image.new("RGB", (400, 600), (0, 255, 0))
-    result = insert_original(ai_image, original, (), soft=True)
-    red, green, _ = result.getpixel((200, 105))
-    assert 0 < red < 255 and 0 < green < 255
-    assert result.getpixel((200, 100)) == (0, 255, 0) and result.getpixel((200, 110)) == (255, 0, 0)
+    generated = Image.new("RGB", (600, 400), (0, 255, 0))
+    result = restore_covered(generated, original, (MaskShape(SHAPE_RECT, 0.25, 0.25, 0.5, 0.5),)).image
+    assert result.getpixel((205, 200)) == (255, 0, 0)  # gleich innerhalb der Form schon voll
+    red, green, _ = result.getpixel((197, 200))  # knapp ausserhalb: Mischung
+    assert red > 0 and green > 0
+
+
+def test_patch_lands_on_the_motif_when_the_ai_scaled_it():
+    """Das Rot liegt im KI-Bild schmaler und versetzt. Die Stelle muss trotzdem deckungsgleich sitzen."""
+    original = motif()
+    shape = MaskShape(SHAPE_RECT, 0.4, 0.4, 0.2, 0.2)
+    generated = generated_from(original, scale_x=0.96, shift=(6, 0))
+    result = restore_covered(generated, original, (shape,)).image
+    # Das KI-Bild wird passend gestreckt: Ausserhalb der Form stimmt es jetzt mit dem Original ueberein
+    x0 = round((generated.width - 384) / 2 + 6) / 0.96
+    motif_area = result.crop((round(x0), 0, round(x0) + 400, 400)).convert("L")
+    difference = ImageStat.Stat(ImageChops.difference(motif_area, original.convert("L"))).mean[0]
+    assert difference < 12
+    area = shape.box(original.size)
+    inner = (area[0] + 10, area[1] + 10, area[2] - 10, area[3] - 10)
+    placed = (inner[0] + round(x0), inner[1], inner[2] + round(x0), inner[3])
+    close = ImageChops.difference(result.crop(placed).convert("L"), original.crop(inner).convert("L"))
+    assert ImageStat.Stat(close).mean[0] < 6
+
+
+def test_doubtful_when_the_edges_do_not_match():
+    original = motif()
+    good = restore_covered(generated_from(original, scale_x=0.97), original, ())
+    assert not good.doubtful and good.edge_difference < 6
+    bad = restore_covered(generated_from(ImageOps.mirror(original)), original, ())
+    assert bad.doubtful
+
+
+def test_doubtful_check_works_for_portrait_extension():
+    original = motif()
+    canvas = Image.new("RGB", (400, 600), (90, 90, 90))
+    canvas.paste(original, (0, 100))
+    good = restore_covered(canvas, original, ())
+    assert good.image.size == (400, 600) and not good.doubtful
+    canvas.paste(ImageOps.flip(original), (0, 100))
+    assert restore_covered(canvas, original, ()).doubtful
+
+
+def test_everything_covered_does_not_fail():
+    original = motif()
+    result = restore_covered(Image.new("RGB", (600, 400), (0, 255, 0)), original,
+                             (MaskShape(SHAPE_RECT, 0, 0, 1, 1),))
+    assert result.edge_difference == 0.0 and not result.doubtful
 
 
 def test_extend_masked_sends_only_the_covered_image():
@@ -145,15 +199,30 @@ def test_extend_masked_sends_only_the_covered_image():
 
     client = SimpleNamespace(interactions=SimpleNamespace(create=create))
     masking = ExtendMasking((MaskShape(SHAPE_RECT, 0.25, 0.25, 0.5, 0.5),), EFFECT_FILL)
-    result = extend_masked(client, "m", buffer.getvalue(), ORIENTATION_PORTRAIT, masking)
+    result = extend_masked(client, "m", buffer.getvalue(), ORIENTATION_PORTRAIT, masking).image
 
     sent = Image.open(io.BytesIO(base64.b64decode(calls[0]["input"][1]["data"]))).convert("RGB")
     assert sent.size == (400, 400)
     assert sent.crop((120, 120, 280, 280)).getcolors(maxcolors=4) is not None  # Flaeche statt Schachbrett
     assert sent.crop((120, 120, 280, 280)) != original.crop((120, 120, 280, 280))
     assert "placeholders" in calls[0]["input"][0]["text"]
-    # Das Ergebnis traegt in der Mitte wieder das Original
+    # Die abgedeckte Stelle traegt wieder das Original, der Rest bleibt von der KI
     assert result.crop((120, 220, 280, 380)).tobytes() == original.crop((120, 120, 280, 280)).tobytes()
+    assert result.getpixel((50, 300)) == (0, 255, 0)
+
+
+def test_worker_announces_doubtful_result_before_done(qt_app, monkeypatch):
+    from core import cover_generator
+    from gui.workers import CoverExtendWorker
+
+    extension = MaskedExtension(Image.new("RGB", (600, 400)), EXTEND_DOUBTFUL_DIFFERENCE + 1)
+    monkeypatch.setattr(cover_generator, "extend_masked", lambda *args: extension)
+    worker = CoverExtendWorker(None, "m", png_bytes(), ORIENTATION_PORTRAIT, ExtendMasking(()))
+    order = []
+    worker.doubtful.connect(lambda: order.append("doubtful"))
+    worker.done.connect(lambda image: order.append(image))
+    worker.run()
+    assert order == ["doubtful", extension.image]
 
 
 def test_worker_reports_refusal_separately(qt_app):
@@ -206,6 +275,101 @@ def test_transfer_keeps_saved_art_with_old_blur_edge(tmp_path):
     assert _card_art(folder, "album", entry, archive, designed).size == (700, 1000)
     other = card_store.CardMeta(title="X", archive_cover_id="anderes")
     assert _card_art(folder, "album", entry, archive, other).size == (500, 500)  # gehoert zu einem anderen Cover
+
+
+# --- Pinselzeile ----------------------------------------------------------------------------------
+
+class FakeWorkerSignals:
+    class Signal:
+        def __init__(self):
+            self.slots = []
+
+        def connect(self, slot):
+            self.slots.append(slot)
+
+        def emit(self, *args):
+            for slot in self.slots:
+                slot(*args)
+
+    def __init__(self):
+        self.finished, self.failed, self.refused = self.Signal(), self.Signal(), self.Signal()
+
+
+@pytest.fixture
+def bar(qt_app, monkeypatch):
+    from gui.activity_bar import ActivityBar
+
+    clock = [100.0]
+    monkeypatch.setattr(ActivityBar, "now", staticmethod(lambda: clock[0]))
+    widget = ActivityBar()
+    widget.clock = clock
+    yield widget
+    widget._timer.stop()
+    widget._done_timer.stop()
+
+
+def test_activity_stays_hidden_for_short_tasks_and_when_idle(bar):
+    assert bar.isHidden()
+    worker = FakeWorkerSignals()
+    bar.track(worker, "Tags werden gelesen")
+    assert bar.isHidden()  # kurze Vorgaenge flackern nicht
+    worker.finished.emit()
+    assert bar.isHidden() and not bar._timer.isActive() and not bar._done_timer.isActive()
+
+
+def test_activity_shows_text_and_time_then_done(bar):
+    worker = FakeWorkerSignals()
+    bar.track(worker, "Rand wird per KI ergänzt")
+    bar.clock[0] += 12
+    bar.refresh()
+    assert not bar.isHidden() and bar.label.text() == "Rand wird per KI ergänzt …" and bar.seconds.text() == "12 s"
+    assert bar.stroke.progress is not None
+    worker.finished.emit()
+    assert bar.label.text() == "Fertig" and bar.stroke.progress is None and bar._done_timer.isActive()
+    bar._done_timer.timeout.emit()
+    assert bar.isHidden()
+
+
+def test_activity_does_not_report_done_after_failure(bar):
+    worker = FakeWorkerSignals()
+    bar.track(worker, "Motive werden erzeugt")
+    bar.clock[0] += 5
+    bar.refresh()
+    worker.failed.emit("kaputt")
+    worker.finished.emit()
+    assert bar.isHidden() and bar.label.text() != "Fertig"
+
+
+def test_activity_lists_parallel_tasks_and_ends_with_the_last(bar):
+    first, second = FakeWorkerSignals(), FakeWorkerSignals()
+    bar.track(first, "Cover werden gesucht")
+    bar.clock[0] += 1
+    bar.track(second, "KI-Rückseite wird erzeugt")
+    bar.refresh()
+    assert bar.label.text() == "Cover werden gesucht · KI-Rückseite wird erzeugt …"
+    first.finished.emit()
+    assert bar.label.text() == "KI-Rückseite wird erzeugt …" and bar._timer.isActive()
+    second.finished.emit()
+    assert bar.label.text() == "Fertig"
+
+
+def test_brush_stays_completely_inside_its_area(qt_app):
+    """Der Pinsel soll sichtbar sein: An keiner Stelle des Wegs darf er abgeschnitten werden"""
+    from PyQt6.QtGui import QColor, QImage
+    from gui.activity_bar import BrushStroke
+
+    stroke = BrushStroke()
+    for progress in (0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0):
+        stroke.set_state(progress, "#89b4fa")
+        pixmap = stroke.grab()
+        image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        background = QColor(image.pixel(image.width() // 2, 0))
+        painted_rows = [y for y in range(image.height())
+                        if any(QColor(image.pixel(x, y)) != background for x in range(image.width()))]
+        assert painted_rows and painted_rows[0] > 0 and painted_rows[-1] < image.height() - 1, progress
+        for y in range(image.height()):
+            assert QColor(image.pixel(0, y)) == background, progress  # links nichts abgeschnitten
+            assert QColor(image.pixel(image.width() - 1, y)) == background, progress
 
 
 # --- Dialoge -------------------------------------------------------------------------------------
@@ -353,7 +517,7 @@ def test_refusal_offers_masking_and_keeps_shapes(manager, monkeypatch):
             pass
 
     class Worker:
-        done = failed = refused = finished = Signal()
+        done = failed = refused = finished = doubtful = Signal()
 
         def __init__(self, *args):
             started.append(args)
@@ -380,20 +544,25 @@ def test_refusal_offers_masking_and_keeps_shapes(manager, monkeypatch):
         def effect(self):
             return EFFECT_FILL
 
-        def soft(self):
-            return True
-
     monkeypatch.setattr(cm, "CoverExtendWorker", Worker)
     monkeypatch.setattr(cm, "CoverMaskDialog", FakeMask)
     dialog._extend_selected()
     assert len(started[0]) == 4  # der erste Versuch geht ohne Abdeckung
     dialog._open_mask_dialog()
     masking = started[1][4]
-    assert masking.shapes == (shape,) and masking.effect == EFFECT_FILL and masking.soft
+    assert masking.shapes == (shape,) and masking.effect == EFFECT_FILL
     dialog._open_mask_dialog()  # zweite Ablehnung: Formen bleiben stehen
     assert seen == [[], [shape]]
     dialog._on_extended(Image.new("RGB", (400, 600)))
     assert dialog.selected.label.startswith("KI-Rand (abgedeckt)")
+
+    warned = []
+    monkeypatch.setattr(dialog, "_warn_doubtful", lambda: warned.append(True))
+    dialog._on_extended(Image.new("RGB", (400, 600)))
+    assert not warned  # ohne Hinweis des Workers keine Warnung
+    dialog._on_extend_doubtful()
+    dialog._on_extended(Image.new("RGB", (400, 600)))
+    assert warned and dialog.selected.label.startswith("KI-Rand (abgedeckt)")  # das Bild ist trotzdem da
     dialog.selected = picture
     dialog._extend_selected()  # ein neuer Lauf beginnt wieder ohne Formen
     assert dialog._mask_shapes == []
@@ -413,6 +582,7 @@ def test_mask_dialog_draw_move_delete_undo(qt_app):
     dialog.show()
     qt_app.processEvents()
     assert not dialog.btn_send.isEnabled()
+    assert dialog.effect() == EFFECT_FILL  # Standard, solange nichts anderes gewaehlt wurde
     viewport = dialog.view.viewport()
 
     def point(x, y):

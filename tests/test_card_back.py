@@ -251,7 +251,7 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
             pass
 
     class FakeWorker:
-        done = failed = refused = finished = FakeSignal()
+        done = failed = refused = finished = doubtful = FakeSignal()
 
         def __init__(self, client, model, data, orientation):
             assert data == other.data
@@ -445,7 +445,7 @@ def test_extension_skipped_when_art_already_fits(tmp_path, monkeypatch):
             pass
 
     class FakeWorker:
-        done = failed = refused = finished = FakeSignal()
+        done = failed = refused = finished = doubtful = FakeSignal()
 
         def __init__(self, *args):
             calls.append(args)
