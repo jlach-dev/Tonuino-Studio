@@ -1,12 +1,29 @@
 # Tonuino-Studio
 
-Ein hübsches Tool zum Verwalten von Tonuino SD-Karten und RFID-Karten für Windows, Linux und macOS – mit KI-Kartencovern, Bibliothek für PC und NAS, Serienprofilen und Tags von MusicBrainz.
+**Vom Album zur fertigen TonUINO-Karte: Cover finden oder per KI erzeugen, Karte gestalten, drucken, RFID-Karte beschreiben und alles auf die SD-Karte bringen.**
 
-Tonuino-Studio ist ein Fork von [Tonuino-Manager](https://github.com/donschoof/tonuino-manager) (donschoof) und übernimmt dessen Weiterentwicklung regelmäßig. Beide Programme lassen sich nebeneinander installieren.
+Karten und Cover sind der Kern dieser App. Sie verwaltet alle Motive je Album in einem Archiv und hilft dir, die Folgen einer Serie im selben Look zu gestalten. Das unterscheidet sie von [Tonuino-Manager](https://github.com/donschoof/tonuino-manager) (donschoof), auf dem sie als Fork aufbaut. Von dort kommt die grundlegende Arbeit zur Verwaltung von SD- und RFID-Karten, die dieser Fork konsequent erweitert. Neuerungen aus dem Original werden regelmäßig übernommen. Beide Programme lassen sich nebeneinander installieren. Tonuino-Studio läuft unter Windows, Linux und macOS.
 
-![Tonuino-Studio](docs/screenshots/hauptfenster.png)
+![Cover-Manager mit KI-Motiven und gesetzter Karte](docs/screenshots/ki-erzeugen.png)
 
-## Features
+*Beispiel mit erfundenem Hörspiel und von Hand gezeichneten Bildern, die für KI-Ergebnisse stehen. Aus Urheberrechtsgründen zeigen wir hier keine echten Cover.*
+
+## Karten und Cover
+
+1. **Cover finden:** Die App sucht bei Deezer, iTunes, MusicBrainz, mit eigenen Zugangsdaten auch bei Spotify, und auf den Seiten, die die KI-Recherche findet. Eigene Bilder gehen genauso.
+2. **Cover erzeugen:** Google Gemini malt Motive auf Basis von Tags, Internetrecherche und deinen Vorlagen, in fünf Stilen, nach eigenem Wunsch und mit bis zu vier Varianten je Lauf.
+3. **Serien einheitlich halten:** Anker-Bilder, Stilbibel und Charakterblatt geben der KI Figuren, Stil und Farbwelt einer Reihe vor. Fehlende Cover einer Serie oder der ganzen SD-Karte entstehen auf Wunsch im Stapel, mit Kostenschätzung vorab.
+4. **Karte gestalten:** Scheckkartenformat (85,6 × 54 mm), hoch oder quer. Reihe und Titel kommen aus den Tags und werden von der App gesetzt, die Schrift malt also nicht die KI. Als Rückseite gehen ein eigenes Bild, Blur, Farbverlauf, Trackliste oder ein KI-Gegenstück zur Vorderseite. Passt ein Bild nicht ins Format, ergänzt die App den Rand per KI oder Blur.
+5. **Alles behalten:** Das Archiv hebt behaltene Motive auf, auch aus früheren KI-Läufen, und sichert ersetzte Kartenmotive automatisch. Eine Album-ID hält die Zuordnung, auch wenn du einen Albumordner umbenennst oder verschiebst. Überträgst du ein Album aus der Bibliothek, kommt sein Kartencover mit auf die SD-Karte.
+6. **Drucken und beschreiben:** Die App erstellt ein A4-PDF für Etikettenbögen wie HERMA 5028 oder zum Ausschneiden mit Schnittmarken, auch mit Rückseiten. Weil die Bogenränder der HERMA 5028 nicht offiziell veröffentlicht sind, gibt es eine Testseite und einen Druck-Versatz. Die RFID-Karte beschreibst du per ACR122U oder direkt über den TonUINO.
+
+**Auch ohne KI nutzbar:** Cover-Suche, Archiv, Gestaltung, Blur und Druck brauchen keinen Gemini-Key. Für KI-Bilder brauchst du einen eigenen Key; ein Bildaufruf kostet laut Schätzung im Programm rund 0,07 USD. Dabei gehen Titel, Tags, Recherche-Ergebnisse und Referenzbilder an Google, siehe [Datenschutz und Key](#kartencover).
+
+Die Anleitung steht im Handbuch: [Cover-Manager](docs/HANDBUCH.md#7-cover-manager), [Karte gestalten](docs/HANDBUCH.md#8-karte-gestalten), [KI-Motive und Serien](docs/HANDBUCH.md#9-ki-motive-und-serien), [Drucken](docs/HANDBUCH.md#10-drucken).
+
+## Weitere Funktionen
+
+![Hauptfenster von Tonuino-Studio](docs/screenshots/hauptfenster.png)
 
 - **SD-Karten-Verwaltung**: Tonuino-Ordnerstruktur wird automatisch erkannt, Ordner anlegen/löschen
 - **Tracks**: hinzufügen, löschen, umsortieren – Dateien werden automatisch lückenlos nummeriert (001.mp3, 002.mp3, …). Maximal 255 Tracks pro Ordner
@@ -17,9 +34,7 @@ Tonuino-Studio ist ein Fork von [Tonuino-Manager](https://github.com/donschoof/t
 - **Ordnername & Cover**: aus eigenem Namen oder Album-Tag und eingebettetem Cover des ersten Tracks; ein Klick auf das Ordner-Cover öffnet den Cover-Manager
 - **SD-Karte bereinigen**: entfernt alles, was nicht zur Tonuino-Struktur gehört, und nummeriert die Tracks je Ordner lückenlos neu; Ordnernummern bleiben unverändert, damit RFID-Karten gültig bleiben (mit Sicherheitsabfrage)
 - **RFID-Programmierung**: Ordner- und Admin-Karten per ACR122U oder direkt über den TonUINO, mit Live-Status von Reader, Karte und Ordner in der Sidebar (siehe [RFID-Karten](#rfid-karten))
-- **Kartencover**: Cover im Scheckkartenformat (85,6 × 54 mm, hoch oder quer) je Ordner – KI-Illustration per Google Gemini („Nano Banana“) auf Basis einer kurzen Internetrecherche, der Tags und des Album-Covers, oder ohne KI als „Ambient Blur“ aus dem Album-Cover. Der Titel wird per Code gesetzt (siehe [Kartencover](#kartencover))
 - **Bibliothek**: zeigt die Hörspiele und Musik auf PC und NAS als Kachelgitter; Alben werden per Drag & Drop auf die SD-Karte gezogen (neuer Ordner oder vorhandener Ordner), inklusive Album-Cover und gespeichertem Kartencover aus dem Archiv (siehe [Bibliothek](#bibliothek))
-- **Druckbogen**: A4-PDF für Etikettenbögen (z. B. HERMA 5028) oder zum Selbstausschneiden mit Schnittmarken, inkl. Testseite und Druck-Versatz
 - **Fenster**: frei in der Größe veränderbar (Mindestgröße 900 × 600), Vollbild mit F11 oder Menü *Ansicht* (Esc beendet es), Maximieren per Doppelklick auf die Titelleiste; Größe und Zustand werden für den nächsten Start gemerkt, ebenso die Größe des Cover-Managers; Seitenleiste, Vorschau/Galerie und die Spalten des Cover-Managers lassen sich per Trennlinie verschieben. Offene Dialoge werden mit dem Hauptfenster geschlossen
 - **Updates**: Prüfung beim Start (im Menü „Einstellungen“ abschaltbar oder manuell auslösbar); der Download wird gegen die von GitHub gemeldete SHA-256-Prüfsumme geprüft
 
@@ -44,44 +59,17 @@ Die App ist nur ad-hoc signiert (kein Apple Developer Account). Gatekeeper melde
 xattr -cr /Applications/Tonuino-Studio.app
 ```
 
-## SD-Karten-Format
-
-```
-SD-Karte/
-├── 01/ … 99/   → Tonuino-Ordner mit 001.mp3, 002.mp3, …
-│               (optional card.png, card_art_raw.png, card.json, card_back.png,
-│                card_back_raw.png = Kartencover)
-├── mp3/        → Systemordner (Ansagen), wird nicht umsortiert
-└── advert/     → Systemordner (Advert), wird nicht umsortiert
-```
-
-Anzeigename und Cover eines Ordners kommen aus den ID3-Tags (eigener Name `TXXX:TONUINO_FOLDER_NAME`, sonst Album-Tag `TALB`, bzw. eingebettetes Cover `APIC` des ersten passenden Tracks), sonst „Ordner NN“ bzw. eine `cover.jpg`/`cover.png`/`folder.jpg`/`folder.png`/`front.jpg` im Ordner. **Umbenennen** (Stift neben dem Titel oder Doppelklick auf den Ordner bzw. Titel) schreibt den Namen als eigenen Tag `TXXX:TONUINO_FOLDER_NAME` in alle Tracks des Ordners, der Album-Tag bleibt unberührt; ein leerer Name gibt den Album-Tag wieder frei. Vorgeschlagen wird die aus den Tracktiteln erkannte Reihe, wenn der Ordner noch keinen Namen hat. Ein Klick auf das Cover in der Ordneransicht öffnet den Cover-Manager; **Als Album-Cover setzen** gilt dort für alle Tracks des Ordners.
-
-**SD-Karte bereinigen** löscht unwiderruflich alles außerhalb der Ordner `01`–`99`, `mp3` und `advert`, dazu in diesen Ordnern alles, was keine MP3 ist (inkl. macOS-Metadaten wie `.DS_Store`). Erhalten bleiben in den Ordnern `01`–`99` die Kartencover-Dateien `card.png`, `card_art_raw.png`, `card.json`, `card_back.png` und `card_back_raw.png` sowie überall `.tmp_*`-Reste. Ordner ohne Tracks werden entfernt, außer sie enthalten anders benannte MP3s, ein Kartencover oder solche Reste; die Tracks in jedem Ordner lückenlos neu nummeriert; die Ordnernummern bleiben unverändert. Vorher gibt es eine Vorschau und eine Warnung, wenn das Laufwerk nicht wie eine typische SD-Karte aussieht (kein Wechseldatenträger oder über 32 GB).
-
-## RFID-Karten
-
-Unterstützt werden MIFARE Mini, Classic 1K/4K sowie Ultralight/NTAG21x. Der Kartentyp wird automatisch erkannt.
-
-- **Ordnerkarten**: Ordner plus Wiedergabemodus (Hörspiel, Album, Party, Einzelner Track, Hörbuch)
-- **Admin-Karten**: öffnen das Admin-Menü am TonUINO
-
-Den Programmierweg wählst du im Menü **Einstellungen** unter **RFID-Leser**:
-
-- **ACR122U** (Standard): USB-Reader, alle Funktionen inkl. Löschen einzelner Karten
-- **TonUINO (seriell)**: Karte wird über den per USB verbundenen TonUINO und dessen eigenen Leser geschrieben, kein extra Reader nötig. Voraussetzung ist [TonUINO-TNG](https://github.com/tonuino/TonUINO-TNG) mit `#define SerialInputAsCommand` (`src/constants.hpp`). Der TonUINO muss im Leerlauf oder pausiert sein; die Karte wird erst nach der Bestätigung auf seinen Leser gelegt. Löschen ist in diesem Modus nicht möglich.
-
 ## Kartencover
 
-Der **Cover-Manager** verwaltet zwei getrennte Dinge: das **Album-Cover** (quadratisch, in den MP3s, Anzeige in Box und App) und das **Kartencover** (Vorder-/Rückseite für den Druck auf die RFID-Karte). Ein Klick auf das Album-Cover im Ordnerkopf öffnet ihn im Album-Cover-Modus (Reiter „Cover suchen“, Bild wählen → „Als Album-Cover setzen“); **Cover-Manager** bzw. Menü **Kartencover** öffnen ihn für das Kartencover:
+Der **Cover-Manager** verwaltet zwei getrennte Dinge: das **Album-Cover** (quadratisch, in den MP3s, Anzeige in Box und App) und das **Kartencover** (Vorder-/Rückseite für den Druck auf die RFID-Karte). Ein Klick auf das Album-Cover im Ordnerkopf, der Knopf **Cover-Manager** oder das Menü **Kartencover** öffnen ihn im Reiter „Cover suchen“:
 
-- **Galerie** unter der großen Kartenvorschau, filterbar nach *Aktuell* (eingebettetes Album-Cover, Kartenmotiv auf der SD), *Gefunden*, *Archiv* (alle behaltenen Cover inkl. früherer KI-Läufe) und *Neu*.
+- **Galerie** unter der großen Vorschau, filterbar nach *Alle*, *Gefunden*, *Archiv* (alle behaltenen Cover inkl. früherer KI-Läufe) und *Neu*. Das Feld **Gesetzt** zeigt Album-Cover, Karte vorne und Karte hinten.
 - **Cover suchen**: Suchbegriff ist die aus den Tracktiteln erkannte Reihe, sonst der Album-Tag, sonst der von der Recherche ermittelte Titel, sonst der bereinigte erste Tracktitel (nie „Ordner 01“). Quellen: **Deezer** (bis 1000 px), **Spotify** (640 px, mit eigener Client-ID/Secret), **iTunes** (bis 1200 px), **MusicBrainz**/Cover Art Archive und die **Recherche-Quellen** (Vorschaubild der gefundenen Verlags-/Shopseiten bzw. von der Recherche gemeldete Cover-URLs). Gefundene Cover sind urheberrechtlich geschützt – nur für eigene Karten verwenden.
-- **Bedienung**: *Klick* auf ein Bild zeigt es nur groß in der Vorschau. **Als Vorderseite** und **Als Rückseite** unter der Vorschau weisen es der Karte zu und **speichern sofort**, ohne Rückfrage und ohne den Reiter „Karte“. Bei Bildern mit eigener Rückseite entscheidet der Umschalter *Vorderseite | Rückseite*, welche Seite genommen wird; die Knöpfe zeigen das an. Wird zuerst die Rückseite gewählt, wird sie mit der ersten Vorderseite gespeichert. Die Zeile unter der Vorschau zeigt immer den gespeicherten Stand („gespeichert ✓“). **Als Album-Cover setzen** schreibt das Cover sofort in die Audiodateien. *Haken* markieren mehrere Bilder für die Sammelaktionen **Behalten (n)** (ins Archiv), **Als KI-Vorlage (n)** und **Verwerfen (n)**. Symbole: ★ im Archiv, ○ nicht gespeichert (verschwindet beim Schließen), ◆ KI-Vorlage, ♪ Album-Cover, ▭ Kartencover. Zugewiesene Bilder landen automatisch im Archiv; die automatische Suche läuft nur, solange noch keine gefundenen Cover im Archiv liegen.
+- **Bedienung**: *Klick* auf ein Bild zeigt es nur groß in der Vorschau. **Als Vorderseite** und **Als Rückseite** neben der Vorschau weisen es der Karte zu und **speichern sofort**, ohne Rückfrage und ohne den Reiter „Karte“. Bei Bildern mit eigener Rückseite entscheidet der Umschalter *Vorne | Hinten*, welche Seite genommen wird. Wird zuerst die Rückseite gewählt, wird sie mit der ersten Vorderseite gespeichert. Das Feld **Info** zeigt den gespeicherten Stand („Karte gespeichert ✓“). **Als Album-Cover setzen** schreibt das Cover sofort in die Audiodateien. *Haken* markieren mehrere Bilder für die Sammelaktionen **Behalten (n)** (ins Archiv), **Als KI-Vorlage (n)** und **Verwerfen (n)**. Symbole: ★ im Archiv, ○ nicht gespeichert (verschwindet beim Schließen), ◆ KI-Vorlage, ♪ Album-Cover, ▭ Kartencover. Zugewiesene Bilder landen automatisch im Archiv; die automatische Suche läuft nur, solange noch keine gefundenen Cover im Archiv liegen.
 - **Ersetzen mit Sicherung**: Ein ersetztes Kartenmotiv, das noch nicht im Archiv liegt, wird ohne Rückfrage dort abgelegt. Beim Album-Cover fragt der Manager vor dem Überschreiben, ob das bisherige archiviert werden soll. Galerie und Ordneransicht werden sofort aktualisiert.
 - **Kartentext**: *Reihe* (klein, z. B. „Die Fuchsbande · Folge 39“) und *Titel* mit einer Zeile je Folge. Das Zahnrad neben „Reihe“ öffnet ein Popup mit zwei Bereichen (Reihe, Titel) für Schriftart, Größe (mm oder automatisch), Fett und Farbe; jede Änderung ist sofort in der Vorschau zu sehen, „Abbrechen“ stellt die Ausgangswerte wieder her. Text, Schrift, Ausrichtung und Ordnernummer werden kurz nach der letzten Änderung automatisch gespeichert (spätestens beim Schließen). Als Vorgabe für die nächste Karte gelten nur die Ausrichtung und die Schrift, wenn du das Popup mit „Fertig“ schließt. Die Vorschau zeigt die fertige Karte mit Text nur im Reiter „Karte“, in den anderen Reitern das Bild selbst. Beides wird aus den Tags abgeleitet: Tracktitel nach dem Muster „Reihe (1/2): Folgentitel | Feed“ oder „Reihe – Folge 12: Titel“ (typisch für Podcast-Downloads, bei denen der Album-Tag nur den Feed nennt) haben Vorrang; sonst Interpret/Albuminterpret und Album-Tag, wobei Doppelfolgen wie „Fall 77: …/Fall 78: …“ und mehrere Folgen mit verschiedenen Album-Tags erkannt werden und lässt sich bearbeiten bzw. mit „Aus Tags übernehmen“ neu ermitteln.
 - **KI erzeugen**: Recherche und Bild-Prompt stützen sich auf die erkannte Reihe und die Folgentitel (Zeile „Grundlage: …“ zeigt, woher sie stammen: Tracktitel, Tags oder per MusicBrainz bestätigte Tags); ein Album-Tag, der nur einen Podcast-Feed nennt, wird dem Modell ausdrücklich als solcher mitgegeben. Nach „Tags von MusicBrainz“ werden die Tags neu gelesen; die KI-Recherche läuft bei „Recherchieren“ oder vor dem nächsten KI-Aufruf erneut. Dazu Stil, eigener Wunsch, 1–4 Varianten; alle mit ◆ markierten Bilder gehen als Vorlage mit (bis zu 6). Nicht behaltene neue Varianten werden beim Schließen abgefragt.
-- **Rückseite**: Cover aus dem Cover Art Archive bringen ihre Rückseite mit (Badge ⧉ in der Galerie, Umschalter *Vorne | Hinten* unter der Vorschau). Im Tab „Karte“ unter *Rückseite* wählbar: *Keine*, *Original-Rückseite / gewähltes Bild*, *Ambient Blur der Vorderseite* oder *Farbverlauf aus den Coverfarben*; jede Änderung wird automatisch gespeichert. „Als Rückseite“ schaltet auf *Bild*, die Wahl bleibt auch bei einem Wechsel zu Blur/Verlauf gemerkt; „Aus Datei …“ nimmt ein Bild vom PC und speichert sofort. Die Checkbox *Trackliste auf Bild* setzt Überschrift und Trackliste aus den Tags per Code auf das Motiv. **KI-Hilfen als Knöpfe** (je 1 Bildaufruf, das Ergebnis erscheint als neues Bild unter *Neu* und wird per „Als Vorderseite“/„Als Rückseite“ zugewiesen): *Rand per KI ergänzen* erweitert das angeklickte Bild aufs Kartenformat (entfällt, wenn es schon passt); *KI-Rückseite erzeugen* malt passend zur gewählten Vorderseite ein ruhigeres Gegenstück im selben Stil, optional nach *KI-Wunsch*, „Idee vorschlagen“ lässt das Textmodell drei Szenen vorschlagen. Gespeichert wird als `card_back.png`/`card_back_raw.png` (im SD-Ordner bzw. für Bibliotheksalben im Archiv) und am Kartencover im Archiv; auf dem Druckbogen folgen Rückseiten als weitere Etiketten nach den Vorderseiten.
+- **Rückseite**: Cover aus dem Cover Art Archive bringen ihre Rückseite mit (Badge ⧉ in der Galerie, Umschalter *Vorne | Hinten* unter der Vorschau). Im Tab „Karte“ unter *Rückseite* wählbar: *Keine*, *Original-Rückseite / gewähltes Bild*, *Ambient Blur der Vorderseite* oder *Farbverlauf aus den Coverfarben*; jede Änderung wird automatisch gespeichert. „Als Rückseite“ schaltet auf *Bild*, die Wahl bleibt auch bei einem Wechsel zu Blur/Verlauf gemerkt; „Aus Datei …“ nimmt ein Bild vom PC und speichert sofort. Die Checkbox *Trackliste auf Bild* setzt Überschrift und Trackliste aus den Tags per Code auf das Motiv. **KI-Hilfen als Knöpfe** (je 1 Bildaufruf, das Ergebnis erscheint als neues Bild unter *Neu* und wird per „Als Vorderseite“/„Als Rückseite“ zugewiesen): *Rand per KI* erweitert das angeklickte Bild aufs Kartenformat (entfällt, wenn es schon passt); *KI-Rückseite erzeugen* malt passend zur gewählten Vorderseite ein ruhigeres Gegenstück im selben Stil, optional nach *KI-Wunsch*, „Idee vorschlagen“ lässt das Textmodell drei Szenen vorschlagen. *Rand per Blur* ergänzt ohne KI und kostenlos einen weichgezeichneten Rand, ebenfalls als neues Bild unter *Neu*. Gespeichert wird als `card_back.png`/`card_back_raw.png` (im SD-Ordner bzw. für Bibliotheksalben im Archiv) und am Kartencover im Archiv; auf dem Druckbogen folgen Rückseiten als weitere Etiketten nach den Vorderseiten.
 - **Serie**: Folgen einer Hörspielreihe bekommen über ein Serienprofil (Anker-Bilder, Stilbibel) einen einheitlichen Look, siehe [Serien](#serien).
 - **Archiv**: alle behaltenen Cover liegen im **Datenordner der Bibliothek** (beim ersten Öffnen wählbar, Standard `Google Drive\Tonuino\Bibliothek-Daten`, ohne diesen Ordner `Dokumente\Tonuino-Manager\Bibliothek-Daten`; später änderbar unter *Einstellungen → Datenordner ändern …*). Auf die SD-Karte kommt nur das aktive Kartencover. Die Zuordnung Ordner ↔ Archiv erfolgt über eine Album-ID, die als Tag `TXXX:TONUINO_ALBUM_ID` in die MP3s auf der SD-Karte geschrieben wird.
 
@@ -120,6 +108,33 @@ Die eigene Sammlung bleibt, wo sie ist – auf dem PC, auf einem NAS, in mehrere
 - **Cover …** (im geöffneten Album): der Cover-Manager für das Bibliotheksalbum. „Als Album-Cover setzen“ schreibt das Bild in alle Dateien des Albums (MP3, FLAC, M4A, OGG) und als `cover.jpg` in den Albumordner; das Kartencover samt Gestaltung landet im Archiv und wird beim Übertragen auf die SD-Karte geschrieben.
 - **Cover nachtragen …** (Kopfzeile): Stapelsuche für alle Alben ohne Cover. Je Album in dieser Reihenfolge: Album-Cover aus dem Archiv (einmal im Cover-Manager gesetzt), Front-Cover aus dem Cover Art Archive zur MusicBrainz-Release-ID in den Tags, sonst Online-Suche (Deezer, iTunes, Spotify, MusicBrainz) mit Bewertung nach Titel, Interpret und Trackanzahl. Ein Prüfdialog zeigt je Album Vorschaubild, Quelle und Punkte; nur klare Spitzenreiter sind vorangehakt, per Rechtsklick lassen sich andere Treffer wählen, **Im Cover-Manager öffnen …** öffnet das markierte Album. Erst „Übernehmen“ schreibt die angehakten Cover in die Dateien, als `cover.jpg` und ins Archiv.
 - **SD-Ansicht**: Der Ordnerkopf zeigt **aus Bibliothek: <Album>**, wenn der Ordner einem Bibliotheksalbum entspricht, und warnt, wenn die Bibliothek mehr Tracks hat als der Ordner auf der Karte.
+
+## SD-Karten-Format
+
+```
+SD-Karte/
+├── 01/ … 99/   → Tonuino-Ordner mit 001.mp3, 002.mp3, …
+│               (optional card.png, card_art_raw.png, card.json, card_back.png,
+│                card_back_raw.png = Kartencover)
+├── mp3/        → Systemordner (Ansagen), wird nicht umsortiert
+└── advert/     → Systemordner (Advert), wird nicht umsortiert
+```
+
+Anzeigename und Cover eines Ordners kommen aus den ID3-Tags (eigener Name `TXXX:TONUINO_FOLDER_NAME`, sonst Album-Tag `TALB`, bzw. eingebettetes Cover `APIC` des ersten passenden Tracks), sonst „Ordner NN“ bzw. eine `cover.jpg`/`cover.png`/`folder.jpg`/`folder.png`/`front.jpg` im Ordner. **Umbenennen** (Stift neben dem Titel oder Doppelklick auf den Ordner bzw. Titel) schreibt den Namen als eigenen Tag `TXXX:TONUINO_FOLDER_NAME` in alle Tracks des Ordners, der Album-Tag bleibt unberührt; ein leerer Name gibt den Album-Tag wieder frei. Vorgeschlagen wird die aus den Tracktiteln erkannte Reihe, wenn der Ordner noch keinen Namen hat. Ein Klick auf das Cover in der Ordneransicht öffnet den Cover-Manager; **Als Album-Cover setzen** gilt dort für alle Tracks des Ordners.
+
+**SD-Karte bereinigen** löscht unwiderruflich alles außerhalb der Ordner `01`–`99`, `mp3` und `advert`, dazu in diesen Ordnern alles, was keine MP3 ist (inkl. macOS-Metadaten wie `.DS_Store`). Erhalten bleiben in den Ordnern `01`–`99` die Kartencover-Dateien `card.png`, `card_art_raw.png`, `card.json`, `card_back.png` und `card_back_raw.png` sowie überall `.tmp_*`-Reste. Ordner ohne Tracks werden entfernt, außer sie enthalten anders benannte MP3s, ein Kartencover oder solche Reste; die Tracks in jedem Ordner lückenlos neu nummeriert; die Ordnernummern bleiben unverändert. Vorher gibt es eine Vorschau und eine Warnung, wenn das Laufwerk nicht wie eine typische SD-Karte aussieht (kein Wechseldatenträger oder über 32 GB).
+
+## RFID-Karten
+
+Unterstützt werden MIFARE Mini, Classic 1K/4K sowie Ultralight/NTAG21x. Der Kartentyp wird automatisch erkannt.
+
+- **Ordnerkarten**: Ordner plus Wiedergabemodus (Hörspiel, Album, Party, Einzelner Track, Hörbuch)
+- **Admin-Karten**: öffnen das Admin-Menü am TonUINO
+
+Den Programmierweg wählst du im Menü **Einstellungen** unter **RFID-Leser**:
+
+- **ACR122U** (Standard): USB-Reader, alle Funktionen inkl. Löschen einzelner Karten
+- **TonUINO (seriell)**: Karte wird über den per USB verbundenen TonUINO und dessen eigenen Leser geschrieben, kein extra Reader nötig. Voraussetzung ist [TonUINO-TNG](https://github.com/tonuino/TonUINO-TNG) mit `#define SerialInputAsCommand` (`src/constants.hpp`). Der TonUINO muss im Leerlauf oder pausiert sein; die Karte wird erst nach der Bestätigung auf seinen Leser gelegt. Löschen ist in diesem Modus nicht möglich.
 
 ## Entwicklung
 
