@@ -9,6 +9,7 @@ core/card_layout.py, weil generierter Text oft Tippfehler hat.
 import base64
 import io
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -198,7 +199,7 @@ class ImageRefused(RuntimeError):
                  "Häufige Gründe:\n" + "\n".join(f"• {reason}" for reason in reasons),
                  "Das kannst du tun:\n" + "\n".join(f"• {tip}" for tip in tips)]
         if answer:
-            parts.append(f"Antwort des Modells: {answer[:300]}")
+            parts.append(f"Antwort von Google: {answer[:300]}")
         super().__init__("\n\n".join(parts))
 
 
@@ -209,7 +210,9 @@ def request_image(client, context: str, **request) -> Image.Image:
         interaction = client.interactions.create(**request)
     except Exception as e:
         if "content_blocked" in str(e).lower():
-            raise ImageRefused(context) from e
+            # Der Filter greift vor dem Modell, mehr als diesen Text gibt es dann nicht
+            message = re.search(r"""['"]message['"]:\s*['"](.+?)['"]\s*[,}]""", str(e))
+            raise ImageRefused(context, message.group(1) if message else "") from e
         raise
     image = getattr(interaction, "output_image", None)
     if image is None or not getattr(image, "data", None):
@@ -265,7 +268,9 @@ def generate_art(source: str, req: GenerationRequest, client=None, model: str = 
 EXTEND_PROMPT = (
     "Extend (outpaint) the attached image to a {shape} format. Keep the original image completely unchanged "
     "and centered at its full size; only continue the background, colors and textures naturally beyond its "
-    "edges so the result is one seamless picture. Do not add new text, letters, logos, characters or objects."
+    "edges so the result is one seamless picture. Do not add new text, letters, logos, characters or objects. "
+    "If you cannot create this image, return no image and instead state the specific reason in one short "
+    "German sentence."
 )
 
 

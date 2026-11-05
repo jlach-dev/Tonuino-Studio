@@ -394,22 +394,30 @@ def test_refused_image_explains_itself():
     with pytest.raises(RuntimeError) as caught:
         extend_to_card(client, "m", b"\x89PNG\r\n\x1a\n", "portrait")
     message = str(caught.value)
-    assert "kein Fehler der App" in message and "Antwort des Modells: blocked" in message
+    assert "kein Fehler der App" in message and "Antwort von Google: blocked" in message
     assert "Ambient Blur" in message
 
 
 def test_blocked_request_gives_tips_for_what_was_attempted():
     def blocked(**kwargs):
-        raise RuntimeError("Error code: 400 - {'error': {'code': 'content_blocked'}}")
+        raise RuntimeError("Error code: 400 - {'error': {'message': 'Request blocked for a reason.', "
+                           "'code': 'content_blocked'}}")
 
     client = SimpleNamespace(interactions=SimpleNamespace(create=blocked))
     with pytest.raises(ImageRefused) as caught:
         extend_to_card(client, "m", b"\x89PNG\r\n\x1a\n", "portrait")
     assert "Häufige Gründe" in str(caught.value) and "Error code" not in str(caught.value)
+    assert "Antwort von Google: Request blocked for a reason." in str(caught.value)
     with pytest.raises(ImageRefused) as caught:
         generate_art(SOURCE_AI, GenerationRequest(info=FolderInfo(), brief=CoverBrief(), use_reference=False),
                      client=client, model="m")
     assert "Als KI-Vorlage" in str(caught.value)
+
+
+def test_extend_prompt_asks_for_the_reason_if_refused():
+    client, calls, png = image_client()
+    extend_to_card(client, "m", png, "portrait")
+    assert "state the specific reason" in calls[-1]["input"][0]["text"]
 
 
 def test_other_api_errors_stay_as_they_are():
