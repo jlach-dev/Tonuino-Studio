@@ -226,7 +226,8 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
     assert dialog.back_source.candidate is other and not dialog.back_source.back
     assert dialog.back_mode_combo.currentData() == BACK_MODE_IMAGE
     assert card_store.has_back(card_dir) and card_store.load_meta(card_dir).back_mode == BACK_MODE_IMAGE
-    assert "Rückseite: Deezer (Vorderseite)" in dialog.sides_label.text()
+    assert "Rückseite: Deezer (Vorderseite)" in dialog.sides_label.toolTip()
+    assert dialog.slot_back.caption_text == "Deezer (Vorderseite)"
 
     # Klick auf ein anderes Cover (auch mit eigener Rueckseite) aendert die Karte nicht
     dialog.gallery.setCurrentRow(0)
@@ -250,7 +251,7 @@ def test_preview_source_pick_and_ai_extension_creates_new_version(qt_app, tmp_pa
             pass
 
     class FakeWorker:
-        done = failed = finished = FakeSignal()
+        done = failed = refused = finished = FakeSignal()
 
         def __init__(self, client, model, data, orientation):
             assert data == other.data
@@ -338,7 +339,7 @@ def test_ai_back_button_creates_image_to_assign(qt_app, tmp_path, monkeypatch):
             pass
 
     class FakeBackWorker:
-        done = failed = finished = FakeSignal()
+        done = failed = refused = finished = FakeSignal()
 
         def __init__(self, client, model, request, front_bytes, wish, with_tracklist):
             assert with_tracklist and front_bytes == front.data and wish == "Fritzi im Wald"
@@ -444,7 +445,7 @@ def test_extension_skipped_when_art_already_fits(tmp_path, monkeypatch):
             pass
 
     class FakeWorker:
-        done = failed = finished = FakeSignal()
+        done = failed = refused = finished = FakeSignal()
 
         def __init__(self, *args):
             calls.append(args)
@@ -536,14 +537,14 @@ def test_ai_back_survives_gallery_clicks(tmp_path, monkeypatch):
     dialog.gallery.setCurrentRow(1)  # Cover mit eigener Rueckseite anklicken
     assert dialog.selected is with_back and dialog.back_source.candidate is ai_back
     assert dialog._back_source_image(dialog.selected).getpixel((0, 0)) == (7, 7, 7)
-    assert ai_back.label in dialog.sides_label.text()
+    assert ai_back.label in dialog.sides_label.toolTip()
     with Image.open(card_store.back_paths(card_dir)[1]) as img:
         assert img.convert("RGB").getpixel((img.width // 2, img.height // 2)) == (7, 7, 7)
     dialog.done(0)
 
 def test_old_card_with_ai_back_mode_loads_as_image(qt_app, tmp_path, monkeypatch):
     """Karten aus der Zeit mit Rueckseitenmodus "KI" behalten ihre gespeicherte Rueckseite"""
-    from core.card_layout import BACK_MODE_AI, prepare_card_art
+    from core.card_layout import BACK_MODE_AI
     from core.metadata import MetadataManager
     from gui import cover_manager_dialog as cm
 
@@ -555,8 +556,7 @@ def test_old_card_with_ai_back_mode_loads_as_image(qt_app, tmp_path, monkeypatch
     monkeypatch.setattr(cm, "gemini_client", lambda: None)
     monkeypatch.setattr(cm.CoverManagerDialog, "_start_research", lambda self: None)
     meta = card_store.CardMeta(title="Alt", orientation=ORIENTATION_PORTRAIT, back_mode=BACK_MODE_AI)
-    card_store.save_card(str(folder), prepare_card_art(Image.new("RGB", (400, 600), (0, 0, 200)),
-                                                       ORIENTATION_PORTRAIT), meta, 1)
+    card_store.save_card(str(folder), Image.new("RGB", (400, 600), (0, 0, 200)), meta, 1)
     card_store.save_back(str(folder), Image.new("RGB", (400, 600), (7, 7, 7)), card_store.load_meta(str(folder)))
     dialog = cm.CoverManagerDialog(sd.folders[1], "Alt", MetadataManager(), CoverArchive(str(tmp_path / "data")))
     assert dialog.back_mode_combo.currentData() == BACK_MODE_IMAGE

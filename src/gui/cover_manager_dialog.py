@@ -18,10 +18,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PIL import Image
-from PyQt6.QtCore import Qt, QSettings, QSize, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import QEvent, Qt, QSettings, QSize, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QIcon, QPainter
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog,
+    QGridLayout, QLabel, QSizePolicy,
     QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
     QScrollArea, QSplitter, QTabBar, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -30,8 +31,9 @@ from core import ai_settings, album_identity, card_store, cover_sources
 from core.card_text import derive_card_text, describe_work
 from core.card_layout import (
     BACK_MODE_AI, BACK_MODE_BLUR, BACK_MODE_GRADIENT, BACK_MODE_IMAGE, BACK_MODE_NONE, BACK_MODE_TRACKLIST,
-    CardSpec, ORIENTATION_PORTRAIT, TextStyle, album_cover_jpeg, blur_background, gradient_background,
-    fits_card_format, prepare_card_art,
+    CardSpec, ORIENTATION_PORTRAIT, TextStyle, album_cover_jpeg, ambient_blur, blur_background,
+    gradient_background,
+    fits_card_format,
 )
 from core.cover_archive import (
     BACK_KIND_AI, KIND_AI, KIND_FILE, KIND_LOCAL, KIND_ONLINE, ROLE_ALBUM_COVER, ROLE_CARD_COVER,
@@ -39,7 +41,8 @@ from core.cover_archive import (
 )
 from core.series import MAX_ANCHORS, SIDE_BACK, SIDE_FRONT, AnchorRef, SeriesProfile, load_anchor_bytes
 from core.cover_generator import (
-    DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, MAX_REFERENCE_IMAGES, SOURCE_AI, STYLE_PRESETS, GenerationRequest,
+    DEFAULT_STYLE, ESTIMATED_COST_PER_IMAGE, MAX_REFERENCE_IMAGES, SOURCE_AI, STYLE_PRESETS, ExtendMasking,
+    GenerationRequest,
 )
 from core.cover_research import CoverBrief, FolderInfo, gather_folder_info, suggest_search_title
 from core.sd_card import Folder
@@ -47,6 +50,7 @@ from gui.card_cover_dialog import (
     ORIENTATIONS, _select_data, gemini_client, image_model, pil_to_pixmap, text_model,
 )
 from gui.common import confirm_action, icon_from_glyph
+from gui.cover_mask_dialog import CoverMaskDialog
 from gui.text_style_dialog import TextStylesPopup
 from gui import theme
 from gui.tag_diff_dialog import TagDiffDialog
@@ -71,10 +75,9 @@ SECTION_ONLINE = "online"
 SECTION_ARCHIVE = "archive"
 SECTION_NEW = "new"
 
-# Filter der Galerie (Reihenfolge = Tabs)
+# Filter der Galerie (Reihenfolge = Tabs). Was gesetzt ist, zeigt die Spalte "Gesetzt", nicht die Galerie.
 FILTERS = [
     ("Alle", None),
-    ("Aktuell", SECTION_CURRENT),
     ("Gefunden", SECTION_ONLINE),
     ("Archiv", SECTION_ARCHIVE),
     ("Neu", SECTION_NEW),
@@ -221,10 +224,87 @@ class OnlineCoverSearchWorker(QThread):
         self.completed.emit(count)
 
 
+class CurrentSlot(QFrame):
+    """Ein Feld in "Gesetzt": Rahmen im Seitenverhaeltnis des Inhalts, der mit dem Platz waechst.
+    Der Rahmen ist kein Teil des Layouts, sonst koennte das Feld nie wieder kleiner werden."""
+    clicked = pyqtSignal()
+
+    def __init__(self, title: str, minimum: tuple):
+        super().__init__()
+        self._pixmap = None
+        self.caption_text = ""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        heading = QLabel(title)
+        heading.setObjectName("folderMeta")
+        layout.addWidget(heading)
+        self.area = QWidget()
+        self.area.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.area.installEventFilter(self)
+        layout.addWidget(self.area, 1)
+        self.image = QLabel(self.area)
+        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image.setStyleSheet(f"border: 2px solid {theme.OVERLAY0}; border-radius: 4px; color: {theme.OVERLAY1};")
+        self.set_frame_size(minimum)
+
+    def set_frame_size(self, minimum: tuple):
+        """Kleinste Rahmengroesse; sie legt auch das Seitenverhaeltnis fest"""
+        self.frame_size = minimum
+        self.area.setMinimumSize(*minimum)
+        self._place_frame()
+
+    def eventFilter(self, watched, event):
+        if watched is self.area and event.type() == QEvent.Type.Resize:
+            self._place_frame()
+        return super().eventFilter(watched, event)
+
+    def _place_frame(self):
+        size = QSize(*self.frame_size).scaled(self.area.size().expandedTo(QSize(*self.frame_size)),
+                                              Qt.AspectRatioMode.KeepAspectRatio)
+        self.image.setGeometry((self.area.width() - size.width()) // 2, (self.area.height() - size.height()) // 2,
+                               size.width(), size.height())
+        self._show_image()
+
+    def set_image(self, image: Optional[Image.Image]):
+        if image is None:
+            self._pixmap = None
+        else:
+            small = image.convert("RGB")
+            small.thumbnail((800, 800))
+            self._pixmap = pil_to_pixmap(small)
+        self.image.setCursor(Qt.CursorShape.PointingHandCursor if image is not None
+                             else Qt.CursorShape.ArrowCursor)
+        self._show_image()
+
+    def set_caption(self, text: str):
+        self.caption_text = text
+        self.setToolTip(text)
+
+    def _show_image(self):
+        if self._pixmap is None:
+            self.image.clear()
+            self.image.setText("no image")
+            return
+        self.image.setPixmap(self._pixmap.scaled(self.image.size() - QSize(8, 8), Qt.AspectRatioMode.KeepAspectRatio,
+                                                 Qt.TransformationMode.SmoothTransformation))
+
+    def mouseReleaseEvent(self, event):
+        inside = self.image.rect().contains(self.image.mapFrom(self, event.position().toPoint()))
+        if self._pixmap is not None and inside:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
 # --- Dialog ----------------------------------------------------------------------------------
 
 class CoverManagerDialog(QDialog):
     THUMB = 96
+    # Kleinste Groesse der Rahmen in "Gesetzt", zugleich ihr Seitenverhaeltnis (Karte mit Anschnitt)
+    SLOT_ALBUM = (110, 110)
+    SLOT_CARD_LANDSCAPE = (150, 97)
+    SLOT_CARD_PORTRAIT = (78, 120)
+    THUMB_ROLE = Qt.ItemDataRole.UserRole + 1
 
     FOCUS_CARD = "card"
     FOCUS_ALBUM = "album"
@@ -243,7 +323,7 @@ class CoverManagerDialog(QDialog):
         # Wie das Hauptfenster: maximierbar (Dialoge haben den Knopf sonst nicht)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint
                             | Qt.WindowType.WindowMinimizeButtonHint)
-        self.setMinimumSize(980, 620)
+        self.setMinimumSize(1060, 680)
         self.setSizeGripEnabled(True)
         settings = QSettings()
         geometry = settings.value("cover_manager/geometry")
@@ -300,6 +380,8 @@ class CoverManagerDialog(QDialog):
         self._loading = True  # waehrend des Aufbaus kein Autosave
         self._autosave_timer: Optional[QTimer] = None
         self._extend_source: Optional[SideSource] = None
+        self._extend_masking: Optional[ExtendMasking] = None
+        self._mask_shapes: list = []  # bleiben nach einer erneuten Ablehnung stehen
 
         # Kartendateien: auf der SD-Karte im Ordner, aus der Bibliothek heraus im Archiv
         self._card_dir = folder.path
@@ -316,90 +398,31 @@ class CoverManagerDialog(QDialog):
         self._load_series()
         self._loading = False
         self._update_side_controls()
+        self._refresh_slot_images()
         QTimer.singleShot(0, self._start_research)
 
     # --- Aufbau -----------------------------------------------------------------------------
 
     def _setup_ui(self):
         outer = QHBoxLayout(self)
-        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        # Vier Felder: oben A Auswahl und B Gesetzt, unten C Galerie und D Werkzeuge
+        self.main_splitter = QSplitter(Qt.Orientation.Vertical)
         self.main_splitter.setChildrenCollapsible(False)
         outer.addWidget(self.main_splitter)
+        self.top_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.top_splitter.setChildrenCollapsible(False)
+        self.bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.bottom_splitter.setChildrenCollapsible(False)
+        self.main_splitter.addWidget(self.top_splitter)
+        self.main_splitter.addWidget(self.bottom_splitter)
+        # Sichtbare Griffe: Alle vier Felder lassen sich gegeneinander verschieben
+        for splitter in (self.main_splitter, self.top_splitter, self.bottom_splitter):
+            splitter.setHandleWidth(8)
+            splitter.setStyleSheet(f"QSplitter::handle {{ background: {theme.SURFACE1}; border-radius: 3px; margin: 1px; }}"
+                                   f"QSplitter::handle:hover {{ background: {theme.BLUE}; }}")
 
-        # links oben: Vorschau und Aktionen; links unten: Galerie - per Splitter teilbar
-        self.left_splitter = QSplitter(Qt.Orientation.Vertical)
-        self.left_splitter.setChildrenCollapsible(False)
-        top = QWidget()
-        left = QVBoxLayout(top)
-        left.setContentsMargins(0, 0, 0, 0)
-        self.preview = QLabel("Bild in der Galerie auswählen")
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumSize(300, 220)
-        self.preview.setStyleSheet("border: 1px dashed palette(mid); border-radius: 8px;")
-        left.addWidget(self.preview, 1)
-
-        side_row = QHBoxLayout()
-        self.side_bar = QTabBar()
-        self.side_bar.setDrawBase(False)
-        self.side_bar.setObjectName("galleryFilter")
-        self.side_bar.addTab("Vorderseite")
-        self.side_bar.addTab("Rückseite")
-        self.side_bar.currentChanged.connect(self._render_preview)
-        self.side_bar.currentChanged.connect(self._update_buttons)
-        side_row.addStretch(1)
-        side_row.addWidget(self.side_bar)
-        side_row.addStretch(1)
-        left.addLayout(side_row)
-
-        self.selection_label = QLabel()
-        self.selection_label.setWordWrap(True)
-        left.addWidget(self.selection_label)
-        # Was gespeichert ist - in jedem Reiter sichtbar
-        self.sides_label = QLabel()
-        self.sides_label.setObjectName("folderMeta")
-        self.sides_label.setWordWrap(True)
-        left.addWidget(self.sides_label)
-
-        # Aktionen fuer das angeklickte (gross angezeigte) Bild - gleich gewichtet
-        # Zwei getrennte Aufgaben: Album-Cover (in den MP3s) und Kartencover (Druck)
-        actions = QHBoxLayout()
-        actions.setSpacing(18)
-        album_box = QVBoxLayout()
-        album_box.setSpacing(4)
-        album_caption = QLabel("Album-Cover (in den MP3s)")
-        album_caption.setObjectName("folderMeta")
-        album_caption.setToolTip("Wird in alle Tracks des Ordners geschrieben und in der App angezeigt")
-        album_box.addWidget(album_caption)
-        self.btn_album_cover = QPushButton("Als Album-Cover setzen")
-        self.btn_album_cover.setToolTip("Das gerade groß angezeigte Bild quadratisch zuschneiden und in alle "
-                                        "Tracks des Ordners schreiben – sofort wirksam")
-        self.btn_album_cover.clicked.connect(self._set_album_cover)
-        album_box.addWidget(self.btn_album_cover, 0, Qt.AlignmentFlag.AlignLeft)
-        actions.addLayout(album_box)
-
-        card_box = QVBoxLayout()
-        card_box.setSpacing(4)
-        card_caption = QLabel("Kartencover (Druck) – speichert sofort")
-        card_caption.setObjectName("folderMeta")
-        card_caption.setToolTip("Motiv für die gedruckte RFID-Karte. Ein Klick auf „Als Vorderseite“ bzw. „Als Rückseite“ "
-                                "speichert die Karte sofort; Text und Layout im Reiter „Karte“ speichern automatisch.")
-        card_box.addWidget(card_caption)
-        card_buttons = QHBoxLayout()
-        self.btn_card_cover = QPushButton("Als Vorderseite")
-        self.btn_card_cover.setToolTip("Das angeklickte Bild (bzw. seine Rückseite, wenn „Rückseite“ gewählt ist) "
-                                       "als Vorderseite der Karte – wird sofort gespeichert")
-        self.btn_card_cover.clicked.connect(lambda: self._pick_source(back=False))
-        self.btn_back_cover = QPushButton("Als Rückseite")
-        self.btn_back_cover.setToolTip("Das angeklickte Bild (bzw. seine Rückseite) als Rückseite der Karte – wird "
-                                       "sofort gespeichert; der Rückseiten-Modus wechselt dabei auf „Bild“")
-        self.btn_back_cover.clicked.connect(lambda: self._pick_source(back=True))
-        card_buttons.addWidget(self.btn_card_cover)
-        card_buttons.addWidget(self.btn_back_cover)
-        card_buttons.addStretch(1)
-        card_box.addLayout(card_buttons)
-        actions.addLayout(card_box, 1)
-        left.addLayout(actions)
-        self.left_splitter.addWidget(top)
+        self.top_splitter.addWidget(self._selection_panel())
+        self.top_splitter.addWidget(self._current_panel())
 
         bottom = QWidget()
         left = QVBoxLayout(bottom)
@@ -413,6 +436,11 @@ class CoverManagerDialog(QDialog):
         self.filter_bar.currentChanged.connect(self._apply_filter)
         gallery_header.addWidget(self.filter_bar)
         gallery_header.addStretch(1)
+        legend = QLabel("Zeichen erklärt")
+        legend.setObjectName("folderMeta")
+        legend.setToolTip("Klick = groß anzeigen · Haken = markieren\n★ im Archiv · ○ nicht gespeichert (verschwindet "
+                          "beim Schließen)\n◆ KI-Vorlage · ⧉ mit Rückseite · ⚓ Serien-Anker\ngrünes Band = gesetzt")
+        gallery_header.addWidget(legend)
         left.addLayout(gallery_header)
 
         self.gallery = QListWidget()
@@ -457,18 +485,9 @@ class CoverManagerDialog(QDialog):
         mark_bar.addWidget(self.btn_unmark)
         left.addLayout(mark_bar)
 
-        hint = QLabel("Klick = groß anzeigen · Haken = markieren · ★ im Archiv · ○ nicht gespeichert "
-                      "(verschwindet beim Schließen) · ◆ KI-Vorlage · ♪ Album-Cover · ▭ Kartencover · ⧉ mit Rückseite "
-                      "· ⚓ Serien-Anker")
-        hint.setObjectName("folderMeta")
-        hint.setWordWrap(True)
-        left.addWidget(hint)
-        self.left_splitter.addWidget(bottom)
-        self.left_splitter.setStretchFactor(0, 1)
-        self.left_splitter.setStretchFactor(1, 1)
-        self.main_splitter.addWidget(self.left_splitter)
+        self.bottom_splitter.addWidget(bottom)
 
-        # rechts: Tabs
+        # D: Reiter
         right_widget = QWidget()
         right = QVBoxLayout(right_widget)
         right.setContentsMargins(0, 0, 0, 0)
@@ -477,6 +496,7 @@ class CoverManagerDialog(QDialog):
         self.tabs.addTab(self._card_tab(), "Karte")
         self.tabs.addTab(self._ai_tab(), "KI erzeugen")
         self.tabs.addTab(self._series_tab(), "Serie")
+        self.tabs.currentChanged.connect(self._update_side_bar)
         self.tabs.currentChanged.connect(self._render_preview)
         right.addWidget(self.tabs, 1)
 
@@ -491,17 +511,23 @@ class CoverManagerDialog(QDialog):
         close_row.addWidget(btn_close)
         right.addLayout(close_row)
         right_widget.setMinimumWidth(420)
-        self.left_splitter.setMinimumWidth(540)
-        self.main_splitter.addWidget(right_widget)
-        self.main_splitter.setStretchFactor(0, 3)
-        self.main_splitter.setStretchFactor(1, 2)
-        self.main_splitter.setSizes([700, 480])
+        bottom.setMinimumWidth(400)
+        self.bottom_splitter.addWidget(right_widget)
+        self.bottom_splitter.setStretchFactor(0, 4)
+        self.bottom_splitter.setStretchFactor(1, 5)
+        self.top_splitter.setStretchFactor(0, 3)
+        self.top_splitter.setStretchFactor(1, 2)
+        self.main_splitter.setStretchFactor(0, 1)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes([460, 360])
+        self.top_splitter.setSizes([680, 600])
+        self.bottom_splitter.setSizes([570, 710])
         settings = QSettings()
-        for splitter, key in ((self.main_splitter, "cover_manager/splitter"),
-                              (self.left_splitter, "cover_manager/left_splitter")):
+        for splitter, key in self._splitters():
             state = settings.value(key)
             if state is not None:
                 splitter.restoreState(state)
+        self._rows_unset = settings.value("cover_manager/rows") is None
 
         if self.focus == self.FOCUS_ALBUM:
             self.tabs.setCurrentIndex(0)
@@ -513,6 +539,168 @@ class CoverManagerDialog(QDialog):
         elif self.client is None:
             self.status_label.setText("Kein Gemini-API-Key hinterlegt (Kartencover → KI & Online-Dienste) – "
                                       "gefundene Cover lassen sich trotzdem als Album- oder Kartencover nutzen.")
+
+    def _splitters(self):
+        return ((self.main_splitter, "cover_manager/rows"), (self.top_splitter, "cover_manager/top"),
+                (self.bottom_splitter, "cover_manager/bottom"))
+
+    def _selection_panel(self) -> QWidget:
+        """A: das angeklickte Bild groß, daneben was sich damit machen laesst"""
+        panel = QWidget()
+        row = QHBoxLayout(panel)
+        row.setContentsMargins(0, 0, 0, 0)
+        left = QVBoxLayout()
+        row.addLayout(left, 1)
+        self.preview_title = QLabel("Auswahl")
+        self.preview_title.setObjectName("sectionTitle")
+        left.addWidget(self.preview_title)
+        self.preview = QLabel("Bild in der Galerie auswählen")
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setMinimumSize(260, 160)
+        self.preview.setStyleSheet("border: 1px dashed palette(mid); border-radius: 8px;")
+        left.addWidget(self.preview, 1)
+        side_row = QHBoxLayout()
+        self.side_bar = QTabBar()
+        self.side_bar.setDrawBase(False)
+        self.side_bar.setObjectName("galleryFilter")
+        self.side_bar.addTab("Vorne")
+        self.side_bar.addTab("Hinten")
+        self.side_bar.currentChanged.connect(self._render_preview)
+        self.side_bar.currentChanged.connect(self._update_buttons)
+        side_row.addStretch(1)
+        side_row.addWidget(self.side_bar)
+        side_row.addStretch(1)
+        left.addLayout(side_row)
+
+        self.btn_album_cover = QPushButton("Als Album-Cover setzen")
+        self.btn_album_cover.setToolTip("Das gerade groß angezeigte Bild quadratisch zuschneiden und in alle "
+                                        "Tracks des Ordners schreiben – sofort wirksam")
+        self.btn_album_cover.clicked.connect(self._set_album_cover)
+        self.btn_card_cover = QPushButton("Als Vorderseite")
+        self.btn_card_cover.setToolTip("Die groß angezeigte Seite als Vorderseite der Karte – wird sofort gespeichert")
+        self.btn_card_cover.clicked.connect(lambda: self._pick_source(back=False))
+        self.btn_back_cover = QPushButton("Als Rückseite")
+        self.btn_back_cover.setToolTip("Die groß angezeigte Seite als Rückseite der Karte – wird sofort gespeichert; "
+                                       "der Rückseiten-Modus wechselt dabei auf „Bild“")
+        self.btn_back_cover.clicked.connect(lambda: self._pick_source(back=True))
+        self.btn_extend = QPushButton("Rand per KI (1 Bildaufruf)")
+        self.btn_extend.setObjectName("ghostButton")
+        self.btn_extend.setToolTip("Die groß angezeigte Seite vom Bildmodell aufs Kartenformat erweitern. Das Ergebnis "
+                                   "erscheint als neue Version unter „Neu“.")
+        self.btn_extend.clicked.connect(self._extend_selected)
+        self.btn_blur = QPushButton("Rand per Blur (ohne KI)")
+        self.btn_blur.setObjectName("ghostButton")
+        self.btn_blur.setToolTip("Die groß angezeigte Seite mit einem weichgezeichneten Rand aufs Kartenformat "
+                                 "bringen. Das Ergebnis erscheint als neue Version unter „Neu“.")
+        self.btn_blur.clicked.connect(self._blur_selected)
+
+        buttons = QVBoxLayout()
+        buttons.setSpacing(6)
+        buttons.addStretch(1)
+        set_caption = QLabel("Setzen")
+        set_caption.setObjectName("folderMeta")
+        buttons.addWidget(set_caption)
+        for button in (self.btn_album_cover, self.btn_card_cover, self.btn_back_cover):
+            buttons.addWidget(button)
+        buttons.addSpacing(10)
+        new_caption = QLabel("Neue Version")
+        new_caption.setObjectName("folderMeta")
+        buttons.addWidget(new_caption)
+        for button in (self.btn_extend, self.btn_blur):
+            buttons.addWidget(button)
+        buttons.addStretch(1)
+        row.addLayout(buttons)
+        return panel
+
+    def _current_panel(self) -> QWidget:
+        """B: was das Album und die Karte gerade tragen, dazu Angaben zur Auswahl und zum Speicherstand"""
+        panel = QFrame()
+        panel.setObjectName("currentPanel")
+        panel.setStyleSheet(f"#currentPanel {{ background: {theme.SURFACE_DEEP}; "
+                            f"border: 1px solid {theme.GREEN}; border-radius: 8px; }}")
+        panel.setMinimumWidth(340)
+        grid = QGridLayout(panel)
+        grid.setContentsMargins(8, 8, 8, 8)
+        grid.setSpacing(8)
+        title = QLabel("Gesetzt")
+        title.setObjectName("sectionTitle")
+        title.setStyleSheet(f"color: {theme.GREEN};")
+        grid.addWidget(title, 0, 0, 1, 3)
+        self.slot_album = CurrentSlot("Album-Cover", self.SLOT_ALBUM)
+        self.slot_front = CurrentSlot("Karte vorne", self.SLOT_CARD_PORTRAIT)
+        self.slot_back = CurrentSlot("Karte hinten", self.SLOT_CARD_PORTRAIT)
+        self.slot_album.clicked.connect(lambda: self._show_current("is_album_cover"))
+        self.slot_front.clicked.connect(lambda: self._show_current("is_sd_card_art"))
+        self.slot_back.clicked.connect(lambda: self._show_current("is_sd_card_art", back=True))
+        info = QWidget()
+        info_layout = QVBoxLayout(info)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(3)
+        info_title = QLabel("Info")
+        info_title.setObjectName("folderMeta")
+        info_layout.addWidget(info_title)
+        self.selection_label = QLabel()
+        self.sides_label = QLabel()
+        for label in (self.selection_label, self.sides_label):
+            label.setWordWrap(True)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+            info_layout.addWidget(label, 1)
+        self.sides_label.setObjectName("folderMeta")
+        # Oben die Karte, unten klar abgetrennt Info und Album-Cover
+        across = QFrame()
+        across.setFixedHeight(2)
+        down = QFrame()
+        down.setFixedWidth(2)
+        for line in (across, down):
+            line.setStyleSheet(f"background: {theme.OVERLAY0};")
+        grid.addWidget(self.slot_front, 1, 0)
+        grid.addWidget(self.slot_back, 1, 2)
+        grid.addWidget(across, 2, 0, 1, 3)
+        grid.addWidget(info, 3, 0)
+        grid.addWidget(down, 3, 1)
+        grid.addWidget(self.slot_album, 3, 2)
+        grid.setRowStretch(1, 1)
+        grid.setRowStretch(3, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(2, 1)
+        return panel
+
+    def _show_current(self, attr: str, back: bool = False):
+        """Klick auf einen Platz: das gesetzte Bild groß anzeigen"""
+        candidate = self._current_candidate(attr)
+        if candidate is None:
+            return
+        item = next((i for i in self._items() if i.data(Qt.ItemDataRole.UserRole) is candidate), None)
+        if item is self.gallery.currentItem():
+            self._on_item_selected(item)
+        else:
+            self.gallery.setCurrentItem(item)
+        self.side_bar.setCurrentIndex(1 if back and candidate.has_back else 0)
+
+    def _apply_slot_sizes(self, *_):
+        portrait = self.orientation_combo.currentData() == ORIENTATION_PORTRAIT
+        size = self.SLOT_CARD_PORTRAIT if portrait else self.SLOT_CARD_LANDSCAPE
+        self.slot_front.set_frame_size(size)
+        self.slot_back.set_frame_size(size)
+
+    def _refresh_slot_images(self):
+        """Die Plaetze zeigen, was wirklich gespeichert ist: die fertige Karte mit Text"""
+        self._apply_slot_sizes()
+        album = self._current_candidate("is_album_cover")
+        self.slot_album.set_image(album.image() if album is not None else None)
+        self.slot_front.set_image(self._read_card_image(card_store.card_paths(self._card_dir)[0]))
+        self.slot_back.set_image(self._read_card_image(card_store.back_paths(self._card_dir)[0]))
+        self._refresh_item_texts()
+
+    @staticmethod
+    def _read_card_image(path: Path) -> Optional[Image.Image]:
+        try:
+            with Image.open(path) as img:
+                img.load()
+                return img.copy()
+        except OSError:
+            return None
 
     def _search_tab(self) -> QWidget:
         tab = QWidget()
@@ -588,7 +776,7 @@ class CoverManagerDialog(QDialog):
         tab_layout.addLayout(form)
         tab_layout.addStretch(1)
         self.save_note = QLabel("Änderungen werden automatisch gespeichert. Vorder- und Rückseite wählst du "
-                                "mit „Als Vorderseite“ / „Als Rückseite“ unter der Vorschau.")
+                                "mit „Als Vorderseite“ / „Als Rückseite“ neben der Vorschau.")
         self.save_note.setObjectName("folderMeta")
         self.save_note.setWordWrap(True)
         tab_layout.addWidget(self.save_note)
@@ -614,6 +802,7 @@ class CoverManagerDialog(QDialog):
         _select_data(self.orientation_combo,
                      QSettings().value(ai_settings.SETTINGS_ORIENTATION, ORIENTATION_PORTRAIT, type=str))
         self.orientation_combo.currentIndexChanged.connect(self._render_preview)
+        self.orientation_combo.currentIndexChanged.connect(self._apply_slot_sizes)
         self.orientation_combo.currentIndexChanged.connect(self._schedule_autosave)
         form.addRow("Ausrichtung:", self.orientation_combo)
         self.number_check = QCheckBox("Ordnernummer klein oben rechts anzeigen")
@@ -629,13 +818,6 @@ class CoverManagerDialog(QDialog):
         self.front_source_label.setObjectName("folderMeta")
         self.front_source_label.setWordWrap(True)
         form.addRow("", self.front_source_label)
-        self.btn_extend = QPushButton("Rand per KI ergänzen (1 Bildaufruf)")
-        self.btn_extend.setObjectName("ghostButton")
-        self.btn_extend.setToolTip("Das angeklickte Bild (bzw. die angezeigte Bild-Rückseite) vom Bildmodell aufs "
-                                   "Kartenformat erweitern. Das Ergebnis erscheint als neue Version unter „Neu“; "
-                                   "zuweisen mit „Als Vorderseite“ bzw. „Als Rückseite“.")
-        self.btn_extend.clicked.connect(self._extend_selected)
-        form.addRow("", self.btn_extend)
 
         back_title = QLabel("Rückseite")
         back_title.setObjectName("sectionTitle")
@@ -1301,8 +1483,10 @@ class CoverManagerDialog(QDialog):
             return
         self.candidates.append(candidate)
         thumb.thumbnail((self.THUMB * 2, self.THUMB * 2))
-        item = QListWidgetItem(QIcon(pil_to_pixmap(thumb)), self._item_text(candidate))
+        pixmap = pil_to_pixmap(thumb)
+        item = QListWidgetItem(QIcon(pixmap), self._item_text(candidate))
         item.setData(Qt.ItemDataRole.UserRole, candidate)
+        item.setData(self.THUMB_ROLE, pixmap)
         item.setToolTip(self._item_tooltip(candidate))
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         self.gallery.blockSignals(True)
@@ -1311,23 +1495,51 @@ class CoverManagerDialog(QDialog):
         self.gallery.blockSignals(False)
         self._apply_filter()
         if select:
-            if self._current_filter() not in (None, candidate.section):
+            if candidate.section != SECTION_CURRENT and self._current_filter() not in (None, candidate.section):
                 self.filter_bar.setCurrentIndex(0)
             self.gallery.setCurrentItem(item)
             self.gallery.scrollToItem(item)
 
+    def _set_roles(self, candidate: Candidate) -> List[str]:
+        """Wofuer dieses Galerie-Bild gerade gesetzt ist"""
+        entry = candidate.entry
+        if entry is None:
+            return []
+        roles = []
+        if ROLE_ALBUM_COVER in entry.roles:
+            roles.append("Album")
+        if ROLE_CARD_COVER in entry.roles:
+            roles.append("vorne")
+        if (self._card_meta is not None and self._card_meta.back_archive_cover_id == entry.id
+                and self._card_meta.back_mode == BACK_MODE_IMAGE):
+            roles.append("hinten")
+        return roles
+
     @staticmethod
-    def _item_text(candidate: Candidate) -> str:
+    def _badged_icon(pixmap, roles: List[str]) -> QIcon:
+        """Gesetzte Bilder tragen unten im Vorschaubild ein gruenes Band mit ihrer Rolle"""
+        if not roles:
+            return QIcon(pixmap)
+        badged = pixmap.copy()
+        height = max(12, badged.height() // 5)
+        bar = badged.rect().adjusted(0, badged.height() - height, 0, 0)
+        painter = QPainter(badged)
+        painter.fillRect(bar, QColor(theme.GREEN))
+        font = QFont(painter.font())
+        font.setPixelSize(max(8, height * 3 // 5))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#1e1e2e"))
+        painter.drawText(bar, Qt.AlignmentFlag.AlignCenter, "✓ " + ", ".join(roles))
+        painter.end()
+        return QIcon(badged)
+
+    def _item_text(self, candidate: Candidate) -> str:
         marks = "★" if candidate.entry is not None else ("" if candidate.section == SECTION_CURRENT else "○")
         if candidate.reference:
             marks += "◆"
-        if candidate.entry is not None:
-            if ROLE_ALBUM_COVER in candidate.entry.roles:
-                marks += "♪"
-            if ROLE_CARD_COVER in candidate.entry.roles:
-                marks += "▭"
-            if ROLE_SERIES_ANCHOR in candidate.entry.roles:
-                marks += "⚓"
+        if candidate.entry is not None and ROLE_SERIES_ANCHOR in candidate.entry.roles:
+            marks += "⚓"
         if candidate.has_back:
             marks += "⧉"
         short = candidate.online.source if candidate.online is not None else candidate.label
@@ -1349,7 +1561,9 @@ class CoverManagerDialog(QDialog):
 
     def _refresh_item_texts(self):
         for item in self._items():
-            item.setText(self._item_text(item.data(Qt.ItemDataRole.UserRole)))
+            candidate = item.data(Qt.ItemDataRole.UserRole)
+            item.setText(self._item_text(candidate))
+            item.setIcon(self._badged_icon(item.data(self.THUMB_ROLE), self._set_roles(candidate)))
 
     def _current_filter(self) -> Optional[str]:
         index = self.filter_bar.currentIndex()
@@ -1361,9 +1575,10 @@ class CoverManagerDialog(QDialog):
         for item in self._items():
             candidate = item.data(Qt.ItemDataRole.UserRole)
             counts[candidate.section] = counts.get(candidate.section, 0) + 1
-            item.setHidden(section is not None and candidate.section != section)
+            item.setHidden(candidate.section == SECTION_CURRENT
+                           or (section is not None and candidate.section != section))
         for index, (label, key) in enumerate(FILTERS):
-            count = self.gallery.count() if key is None else counts.get(key, 0)
+            count = (self.gallery.count() - counts.get(SECTION_CURRENT, 0)) if key is None else counts.get(key, 0)
             self.filter_bar.setTabText(index, f"{label} ({count})" if count else label)
 
     def _remove_candidate(self, candidate: Candidate):
@@ -1433,12 +1648,18 @@ class CoverManagerDialog(QDialog):
         # "Zuruecksetzen", "Aus Datei" oder eine fertige KI-Erzeugung. Solange keine
         # Vorderseite festgelegt ist, gilt das angeklickte Bild als Vorschlag.
         self.selected = candidate
-        if not candidate.has_back and not self._card_tab_active() and self.side_bar.currentIndex() == 1:
-            self.side_bar.setCurrentIndex(0)  # das Bild hat keine eigene Rueckseite
+        self._update_side_bar()
         self.selection_label.setText(self._item_tooltip(self.selected).replace("\n", " · "))
         self._update_side_controls()
         self._render_preview()
         self._update_buttons()
+
+    def _update_side_bar(self, *_):
+        """Ausserhalb des Reiters "Karte" gibt es "Rueckseite" nur bei Bildern mit eigener Rueckseite.
+        Qt wechselt beim Sperren der gezeigten Seite selbst auf die Vorderseite."""
+        available = self._card_tab_active() or (self.selected is not None and self.selected.has_back)
+        self.side_bar.setTabEnabled(1, available)
+        self.side_bar.setTabToolTip(1, "" if available else "Dieses Bild hat keine eigene Rückseite")
 
     def _marked_candidates(self) -> List[Candidate]:
         return [item.data(Qt.ItemDataRole.UserRole) for item in self._items()
@@ -1873,6 +2094,8 @@ class CoverManagerDialog(QDialog):
             self._remove_candidate(current)
         self._add_candidate(Candidate(SECTION_CURRENT, "Album-Cover (MP3)", jpeg, KIND_LOCAL, is_album_cover=True))
         self.album_cover_changed = True
+        self._refresh_slot_images()
+        self._update_side_controls()
         parent = self.parent()
         if parent is not None and getattr(parent, "current_folder", None) is self.folder:
             parent._show_folder(self.folder)
@@ -1884,7 +2107,7 @@ class CoverManagerDialog(QDialog):
                                                      "geschrieben – Datei gesperrt oder schreibgeschützt?")
 
     def _card_art_label(self) -> str:
-        return "Kartenmotiv (Archiv)" if self.library_mode else "Kartenmotiv (SD)"
+        return "Gesetztes Kartenmotiv"
 
     def _card_meta_now(self, entry: Optional[CoverEntry]) -> card_store.CardMeta:
         return card_store.CardMeta(
@@ -1935,7 +2158,7 @@ class CoverManagerDialog(QDialog):
         else:
             source = front.image()
         orientation = self.orientation_combo.currentData()
-        art = prepare_card_art(source, orientation)
+        art = source.convert("RGB")  # was vom Kartenformat abweicht, schneidet das Rendern zu
         QSettings().setValue(ai_settings.SETTINGS_ORIENTATION, orientation)
         QSettings().setValue(ai_settings.SETTINGS_STYLE, self.style_combo.currentText())
         meta = self._card_meta_now(entry)
@@ -1959,7 +2182,7 @@ class CoverManagerDialog(QDialog):
             except OSError as e:  # card.png steht schon - die Rolle fehlt nur im Archiv
                 role_error = e
             self._sync_roles()
-        back_note = self._save_back(front.candidate, orientation)
+        back_note = self._save_back(front.candidate)
         if role_error is None:
             try:
                 self._archive_card_back(entry or self._archive_entry(meta.archive_cover_id))
@@ -1983,6 +2206,7 @@ class CoverManagerDialog(QDialog):
             if back_was_current and new_current.has_back:
                 self.back_source = SideSource(new_current, back=True)
         self._update_side_controls()
+        self._refresh_slot_images()
         self._render_preview()
         if role_error is not None:
             QMessageBox.warning(self, "Nur teilweise gespeichert",
@@ -1994,6 +2218,13 @@ class CoverManagerDialog(QDialog):
                         + back_note)
         else:
             self._flash("✓ Karte auf der SD-Karte gespeichert (card.png)." + back_note)
+
+    def _front_origin(self) -> Optional[Candidate]:
+        """Das Archivbild, aus dem das gespeicherte Kartenmotiv entstand"""
+        cover_id = self._card_meta.archive_cover_id if self._card_meta is not None else ""
+        if not cover_id:
+            return None
+        return next((c for c in self.candidates if c.entry is not None and c.entry.id == cover_id), None)
 
     # --- Autosave fuer Text und Layout --------------------------------------------------------
 
@@ -2172,7 +2403,8 @@ class CoverManagerDialog(QDialog):
 
     def _front_state_text(self) -> str:
         if self.front_source is not None:
-            return self.front_source.label
+            origin = self._front_origin() if self.front_source.candidate.is_sd_card_art else None
+            return origin.label if origin is not None else self.front_source.label
         return "noch keine – Bild anklicken und „Als Vorderseite“"
 
     def _back_state_text(self) -> str:
@@ -2202,8 +2434,13 @@ class CoverManagerDialog(QDialog):
         self.front_source_label.setText(f"Vorderseiten-Motiv: {front_text}")
         self.back_source_label.setText(f"Rückseiten-Motiv: {back_text}")
         state = self._save_state_text()
-        self.sides_label.setText(f"Karte · Vorderseite: {front_text} · Rückseite: {back_text}"
-                                 + (f" · {state}" if state else ""))
+        self.sides_label.setText(f"Vorne: {front_text}\nHinten: {back_text}" + (f"\nKarte {state}" if state else ""))
+        self.sides_label.setToolTip(f"Karte · Vorderseite: {front_text} · Rückseite: {back_text}"
+                                    + (f" · {state}" if state else ""))
+        self.slot_front.set_caption(front_text)
+        self.slot_back.set_caption(back_text)
+        self.slot_album.set_caption("in den MP3s" if self._current_candidate("is_album_cover") is not None
+                                    else "noch keins")
         self.btn_back_reset.setEnabled(self.back_mode_combo.currentData() != BACK_MODE_NONE)
         self._update_buttons()
 
@@ -2228,12 +2465,17 @@ class CoverManagerDialog(QDialog):
         if fits_card_format(source.image(), self.orientation_combo.currentData()):
             self._flash("Das Bild hat schon das Kartenformat – keine Randergänzung nötig (kein Aufruf).")
             return
-        self._extend_source = source
+        self._mask_shapes = []
+        self._start_extend(source)
+
+    def _start_extend(self, source: SideSource, masking: Optional[ExtendMasking] = None):
+        self._extend_source, self._extend_masking = source, masking
         self.status_label.setText(f"Rand wird per KI ergänzt: {source.label} …")
-        self._extend_worker = CoverExtendWorker(self.client, image_model(), source.data(),
-                                                self.orientation_combo.currentData())
+        args = (self.client, image_model(), source.data(), self.orientation_combo.currentData())
+        self._extend_worker = CoverExtendWorker(*args, masking) if masking else CoverExtendWorker(*args)
         self._extend_worker.done.connect(self._on_extended)
         self._extend_worker.failed.connect(self._on_extend_failed)
+        self._extend_worker.refused.connect(self._on_extend_refused)
         self._extend_worker.finished.connect(self._update_buttons)
         self._extend_worker.start()
         self._update_buttons()
@@ -2241,22 +2483,65 @@ class CoverManagerDialog(QDialog):
     def _on_extend_failed(self, message: str):
         QMessageBox.warning(self, "Rand nicht ergänzt", message)
 
+    def _on_extend_refused(self, message: str):
+        """Abgelehnt: anbieten, Schrift und Gesichter abzudecken. Jeder weitere Versuch nur nach Klick."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Rand nicht ergänzt")
+        box.setText(message)
+        btn_mask = box.addButton("Bereiche abdecken und erneut versuchen …", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Schließen", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() == btn_mask:
+            self._open_mask_dialog()
+
+    @guarded_slot("Bereiche abdecken")
+    def _open_mask_dialog(self):
+        source = self._extend_source
+        image = source.image() if source is not None else None
+        if image is None:
+            return
+        dialog = CoverMaskDialog(image, self._mask_shapes, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        self._mask_shapes = dialog.shapes()
+        if accepted:
+            self._start_extend(source, ExtendMasking(tuple(self._mask_shapes), dialog.effect(), dialog.soft()))
+
+    @guarded_slot("Rand per Blur")
+    def _blur_selected(self):
+        """Wie der KI-Rand eine neue Version unter "Neu", aber ohne Aufruf und sofort fertig"""
+        source = self._browse_source()
+        if source is None or source.image() is None:
+            self._flash("Bitte zuerst ein Bild in der Galerie anklicken.")
+            return
+        orientation = self.orientation_combo.currentData()
+        if fits_card_format(source.image(), orientation):
+            self._flash("Das Bild hat schon das Kartenformat – kein Rand nötig.")
+            return
+        image = ambient_blur(source.image(), CardSpec().size_px(orientation))
+        self._add_edge_version(source, image, "Blur-Rand", KIND_LOCAL, {"style": "Blur-Rand"})
+        self._flash("Rand ergänzt – neues Bild unter „Neu“. Mit „Als Vorderseite“ bzw. „Als Rückseite“ zuweisen.")
+
     def _on_extended(self, image: Image.Image):
         """Neues Bild unter "Neu"; zugewiesen wird es mit "Als Vorderseite" bzw. "Als Rueckseite"."""
         source = self._extend_source
+        name = "KI-Rand (abgedeckt)" if self._extend_masking is not None else "KI-Rand"
+        meta = {"style": "Rand ergänzt", "model": image_model(), "prompt": f"Outpainting von {source.label}"}
+        self._add_edge_version(source, image, name, KIND_AI, meta)
+        self._flash("Rand ergänzt – neues Bild unter „Neu“. Mit „Als Vorderseite“ bzw. „Als Rückseite“ zuweisen.")
+
+    def _add_edge_version(self, source: SideSource, image: Image.Image, name: str, kind: str, meta: dict):
         base = source.candidate
         number = sum(1 for c in self.candidates if c.section == SECTION_NEW) + 1
-        meta = {"style": "Rand ergänzt", "model": image_model(), "prompt": f"Outpainting von {source.label}"}
         if base.meta.get("kind") == "ai_back" and (source.back or not base.has_back):
             meta["kind"] = "ai_back"
-        candidate = Candidate(SECTION_NEW, f"KI-Rand · {base.label} #{number}", _pil_bytes(image), KIND_AI,
+        candidate = Candidate(SECTION_NEW, f"{name} · {base.label} #{number}", _pil_bytes(image), kind,
                               meta=meta)
         candidate._image = image
         self._add_candidate(candidate, select=True)
         self.side_bar.setCurrentIndex(0)
         self._update_side_controls()
         self._render_preview()
-        self._flash("Rand ergänzt – neues Bild unter „Neu“. Mit „Als Vorderseite“ bzw. „Als Rückseite“ zuweisen.")
 
     def _suggest_back_ideas(self):
         if self.client is None:
@@ -2351,7 +2636,7 @@ class CoverManagerDialog(QDialog):
                                       and self.back_source.candidate.entry is not None else "")
         return meta
 
-    def _save_back(self, front: Candidate, orientation: str) -> str:
+    def _save_back(self, front: Candidate) -> str:
         """Schreibt (oder entfernt) die Rueckseite passend zur Einstellung; gibt einen Hinweis zurueck"""
         mode = self.back_mode_combo.currentData()
         meta = card_store.load_meta(self._card_dir)
@@ -2365,7 +2650,7 @@ class CoverManagerDialog(QDialog):
             card_store.delete_back(self._card_dir, meta)
             return " Keine Rückseite gespeichert (kein Rückseiten-Bild vorhanden)."
         extended = bool(self.back_source is not None and self.back_source.candidate.meta.get("style") == "Rand ergänzt")
-        art = prepare_card_art(source, orientation)
+        art = source.convert("RGB")
         try:
             card_store.save_back(self._card_dir, art, self._back_meta(meta, extended))
         except OSError as e:
@@ -2444,10 +2729,12 @@ class CoverManagerDialog(QDialog):
     # --- Vorschau / Zustand -------------------------------------------------------------------
 
     def _render_preview(self, *_):
+        if hasattr(self, "tabs"):
+            # Im Reiter "Karte" zeigt die Vorschau die Karte in Arbeit, sonst das angeklickte Bild
+            self.preview_title.setText("Karte bearbeiten" if self.tabs.currentIndex() == 1 else "Auswahl")
         if self.selected is None:
             return
         try:
-            orientation = self.orientation_combo.currentData()
             # Nur im Reiter "Karte" wird die fertige Karte (mit Text) gezeigt,
             # sonst das Bild selbst, damit sich Cover unverfaelscht vergleichen lassen
             self._preview_shows_card = self.tabs.currentIndex() == 1
@@ -2460,7 +2747,7 @@ class CoverManagerDialog(QDialog):
                                              "„Rückseite“ Blur bzw. Verlauf wählen")
                         return
                     meta = self._back_meta(self._card_meta_now(None), False)
-                    card = card_store.render_back_from_meta(prepare_card_art(source, orientation), meta)
+                    card = card_store.render_back_from_meta(source.convert("RGB"), meta)
                 else:
                     card = self.selected.back_image()
                     if card is None:
@@ -2468,8 +2755,7 @@ class CoverManagerDialog(QDialog):
                         self.preview.setText("Dieses Bild hat keine eigene Rückseite")
                         return
             elif self._preview_shows_card:
-                art = prepare_card_art(self._front_image(), orientation)
-                card = card_store.render_from_meta(art, self._card_meta_now(None), self.folder.index)
+                card = card_store.render_from_meta(self._front_image(), self._card_meta_now(None), self.folder.index)
             else:
                 card = self.selected.image()
         except Exception as e:
@@ -2483,6 +2769,16 @@ class CoverManagerDialog(QDialog):
         super().resizeEvent(event)
         self._render_preview()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._rows_unset:  # erstes Oeffnen: Die Vorschauen oben bekommen etwas mehr als die Haelfte
+            self._rows_unset = False
+            QTimer.singleShot(0, self._set_default_rows)  # erst wenn das Layout die echte Hoehe kennt
+
+    def _set_default_rows(self):
+        height = self.main_splitter.height()
+        self.main_splitter.setSizes([height * 55 // 100, height * 45 // 100])
+
     def _update_buttons(self, *_):
         if not hasattr(self, "btn_generate"):
             return  # noch im Aufbau (Karten-Tab wird vor dem KI-Tab erstellt)
@@ -2493,19 +2789,15 @@ class CoverManagerDialog(QDialog):
         browse = self._browse_source()
         self.btn_card_cover.setEnabled(browse is not None)
         self.btn_back_cover.setEnabled(browse is not None)
-        # Bei Bildern mit eigener Rueckseite zeigen, welche Seite genommen wird
-        side = ""
-        if browse is not None and browse.candidate.has_back:
-            side = " (Bild-Rückseite)" if browse.back else " (Bild-Vorderseite)"
-        self.btn_card_cover.setText("Als Vorderseite" + side)
-        self.btn_back_cover.setText("Als Rückseite" + side)
+        self._update_side_bar()
         self.btn_generate.setEnabled(not busy)
         self.btn_research.setEnabled(not busy)
         working = any(w is not None and w.isRunning() for w in (self._extend_worker, self._back_worker))
         self.btn_extend.setEnabled(self.client is not None and not working and browse is not None)
+        self.btn_blur.setEnabled(browse is not None)
         self.btn_ai_back.setEnabled(self.client is not None and not working and self.front_source is not None)
         self.btn_extend.setText("Rand wird ergänzt …" if self._extend_worker is not None
-                                and self._extend_worker.isRunning() else "Rand per KI ergänzen (1 Bildaufruf)")
+                                and self._extend_worker.isRunning() else "Rand per KI (1 Bildaufruf)")
         self.btn_ai_back.setText("KI-Rückseite wird erzeugt …" if self._back_worker is not None
                                  and self._back_worker.isRunning() else "KI-Rückseite erzeugen (1 Bildaufruf)")
         self.btn_search.setText("Suche läuft …" if searching else "Cover suchen")
@@ -2549,8 +2841,8 @@ class CoverManagerDialog(QDialog):
         settings.setValue("cover_manager/maximized", self.isMaximized())
         if not self.isMaximized():
             settings.setValue("cover_manager/geometry", self.saveGeometry())
-        settings.setValue("cover_manager/splitter", self.main_splitter.saveState())
-        settings.setValue("cover_manager/left_splitter", self.left_splitter.saveState())
+        for splitter, key in self._splitters():
+            settings.setValue(key, splitter.saveState())
         if self._series_save_timer.isActive():
             self._series_save_timer.stop()
             self._save_series_profile()

@@ -598,7 +598,6 @@ class CoverBatchWorker(QThread):
 
     def run(self):
         from core import album_identity, card_store
-        from core.card_layout import prepare_card_art
         from core.card_text import derive_card_text
         from core.cover_archive import ROLE_CARD_COVER
         from core.cover_generator import GenerationRequest, generate_art
@@ -638,7 +637,7 @@ class CoverBatchWorker(QThread):
                                                    model=meta.model)
                     self.archive.set_role(album_id, entry.id, ROLE_CARD_COVER)
                     meta.album_id, meta.archive_cover_id = album_id, entry.id
-                card_store.save_card(folder.path, prepare_card_art(art, self.orientation), meta, folder.index)
+                card_store.save_card(folder.path, art, meta, folder.index)
                 done += 1
                 self.folder_done.emit(folder.index)
             except Exception as e:
@@ -648,21 +647,32 @@ class CoverBatchWorker(QThread):
 
 
 class CoverExtendWorker(QThread):
-    """Erweitert ein Bild per Bildmodell auf das Kartenformat (Outpainting)"""
+    """Erweitert ein Bild per Bildmodell auf das Kartenformat (Outpainting). Mit masking geht
+    es abgedeckt an Google, und das Original wird danach wieder eingesetzt."""
     done = pyqtSignal(object)  # PIL.Image
     failed = pyqtSignal(str)
+    refused = pyqtSignal(str)  # von Google abgelehnt: hier hilft das Abdecken
 
-    def __init__(self, client, image_model: str, image_bytes: bytes, orientation: str):
+    def __init__(self, client, image_model: str, image_bytes: bytes, orientation: str, masking=None):
         super().__init__()
         self.client = client
         self.image_model = image_model
         self.image_bytes = image_bytes
         self.orientation = orientation
+        self.masking = masking
 
     def run(self):
-        from core.cover_generator import extend_to_card
+        from core.cover_generator import ImageRefused, extend_masked, extend_to_card
         try:
-            self.done.emit(extend_to_card(self.client, self.image_model, self.image_bytes, self.orientation))
+            if self.masking is not None:
+                image = extend_masked(self.client, self.image_model, self.image_bytes, self.orientation,
+                                      self.masking)
+            else:
+                image = extend_to_card(self.client, self.image_model, self.image_bytes, self.orientation)
+            self.done.emit(image)
+        except ImageRefused as e:
+            log.info("KI-Randergaenzung abgelehnt")
+            self.refused.emit(str(e))
         except Exception as e:
             log.exception("KI-Randergaenzung fehlgeschlagen")
             self.failed.emit(str(e))

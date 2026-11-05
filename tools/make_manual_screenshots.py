@@ -278,7 +278,8 @@ def render(app, base):
     settle(app)
     window.sd_card = SDCard(str(sd_root))
     window.sd_card.scan()
-    window._open_sd_dialog = types.SimpleNamespace(close=lambda: None)
+    from PyQt6.QtWidgets import QProgressDialog
+    window._open_sd_dialog = QProgressDialog()
     window._on_scan_finished(True)
     settle(app, 1.5)
     window.folder_list.setCurrentRow(0)
@@ -337,6 +338,17 @@ def render(app, base):
     dialog.tabs.setCurrentIndex(2)
     settle(app, 0.5)
     save(dialog, "ki-erzeugen")
+
+    # Bereiche abdecken: eigene Zeichnung, eine Form in der Vorschau
+    from core.image_masking import MaskShape, SHAPE_ELLIPSE, SHAPE_RECT
+    from gui.cover_mask_dialog import CoverMaskDialog
+    mask_dialog = CoverMaskDialog(draw_owl(GREEN, (96, 72, 110)),
+                                  [MaskShape(SHAPE_RECT, 0.15, 0.05, 0.7, 0.18), MaskShape(SHAPE_ELLIPSE, 0.3, 0.35, 0.4, 0.4)],
+                                  dialog)
+    mask_dialog.show()
+    settle(app, 0.5)
+    save(mask_dialog, "bereiche-abdecken")
+    mask_dialog.close()
     dialog.done(0)
     settle(app, 0.3)
 

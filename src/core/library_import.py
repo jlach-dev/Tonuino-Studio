@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from core import album_identity, card_store
-from core.card_layout import BACK_MODE_IMAGE, ORIENTATION_PORTRAIT, prepare_card_art
+from core.card_layout import BACK_MODE_IMAGE, ORIENTATION_PORTRAIT
 from core.cover_archive import KIND_LOCAL, ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive
 from core.library import (
     MIN_FINGERPRINT_TRACKS, LibraryAlbum, LibraryIndex, read_album, write_album_cover, write_album_id_to_album,
@@ -168,6 +168,18 @@ def _embed_album_cover(folder: Folder, album_id: str, archive: CoverArchive, met
     return sum(1 for t in folder.tracks if metadata_manager.set_cover_bytes(t.filepath, data, "image/jpeg"))
 
 
+def _card_art(folder: Folder, album_id: str, entry, archive: CoverArchive, designed):
+    """Das Motiv genau so, wie es gesetzt wurde: ein gespeichertes Motiv dieses Covers geht vor. Es kann
+    einen frueher eingerechneten Blur-Rand tragen, den das Archivbild selbst nicht hat."""
+    candidates = [(designed, str(archive.card_dir(album_id))), (card_store.load_meta(folder.path), folder.path)]
+    for meta, directory in candidates:
+        if meta is not None and meta.archive_cover_id == entry.id:
+            raw = card_store.load_raw_art(directory)
+            if raw is not None:
+                return raw.convert("RGB")
+    return archive.load_image(album_id, entry)
+
+
 def _write_card(folder: Folder, album: LibraryAlbum, album_id: str, archive: CoverArchive,
                 metadata_manager, orientation: str, result: ImportResult):
     """card.png/card.json (+ Rueckseite) aus dem Kartencover des Archivs"""
@@ -189,7 +201,8 @@ def _write_card(folder: Folder, album: LibraryAlbum, album_id: str, archive: Cov
         # Gestaltung einer frueheren Karte dieses Ordners behalten
         meta.orientation, meta.show_number = existing.orientation, existing.show_number
         meta.title_style, meta.series_style = existing.title_style, existing.series_style
-    art = prepare_card_art(archive.load_image(album_id, entry), meta.orientation)
+    designed = card_store.load_meta(str(archive.card_dir(album_id)))
+    art = _card_art(folder, album_id, entry, archive, designed)
     card_store.save_card(folder.path, art, meta, folder.index)
     folder.card_path = str(card_store.card_paths(folder.path)[0])
     result.card_written = True
@@ -197,13 +210,12 @@ def _write_card(folder: Folder, album: LibraryAlbum, album_id: str, archive: Cov
     from PIL import Image
     # Im Cover-Manager (Bibliothek) fuer genau dieses Kartencover gestaltete Rueckseite
     # (KI, Blur, Verlauf, Bild, Trackliste) uebernehmen, sonst die Rueckseite im Archiv
-    designed = card_store.load_meta(str(archive.card_dir(album_id)))
     designed_raw = card_store.back_paths(str(archive.card_dir(album_id)))[1]
     if (designed is not None and designed.archive_cover_id == entry.id and designed.back_mode
             and designed_raw.exists()):
         with Image.open(designed_raw) as img:
             img.load()
-            back_art = prepare_card_art(img.convert("RGB"), meta.orientation)
+            back_art = img.convert("RGB")
         for name in ("back_mode", "back_tracklist", "back_prompt", "back_heading", "back_lines",
                      "back_archive_cover_id", "back_extended"):
             setattr(meta, name, getattr(designed, name))
@@ -214,7 +226,7 @@ def _write_card(folder: Folder, album: LibraryAlbum, album_id: str, archive: Cov
     if back:
         with Image.open(io.BytesIO(back)) as img:
             img.load()
-            back_art = prepare_card_art(img.convert("RGB"), meta.orientation)
+            back_art = img.convert("RGB")
         meta.back_mode, meta.back_archive_cover_id = BACK_MODE_IMAGE, entry.id
         card_store.save_back(folder.path, back_art, meta)
         result.back_written = True

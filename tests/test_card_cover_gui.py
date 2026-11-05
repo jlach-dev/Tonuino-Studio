@@ -118,7 +118,7 @@ def test_cover_manager_online_cover_as_card_and_album_cover(app, sd, tmp_path, m
     assert dialog2.album_id == meta.album_id
     assert section_count(dialog2, cm.SECTION_ARCHIVE) == 1
     assert section_count(dialog2, cm.SECTION_CURRENT) == 2
-    dialog2.filter_bar.setCurrentIndex(3)  # Archiv
+    dialog2.filter_bar.setCurrentIndex(2)  # Archiv
     visible = [dialog2.gallery.item(i) for i in range(dialog2.gallery.count())
                if not dialog2.gallery.item(i).isHidden()]
     assert len(visible) == 1

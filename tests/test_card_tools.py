@@ -395,7 +395,7 @@ def test_refused_image_explains_itself():
         extend_to_card(client, "m", b"\x89PNG\r\n\x1a\n", "portrait")
     message = str(caught.value)
     assert "kein Fehler der App" in message and "Antwort von Google: blocked" in message
-    assert "Ambient Blur" in message
+    assert "Rand per Blur" in message
 
 
 def test_blocked_request_gives_tips_for_what_was_attempted():

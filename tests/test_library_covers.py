@@ -187,7 +187,7 @@ def _instant_worker(result, calls):
     """Ersatz fuer die KI-Worker: liefert sofort ein Bild und zaehlt die Aufrufe"""
     class Worker:
         def __init__(self, *_args):
-            self.done, self.failed, self.finished = _Signal(), _Signal(), _Signal()
+            self.done, self.failed, self.finished, self.refused = _Signal(), _Signal(), _Signal(), _Signal()
 
         def start(self):
             calls.append(1)

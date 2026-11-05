@@ -324,9 +324,10 @@ Alle Wege öffnen den Reiter **Cover suchen**:
 
 ![Cover-Manager, Reiter Cover suchen](screenshots/cover-manager.png)
 
-- **Links oben:** große Vorschau, darunter der Umschalter **Vorderseite** | **Rückseite**, die Zustandszeile und die Knöpfe.
-- **Links unten:** die Galerie mit den Filtern **Alle**, **Aktuell**, **Gefunden**, **Archiv**, **Neu**.
-- **Rechts:** die Reiter **Cover suchen**, **Karte**, **KI erzeugen**, **Serie** und ganz unten **Schließen**.
+- **Auswahl (oben links):** große Vorschau des angeklickten Bildes, darunter der Umschalter **Vorne** | **Hinten**. **Hinten** ist ausgegraut, wenn das Bild keine Rückseite hat. Daneben die Knöpfe zum Setzen und für neue Versionen mit Rand.
+- **Gesetzt (oben rechts, grün umrandet):** **Album-Cover**, **Karte vorne** und **Karte hinten** zeigen, was gerade gespeichert ist. Ein Klick auf ein Bild zeigt es groß. Das Feld **Info** nennt Name und Größe der Auswahl, die Herkunft beider Kartenseiten und den Speicherstand.
+- **Galerie (unten links):** mit den Filtern **Alle**, **Gefunden**, **Archiv**, **Neu**.
+- **Unten rechts:** die Reiter **Cover suchen**, **Karte**, **KI erzeugen**, **Serie** und ganz unten **Schließen**.
 
 ### Der Ablauf: anklicken, zuweisen, fertig
 
@@ -336,11 +337,11 @@ Alle Wege öffnen den Reiter **Cover suchen**:
 
 **Es gibt keinen „Übernehmen“-Knopf.** Was du zugewiesen hast, ist gespeichert, ohne Rückfrage. **Schließen** speichert nur noch offene Texteingaben und räumt auf.
 
-Die Zeile unter der Vorschau zeigt immer den Stand, etwa `Karte · Vorderseite: … · Rückseite: … · gespeichert ✓`. Während eine Änderung noch aussteht, steht dort **wird gespeichert …**.
+Im Feld **Info** steht der Stand der Karte: **Karte gespeichert ✓** oder, solange eine Änderung aussteht, **Karte wird gespeichert …**.
 
 Was du dazu wissen solltest:
 
-- **Bilder mit eigener Rückseite** (Zeichen ⧉, etwa aus dem Cover Art Archive): Der Umschalter **Vorderseite** | **Rückseite** bestimmt, welche Seite des Bildes du zuweist. Die Knöpfe zeigen das an: **Als Vorderseite (Bild-Rückseite)**, **Als Rückseite (Bild-Vorderseite)** und so weiter.
+- **Bilder mit eigener Rückseite** (Zeichen ⧉, etwa aus dem Cover Art Archive): Der Umschalter **Vorne** | **Hinten** bestimmt, welche Seite des Bildes du zuweist: Es gilt die Seite, die gerade groß zu sehen ist.
 - **Rückseite zuerst gewählt:** Sie wird nur gemerkt und mit der ersten Vorderseite gespeichert. Schließt du vorher, fragt **Rückseite nicht gespeichert** nach: **Verwerfen** oder **Zurück**.
 - **Als Rückseite** stellt das Rückseiten-Motiv automatisch auf **Original-Rückseite / gewähltes Bild**.
 - **Text und Layout** speichern sich kurz nach der letzten Änderung von selbst, spätestens beim Schließen. Das setzt voraus, dass die Karte schon eine Vorderseite hat.
@@ -351,7 +352,6 @@ Was du dazu wissen solltest:
 
 | Filter | Inhalt |
 | --- | --- |
-| **Aktuell** | das eingebettete Album-Cover und das aktuelle Kartenmotiv |
 | **Gefunden** | Treffer der Cover-Suche |
 | **Archiv** | alle behaltenen Bilder dieses Albums, auch frühere KI-Läufe |
 | **Neu** | frisch erzeugte KI-Bilder |
@@ -363,16 +363,15 @@ Zeichen an den Bildern:
 | ★ | im Archiv |
 | ○ | nicht gespeichert, verschwindet beim Schließen |
 | ◆ | KI-Vorlage |
-| ♪ | Album-Cover |
-| ▭ | Kartencover |
 | ⧉ | mit Rückseite |
 | ⚓ | Serien-Anker |
+| grünes Band im Bild | gesetzt, mit Angabe wofür: **Album**, **vorne**, **hinten** |
 
 Mit dem **Haken** an einem Bild markierst du es für die Knöpfe unter der Galerie. Das ist unabhängig vom Anklicken.
 
 - **Behalten** speichert die markierten Bilder im Archiv.
 - **Als KI-Vorlage** (bzw. **Keine KI-Vorlage mehr**) gibt sie der KI als Vorlage mit.
-- **Verwerfen** entfernt sie. Liegen sie im Archiv, fragt die App und löscht sie dort endgültig. Bilder unter **Aktuell** lassen sich nicht verwerfen.
+- **Verwerfen** entfernt sie. Liegen sie im Archiv, fragt die App und löscht sie dort endgültig.
 - **Alle** markiert alle sichtbaren Bilder, **Keine** hebt die Markierung auf.
 
 Beim Schließen gilt: Gefundene Bilder ohne Stern verschwinden still; du kannst sie jederzeit neu suchen. Für neue, nicht behaltene KI-Bilder fragt **Nicht behaltene Varianten** nach: **Verwerfen**, **Alle behalten** oder **Zurück**.
@@ -416,7 +415,7 @@ Geschrieben wird dabei noch nichts. Danach öffnet sich der Prüfdialog **Cover 
 
 ![Cover-Manager, Reiter Karte](screenshots/cover-manager-karte.png)
 
-Alles davon ist im Reiter **Karte**. Nur hier zeigt die Vorschau die fertige Karte mit Text; in den anderen Reitern siehst du das Bild selbst. Mit dem Umschalter **Vorderseite** | **Rückseite** wechselst du die angezeigte Seite. Das Format ist 85,6 × 54 mm (Scheckkarte). Änderungen speichern sich automatisch.
+Alles davon ist im Reiter **Karte**. Nur hier zeigt die Vorschau die fertige Karte mit Text; in den anderen Reitern siehst du das Bild selbst. Mit dem Umschalter **Vorne** | **Hinten** wechselst du die angezeigte Seite. Das Format ist 85,6 × 54 mm (Scheckkarte). Änderungen speichern sich automatisch.
 
 ### Text und Layout
 
@@ -429,7 +428,23 @@ Alles davon ist im Reiter **Karte**. Nur hier zeigt die Vorschau die fertige Kar
 
 ### Vorderseite
 
-**Vorderseiten-Motiv** zeigt, was gerade zugewiesen ist. Passt das Seitenverhältnis ungefähr, wird das Bild passend zugeschnitten. Weicht es deutlich ab, etwa bei einem quadratischen Album-Cover, setzt die App automatisch einen „Ambient Blur“ ein (ein weichgezeichneter Hintergrund aus dem Bild selbst), damit nichts Wichtiges abgeschnitten wird. Das kostet nichts. **Rand per KI ergänzen (1 Bildaufruf)** erweitert das angeklickte Bild stattdessen per KI aufs Kartenformat. Hat es das Format schon, meldet die App das, und es entsteht kein Aufruf. Das Ergebnis erscheint unter **Neu**; weise es dann mit **Als Vorderseite** oder **Als Rückseite** zu.
+**Vorderseiten-Motiv** zeigt, was gerade zugewiesen ist. Ein Bild wird so gesetzt, wie es ist: Was nicht aufs Kartenformat passt, schneidet die App zu. Ein quadratisches Album-Cover verliert dabei rund ein Drittel seiner Fläche; du siehst das sofort im Feld **Karte vorne**. Schon gespeicherte Karten mit Blur-Rand behalten ihn.
+
+Soll das ganze Bild sichtbar bleiben, legen zwei Knöpfe neben der Vorschau eine neue Version des Bildes im Kartenformat an: **Rand per KI (1 Bildaufruf)** erweitert es per KI, **Rand per Blur (ohne KI)** ergänzt sofort und kostenlos einen weichgezeichneten Rand. Hat das Bild das Format schon, meldet die App das, und es entsteht kein Aufruf. Das Ergebnis erscheint unter **Neu**; weise es dann mit **Als Vorderseite** oder **Als Rückseite** zu.
+
+#### Wenn Google den Rand ablehnt
+
+Die Meldung bietet **Bereiche abdecken und erneut versuchen …** an. Im Fenster **Bereiche abdecken** deckst du Schriftzüge und Gesichter von Hand ab:
+
+![Fenster Bereiche abdecken](screenshots/bereiche-abdecken.png)
+
+1. **Rechteck** oder **Kreis** wählen und im Bild aufziehen. Formen lassen sich verschieben und an den Ecken in der Größe ändern. **Entf** löscht die gewählte Form, **Strg+Z** oder **Rückgängig** nimmt den letzten Schritt zurück.
+2. **Wirkung** wählen: **Weichzeichnen** oder **Farbfläche**. **Vorschau** zeigt genau das Bild, das an Google geht.
+3. **An Google senden (1 Bildaufruf)** klicken.
+
+Das Ergebnis heißt **KI-Rand (abgedeckt)**. Die App setzt dein Original wieder ein, die abgedeckten Stellen bleiben also scharf. Die Kante liegt 2,5 % innerhalb des Bildes, nur an den erweiterten Seiten. Wird dort ein Sprung sichtbar, wähle **Übergang zum Original weich überblenden** und versuche es erneut.
+
+Lehnt Google auch dieses Bild ab, kannst du mit deinen Formen weiterarbeiten. Nichts wird automatisch wiederholt, jeder Versuch ist ein eigener Bildaufruf. Das Abdecken garantiert keine Annahme. Googles Nutzungsregeln verbieten das Umgehen von Sicherheitsfiltern; nutze die Funktion nur für eigene Karten und auf eigene Verantwortung.
 
 ### Rückseite
 
@@ -680,7 +695,7 @@ Die Statusleiste unten im Hauptfenster zeigt die letzte Meldung, etwa Ergebnisse
 
 ### Die KI liefert kein Bild
 
-Bei KI-Motiven oder **Rand per KI ergänzen** kann die KI ein Bild ablehnen, gerade bei Covern und Figuren bekannter Hörspiele. Du siehst dann **Google hat dieses Bild abgelehnt** mit häufigen Gründen und passenden Tipps. Das ist kein Fehler der App, sondern vermutlich eine rechtliche Einschränkung beim Anbieter, etwa wegen des Urheberrechts. Den genauen Grund nennt er nicht immer.
+Bei KI-Motiven oder **Rand per KI** kann die KI ein Bild ablehnen, gerade bei Covern und Figuren bekannter Hörspiele. Du siehst dann **Google hat dieses Bild abgelehnt** mit häufigen Gründen und passenden Tipps. Das ist kein Fehler der App, sondern vermutlich eine rechtliche Einschränkung beim Anbieter, etwa wegen des Urheberrechts. Den genauen Grund nennt er nicht immer.
 
 Versuche es ohne dieses Bild als Vorlage oder beschreibe unter **Eigener Wunsch** ein eigenes Motiv. Für die Rückseite gehen auch **Ambient Blur der Vorderseite (ohne KI)** und **Farbverlauf aus den Coverfarben (ohne KI)**.
 

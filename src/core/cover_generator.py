@@ -18,6 +18,7 @@ from PIL import Image
 from core.ai_settings import get_image_size
 from core.card_layout import CardSpec, ORIENTATION_PORTRAIT, ambient_blur
 from core.cover_research import CoverBrief, FolderInfo
+from core.image_masking import EFFECT_BLUR, apply_masks, shape_mask
 
 log = logging.getLogger(__name__)
 
@@ -166,11 +167,11 @@ REFUSAL_HELP = {
          "Auf einer Vorlage sind Kinder oder echte Personen zu sehen."],
         ["Nimm „Als KI-Vorlage“ von den Bildern zurück und versuche es ohne Vorlage.",
          "Beschreibe unter „Eigener Wunsch“ eigene Figuren und Szenen, ohne bekannte Namen.",
-         "Oder weise das Album-Cover mit „Als Vorderseite“ zu: Den Rand ergänzt die App dann ohne KI als Ambient Blur."]),
+         "Oder klicke das Album-Cover an, nimm „Rand per Blur (ohne KI)“ und weise das Ergebnis mit „Als Vorderseite“ zu."]),
     CONTEXT_EXTEND: (
         ["Das Bild ist ein bekanntes Cover oder zeigt geschützte Figuren, Logos oder Schriftzüge.",
          "Auf dem Bild sind Kinder oder echte Personen zu sehen."],
-        ["Weise das Bild direkt mit „Als Vorderseite“ zu: Den Rand ergänzt die App dann ohne KI als Ambient Blur.",
+        ["Nimm „Rand per Blur (ohne KI)“ und weise das Ergebnis mit „Als Vorderseite“ zu.",
          "Oder erzeuge unter „Eigener Wunsch“ ein eigenes Motiv, ohne dieses Bild als Vorlage."]),
     CONTEXT_BACK: (
         ["Die Vorderseite wird als Vorlage mitgeschickt und zeigt vermutlich geschützte Figuren oder Logos.",
@@ -185,7 +186,7 @@ REFUSAL_HELP = {
 }
 REFUSAL_BATCH_HINT = ("Google nennt meist keinen Grund. Häufig liegt es an bekannten Figuren, Logos oder Covern. "
                       "Für diese Ordner hilft der Cover-Manager: dort ohne Vorlage, mit eigenem Wunsch "
-                      "oder mit dem Album-Cover und „Als Vorderseite“, das läuft ohne KI.")
+                      "oder mit dem Album-Cover und „Rand per Blur (ohne KI)“.")
 
 
 class ImageRefused(RuntimeError):
@@ -288,6 +289,79 @@ def extend_to_card(client, model: str, image_bytes: bytes, orientation: str, ima
         response_format={"type": "image", "aspect_ratio": "2:3" if portrait else "3:2",
                          "image_size": image_size or get_image_size()},
     )
+
+
+# Abgedeckte Bereiche: Die KI bekommt das Bild ohne Schrift und Gesichter, das Original setzt die
+# App danach selbst wieder ein. Die Kante liegt knapp innerhalb des Bildes, im Streifen dazwischen
+# bleibt die Fassung der KI: So trifft die Naht nicht genau auf den Bildrand.
+EXTEND_MASKED_NOTE = (" Blurred or flat patches in the image are placeholders: leave them as they are and do "
+                      "not paint anything new into them.")
+EXTEND_SEAM_INSET = 0.025
+
+
+@dataclass(frozen=True)
+class ExtendMasking:
+    shapes: tuple
+    effect: str = EFFECT_BLUR
+    soft: bool = False
+
+
+def _extension_layout(size, generated_size):
+    """(Breite, Hoehe, x, y) der Flaeche, in der das Bild mittig liegt. Das Seitenverhaeltnis kommt vom
+    gelieferten Bild: Die KI liefert nicht exakt 3:2 (2528 x 1696), und schon 0,6 % Verzerrung ergaeben an
+    der Naht einen sichtbaren Versatz."""
+    width, height = size
+    ratio_w, ratio_h = generated_size
+    if width * ratio_h > height * ratio_w:
+        canvas = (width, round(width * ratio_h / ratio_w))
+    else:
+        canvas = (round(height * ratio_w / ratio_h), height)
+    return canvas[0], canvas[1], (canvas[0] - width) // 2, (canvas[1] - height) // 2
+
+
+def insert_original(background: Image.Image, original: Image.Image, shapes, soft: bool = False) -> Image.Image:
+    """Setzt das Original in das Bild der KI ein. Nur an den erweiterten Seiten bleibt ein Streifen der
+    KI stehen (harte Kante oder weicher Verlauf); abgedeckte Bereiche kommen immer aus dem Original,
+    sonst bliebe dort die unkenntliche Fassung sichtbar."""
+    canvas_w, canvas_h, x, y = _extension_layout(original.size, background.size)
+    result = background.convert("RGB").resize((canvas_w, canvas_h), Image.Resampling.LANCZOS)
+    width, height = original.size
+    vertical = canvas_h > height
+    band = max(1, round((height if vertical else width) * EXTEND_SEAM_INSET))
+    mask = Image.new("L", original.size, 255)
+    for i in range(band):
+        value = round(255 * i / band) if soft else 0
+        if vertical:
+            mask.paste(value, (0, i, width, i + 1))
+            mask.paste(value, (0, height - 1 - i, width, height - i))
+        else:
+            mask.paste(value, (i, 0, i + 1, height))
+            mask.paste(value, (width - 1 - i, 0, width - i, height))
+    mask.paste(255, (0, 0, width, height), shape_mask(original.size, shapes))
+    result.paste(original.convert("RGB"), (x, y), mask)
+    return result
+
+
+def extend_masked(client, model: str, image_bytes: bytes, orientation: str, masking: ExtendMasking,
+                  image_size: str = "") -> Image.Image:
+    """Wie extend_to_card, aber Google bekommt das abgedeckte Bild; das Original setzt die App wieder ein"""
+    with Image.open(io.BytesIO(image_bytes)) as img:
+        img.load()
+        original = img.convert("RGB")
+    buffer = io.BytesIO()
+    apply_masks(original, list(masking.shapes), masking.effect).save(buffer, "PNG")
+    portrait = orientation == ORIENTATION_PORTRAIT
+    prompt = EXTEND_PROMPT.format(shape="tall portrait 2:3" if portrait else "wide landscape 3:2")
+    background = request_image(
+        client, CONTEXT_EXTEND,
+        model=model,
+        input=[{"type": "text", "text": prompt + EXTEND_MASKED_NOTE},
+               {"type": "image", "data": base64.b64encode(buffer.getvalue()).decode("ascii"),
+                "mime_type": "image/png"}],
+        response_format={"type": "image", "aspect_ratio": "2:3" if portrait else "3:2",
+                         "image_size": image_size or get_image_size()},
+    )
+    return insert_original(background, original, masking.shapes, masking.soft)
 
 
 # --- Rueckseite ---------------------------------------------------------------------------------

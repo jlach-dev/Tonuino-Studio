@@ -7,7 +7,6 @@ import pytest
 from PIL import Image
 
 from core import album_identity
-from core.card_layout import CardSpec, ORIENTATION_LANDSCAPE, ORIENTATION_PORTRAIT, prepare_card_art
 from core.cover_archive import (
     KIND_AI, KIND_MUSICBRAINZ, ROLE_ALBUM_COVER, ROLE_CARD_COVER, CoverArchive,
 )
@@ -136,13 +135,6 @@ def test_album_id_tag_roundtrip(silent_mp3):
     assert album_identity.read_album_id([str(silent_mp3)]) is None
     assert album_identity.write_album_id([str(silent_mp3)], "id-123") == 1
     assert album_identity.read_album_id([str(silent_mp3)]) == "id-123"
-
-
-def test_prepare_card_art_blurs_square_but_keeps_fitting_images():
-    square = prepare_card_art(Image.new("RGB", (500, 500)), ORIENTATION_PORTRAIT)
-    assert square.size == CardSpec().size_px(ORIENTATION_PORTRAIT)
-    fitting = Image.new("RGB", (1500, 1000))
-    assert prepare_card_art(fitting, ORIENTATION_LANDSCAPE).size == (1500, 1000)
 
 
 def test_generator_sends_all_selected_references_up_to_limit():

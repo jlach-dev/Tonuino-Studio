@@ -41,3 +41,5 @@ PROGRESS.md
 # Lokale Umgebungsvariablen / Secrets
 .env
 .env.*
+
+experiments/
