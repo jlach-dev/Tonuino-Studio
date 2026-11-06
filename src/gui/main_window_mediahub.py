@@ -63,6 +63,7 @@ class MediahubMixin:
         for action in (self.action_show_all_mp3, self.reader_menu.menuAction(), self.action_system_files,
                        self.action_wipe_card, self.action_series_cover_batch, self.action_tag_lookup):
             action.setVisible(False)
+        self.library_view.sd_transfer = False  # kein "Auf SD-Karte übertragen" im Kachelmenue
         self._rewire(self.action_card_cover, "Cover-Manager für diese Karte …", self._mediahub_open_cover)
         self._rewire(self.action_card_cover_batch, "Kartencover für alle Karten ohne Cover …",
                      self._mediahub_generate_missing)

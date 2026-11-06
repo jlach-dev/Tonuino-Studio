@@ -70,6 +70,7 @@ def test_tonuino_mode_is_default_and_unchanged(app, hub):
         assert not window.folder_list.isHidden() and not window.rfid_panel.isHidden()
         assert [a.data() for a in window.mode_menu.actions() if a.isChecked()] == [MODE_TONUINO]
         assert not hasattr(window, "mediahub_page")
+        assert window.library_view.sd_transfer
     finally:
         window.close()
         window.deleteLater()
@@ -88,6 +89,7 @@ def test_espuino_mode_shows_mediahub_cards(app, hub):
         for action in (window.action_system_files, window.action_wipe_card, window.action_tag_lookup,
                        window.action_series_cover_batch, window.reader_menu.menuAction()):
             assert not action.isVisible()
+        assert not window.library_view.sd_transfer  # kein "Auf SD-Karte übertragen" im Kachelmenue
         assert window.stack.currentWidget() is window.mediahub_page
         cards = window.mediahub_sidebar.card_list
         assert cards.count() == 2
@@ -165,3 +167,37 @@ def test_batch_worker_and_print_sheet_for_cards(app, hub, monkeypatch):
         assert len(dialog._items()) == 2
     finally:
         dialog.deleteLater()
+
+
+def test_first_start_question_only_on_fresh_settings(app):
+    from core.app_mode import current_mode, needs_first_start_choice
+    settings = QSettings()
+    settings.clear()
+    assert needs_first_start_choice()
+    assert not settings.contains(SETTINGS_APP_MODE)  # Fragen speichert noch nichts
+
+    settings.setValue("library/data_dir", "x")  # bestehende Installation ohne Modus
+    assert not needs_first_start_choice()
+    assert settings.value(SETTINGS_APP_MODE) == MODE_TONUINO
+    assert not needs_first_start_choice()
+
+    settings.clear()
+    settings.setValue(SETTINGS_APP_MODE, MODE_ESPUINO)
+    assert not needs_first_start_choice() and current_mode() == MODE_ESPUINO
+    settings.clear()
+
+
+@pytest.mark.parametrize("button, expected", [(MODE_ESPUINO, MODE_ESPUINO), (MODE_TONUINO, MODE_TONUINO),
+                                              (None, MODE_TONUINO)])
+def test_first_start_dialog_choice(app, button, expected):
+    from gui.first_start_dialog import build_dialog, chosen_mode
+    box = build_dialog()
+    try:
+        box.open()
+        if button is None:
+            box.reject()  # Esc / X ohne Wahl
+        else:
+            box.property("mode_buttons")[button].click()
+        assert chosen_mode(box) == expected
+    finally:
+        box.deleteLater()

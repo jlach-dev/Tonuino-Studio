@@ -73,6 +73,8 @@ xattr -cr /Applications/Tonuino-Studio.app
 
 Tonuino-Studio lässt sich neben dem Original Tonuino-Manager installieren.
 
+Beim allerersten Start fragt die App, ob du sie für **TonUINO** oder für **ESPuino** nutzt (siehe [ESPuino und Mediahub](#12-espuino-und-mediahub)). Die Wahl lässt sich jederzeit unter **Einstellungen** → **Modus** ändern. Wer die App schon benutzt hat, wird nicht gefragt und bleibt bei TonUINO.
+
 ### Aus dem Quellcode starten (für Bastler)
 
 Du brauchst Python 3.10 oder neuer. Im Projektordner:
@@ -591,7 +593,7 @@ Für den ESPuino, eine Hörbox mit ESP32, gibt es einen eigenen Modus. Welche Ka
 
 ### Modus wechseln
 
-**Einstellungen** → **Modus** → **ESPuino – Karten aus dem Mediahub**. Der Wechsel wirkt nach einem Neustart; die App bietet **Jetzt neu starten** an. Zurück geht es mit **TonUINO – SD-Karte und RFID-Karten**.
+Beim allerersten Start fragt die App danach. Später: **Einstellungen** → **Modus** → **ESPuino – Karten aus dem Mediahub**. Der Wechsel wirkt nach einem Neustart; die App bietet **Jetzt neu starten** an. Zurück geht es mit **TonUINO – SD-Karte und RFID-Karten**.
 
 Im ESPuino-Modus heißt die App **ESPuino-Studio**. Der erste Reiter heißt **Mediahub-Karten**, die **Bibliothek** bleibt. Ausgeblendet ist alles rund um die SD-Karte (**SD-Karte öffnen**, die Ordnerliste, **Alle MP3 Dateien anzeigen**, **TonUINO-Systemdateien …**, **SD-Karte leeren und neu einrichten …**), außerdem der Bereich **RFID-Karte** mit dem Menü **RFID-Leser**, **Kartencover für alle Folgen der Serie ohne Cover …** und **Tags von MusicBrainz …**.
 

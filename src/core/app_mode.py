@@ -31,5 +31,20 @@ def set_mode(mode: str) -> None:
     QSettings().setValue(SETTINGS_APP_MODE, mode)
 
 
+def needs_first_start_choice() -> bool:
+    """True nur beim allerersten Start (noch gar keine Einstellungen): Dann fragt
+    die App, ob sie fuer TonUINO oder ESPuino genutzt wird. Wer die App schon
+    benutzt hat (Einstellungen vorhanden, aber noch kein Modus), bekommt
+    stillschweigend TonUINO gespeichert und wird nie gefragt."""
+    from PyQt6.QtCore import QSettings
+    settings = QSettings()
+    if settings.contains(SETTINGS_APP_MODE):
+        return False
+    if settings.allKeys():
+        settings.setValue(SETTINGS_APP_MODE, MODE_TONUINO)
+        return False
+    return True
+
+
 def display_name(mode: str) -> str:
     return ESPUINO_APP_NAME if mode == MODE_ESPUINO else APP_NAME

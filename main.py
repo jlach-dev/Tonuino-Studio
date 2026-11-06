@@ -73,6 +73,12 @@ def main():
     from gui.main_window import MainWindow
     app.setStyleSheet(MAIN_STYLESHEET)
 
+    # Allererster Start: TonUINO oder ESPuino? (nicht im CI-Smoketest, der wartet auf niemanden)
+    from core.app_mode import needs_first_start_choice
+    if needs_first_start_choice() and not os.environ.get("TONUINO_SMOKE_TEST"):
+        from gui.first_start_dialog import ask_app_mode
+        ask_app_mode()
+
     window = MainWindow()
     window.show()
 
