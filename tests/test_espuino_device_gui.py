@@ -118,3 +118,44 @@ def test_setup_dialog_checks_address(setup):
         assert dialog.source == dev.SOURCE_MEDIAHUB and not dialog.device_box.isEnabled()
     finally:
         dialog.deleteLater()
+
+
+def test_transfer_dialog_and_worker_upload(setup, tmp_path):
+    from core.library import LibraryAlbum
+    from gui.espuino_dialogs import TransferDialog, TransferWorker
+    from tests.test_espuino_transfer import FakeExplorer
+    folder = tmp_path / "Bibliothek" / "Fuchsbande 1"
+    folder.mkdir(parents=True)
+    tracks = []
+    for name in ("01.mp3", "02.mp3"):
+        (folder / name).write_bytes(b"ID3" + b"\0" * 64)
+        tracks.append(str(folder / name))
+    album = LibraryAlbum(path=str(folder), title="Die Fuchsbande: Folge 1", tracks=tracks)
+    fake = FakeExplorer()
+    try:
+        dialog = TransferDialog([album], "", fake.host)  # keine SD-Karte im PC: ueber das WLAN
+        assert dialog.folder_edit.text() == "/Die Fuchsbande Folge 1"
+        assert dialog.assign_after
+        dialog.try_accept()
+        assert [i.target for i in dialog.plans[0].items] == ["/Die Fuchsbande Folge 1/01.mp3",
+                                                            "/Die Fuchsbande Folge 1/02.mp3"]
+        worker = TransferWorker(dialog.plans, "", fake.host)
+        results = []
+        worker.done.connect(lambda *args: results.append(args))
+        worker.run()
+        assert results == [(2, 0, False)]
+        assert "/Die Fuchsbande Folge 1/02.mp3" in fake.files
+        dialog.deleteLater()
+    finally:
+        fake.close()
+
+
+def test_transfer_menu_in_device_mode(setup):
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        assert window.library_view.transfer_label == "Auf den ESPuino übertragen"
+        assert window.library_view.transfer_enabled()
+    finally:
+        window.close()
+        window.deleteLater()

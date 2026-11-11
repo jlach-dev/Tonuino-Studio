@@ -631,7 +631,20 @@ Mit Mediahub liest die App `db.json` nur. Sie schreibt nichts hinein und spricht
 3. Wähle unter **Ordner/Datei** den Ordner auf der SD-Karte, mit **Wählen …** oder von Hand, etwa `/Hörspiele/Folge 1`. Für die Modi mit einem einzelnen Titel wählst du eine Datei.
 4. **Zuweisen** speichert die Zuweisung im ESPuino, so wie es seine Weboberfläche tut. Eine schon belegte Karte ersetzt die App erst nach Rückfrage.
 
-Die Dateien müssen schon auf der SD-Karte des ESPuino liegen; die App überträgt keine Musik über das WLAN.
+Die Dateien müssen dafür schon auf der SD-Karte des ESPuino liegen, siehe den nächsten Abschnitt.
+
+### Alben auf den ESPuino übertragen
+
+In der [Bibliothek](#6-bibliothek) gibt es im Rechtsklick-Menü einer Kachel **Auf den ESPuino übertragen** (bei mehreren markierten Kacheln für alle). Das Album kommt als Ordner mit seinem Namen auf die SD-Karte, etwa `/Conni geht verloren`. Die Dateinamen bleiben; nur wenn sie alphabetisch nicht in der richtigen Reihenfolge stehen, bekommen sie eine Nummer davor. Anders als beim TonUINO gibt es keine Ordnernummern und keine Umbenennung in `001.mp3`.
+
+Der Weg hängt davon ab, ob die SD-Karte gerade im PC steckt:
+
+- **SD-Karte im Kartenleser** (unter **ESPuino einrichten** angegeben und vorhanden): Die App kopiert die Dateien dorthin. Das geht schnell.
+- **Sonst über das WLAN:** Die App lädt die Dateien zum ESPuino hoch, so wie seine Weboberfläche. Das dauert, etwa 2 Minuten für 60 MB. Der Dialog nennt vorher eine Schätzung.
+
+Den Zielordner kannst du vorher ändern, etwa `/Hörspiele/Conni geht verloren`. Dateien, die es im Zielordner schon gibt, überspringt die App; ein abgebrochener Durchgang lässt sich so einfach fortsetzen. **Abbrechen** im Fortschrittsfenster entfernt nur die gerade halb übertragene Datei.
+
+Ist **Danach eine Karte für dieses Album zuweisen** angehakt, öffnet sich anschließend [Karte zuweisen](#karte-zuweisen-espuino-direkt) mit dem neuen Ordner. Dann nur noch die Karte auflegen.
 
 ### Kartenliste und Kartenseite
 

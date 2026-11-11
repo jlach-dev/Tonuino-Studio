@@ -16,8 +16,9 @@ der Mixin steht in der Klassenliste vorn, damit seine Ueberschreibungen gelten.
 
 import logging
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QActionGroup
-from PyQt6.QtWidgets import QMenu, QMessageBox
+from PyQt6.QtWidgets import QMenu, QMessageBox, QProgressDialog
 
 from core import espuino_device as dev
 from core import mediahub_cards as mh
@@ -25,7 +26,7 @@ from core.app_mode import MODE_ESPUINO, MODE_TONUINO, MODES, current_mode, displ
 from core.card_store import card_paths
 from gui.about_dialog import show_about
 from gui.cover_manager_dialog import CoverManagerDialog, get_archive
-from gui.espuino_dialogs import AssignCardDialog, EspuinoSetupDialog
+from gui.espuino_dialogs import AssignCardDialog, EspuinoSetupDialog, TransferDialog, TransferWorker
 from gui.mediahub_view import MediahubPage, MediahubSidebar
 from gui.print_sheet_dialog import PrintSheetDialog
 
@@ -69,7 +70,12 @@ class MediahubMixin:
         for action in (self.action_show_all_mp3, self.reader_menu.menuAction(), self.action_system_files,
                        self.action_wipe_card, self.action_series_cover_batch, self.action_tag_lookup):
             action.setVisible(False)
-        self.library_view.sd_transfer = False  # kein "Auf SD-Karte übertragen" im Kachelmenue
+        # Kachelmenue: statt TonUINO-Schema (01/001.mp3) ein Ordner mit Albumnamen auf der ESPuino-SD-Karte
+        self.library_view.transfer_label = "Auf den ESPuino übertragen"
+        self.library_view.transfer_hint = "Zuerst unter „ESPuino einrichten“ den ESPuino direkt im WLAN wählen"
+        self.library_view.transfer_enabled = self._espuino_can_transfer
+        self.library_view.transfer_requested.disconnect()
+        self.library_view.transfer_requested.connect(self._espuino_transfer)
         self._rewire(self.action_card_cover, "Cover-Manager für diese Karte …", self._mediahub_open_cover)
         self._rewire(self.action_card_cover_batch, "Kartencover für alle Karten ohne Cover …",
                      self._mediahub_generate_missing)
@@ -224,7 +230,7 @@ class MediahubMixin:
             self._mediahub_show_overview(has_cover)
         self._status(f"{len(data.cards)} Karten " + ("vom ESPuino" if device else "aus dem Mediahub") + " eingelesen")
 
-    def _espuino_assign(self, preset_card: str = ""):
+    def _espuino_assign(self, preset_card: str = "", preset_path: str = ""):
         if not self._espuino_is_device() or not self._espuino_host:
             return
         _source, host, sd_root = dev.settings()
@@ -232,6 +238,8 @@ class MediahubMixin:
         dialog = AssignCardDialog(host, sd_root, known, self)
         if preset_card:
             dialog.card_edit.setText(preset_card)
+        if preset_path:
+            dialog.path_edit.setText(preset_path)
         accepted = dialog.exec()
         entry = dialog.result_entry
         dialog.deleteLater()
@@ -242,6 +250,64 @@ class MediahubMixin:
         self._mediahub_reload()
         if mh.card_by_id(self._mediahub_data, card_id) is not None:
             self.mediahub_sidebar.select(card_id)
+
+    # --- Alben auf den ESPuino -----------------------------------------------------
+
+    def _espuino_can_transfer(self) -> bool:
+        source, host, sd_root = dev.settings()
+        return source == dev.SOURCE_DEVICE and bool(host or sd_root)
+
+    def _espuino_transfer(self, paths: list):
+        if getattr(self, "_espuino_transfer_worker", None) is not None and self._espuino_transfer_worker.isRunning():
+            return
+        _source, host, sd_root = dev.settings()
+        albums = [a for a in (self.library_view.index.find(p) for p in paths) if a is not None and a.tracks]
+        if not albums:
+            return
+        dialog = TransferDialog(albums, sd_root, host, self)
+        if not dialog.exec():
+            dialog.deleteLater()
+            return
+        plans, assign_after = dialog.plans, dialog.assign_after
+        local = dialog.sd_root
+        dialog.deleteLater()
+        self._release_files()
+        progress = QProgressDialog("Übertrage …", "Abbrechen", 0, 1000, self)
+        progress.setWindowTitle("Auf den ESPuino übertragen")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        worker = TransferWorker(plans, local, host, self)
+        self._espuino_transfer_worker = worker
+        progress.canceled.connect(worker.cancel)
+
+        def on_progress(done, total, text):
+            progress.setValue(int(done * 1000 / total) if total else 0)
+            progress.setLabelText(text + f"\n{done / 1e6:.0f} von {total / 1e6:.0f} MB")
+
+        def on_failed(message):
+            progress.close()
+            QMessageBox.warning(self, "Auf den ESPuino übertragen", message)
+
+        def on_done(copied, skipped, cancelled):
+            progress.close()
+            text = f"{copied} Datei{'' if copied == 1 else 'en'} übertragen"
+            if skipped:
+                text += f", {skipped} schon vorhanden"
+            if cancelled:
+                self._status(text + " – abgebrochen")
+                return
+            self._status(text)
+            if assign_after and len(plans) == 1:
+                self._espuino_assign(preset_path=plans[0].folder)
+            elif self._is_espuino() and self._espuino_is_device():
+                self._mediahub_reload()
+
+        worker.progress.connect(on_progress)
+        worker.failed.connect(on_failed)
+        worker.done.connect(on_done)
+        worker.start()
 
     def _mediahub_cover_map(self) -> dict:
         archive = get_archive(self, ask=False)

@@ -334,6 +334,10 @@ class LibraryView(QWidget):
         super().__init__(parent)
         self.sd_available = False  # SD-Karte geoeffnet (fuer "Auf SD-Karte uebertragen")
         self.sd_transfer = True  # False im ESPuino-Modus: Menuepunkt gar nicht zeigen
+        # Im ESPuino-Modus ersetzt (gui/main_window_mediahub.py): Text, Hinweis und wann es geht
+        self.transfer_label = "Auf SD-Karte übertragen"
+        self.transfer_hint = "Zuerst eine SD-Karte öffnen"
+        self.transfer_enabled = None  # Callable[[], bool]; None: SD-Karte geoeffnet (sd_available)
         self._tracks_worker: Optional[AlbumTracksWorker] = None
         self.library: Optional[Library] = None
         self.index = LibraryIndex()
@@ -488,9 +492,10 @@ class LibraryView(QWidget):
         menu.addSeparator()
         count = len(transferable)
         if self.sd_transfer:
-            add("Auf SD-Karte übertragen" + (f" ({count} Alben)" if count > 1 else ""),
-                lambda: self.transfer_requested.emit(transferable), self.sd_available and count > 0,
-                "" if self.sd_available else "Zuerst eine SD-Karte öffnen")
+            available = self.transfer_enabled() if self.transfer_enabled is not None else self.sd_available
+            add(self.transfer_label + (f" ({count} Alben)" if count > 1 else ""),
+                lambda: self.transfer_requested.emit(transferable), available and count > 0,
+                "" if available else self.transfer_hint)
         add("Im Explorer zeigen", lambda: reveal_in_file_manager(album.path), online)
         add("Pfad kopieren", lambda: QApplication.clipboard().setText(album.path))
         return menu

@@ -1,6 +1,7 @@
 """
-Dialoge des ESPuino-Modus: Einrichten (ESPuino direkt im WLAN oder Mediahub)
-und Karte direkt am ESPuino zuweisen (siehe core/espuino_device.py).
+Dialoge des ESPuino-Modus: Einrichten (ESPuino direkt im WLAN oder Mediahub),
+Karte direkt am ESPuino zuweisen (core/espuino_device.py) und Alben auf seine
+SD-Karte uebertragen (core/espuino_transfer.py).
 
 Eigene Datei des Forks (siehe core/branding.py).
 """
@@ -10,10 +11,10 @@ import os
 import re
 from typing import Dict, Optional
 
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import QThread, Qt, QUrl, pyqtSignal
 from PyQt6.QtWebSockets import QWebSocket
 from PyQt6.QtWidgets import (
-    QApplication, QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QVBoxLayout, QWidget,
 )
 
@@ -21,6 +22,7 @@ from core.espuino_device import (
     ASSIGNABLE_MODES, FILE_MODES, SOURCE_DEVICE, SOURCE_MEDIAHUB, DeviceError, assign_card, fetch_info,
     firmware_label, normalize_host, sd_path_from_local, ws_url,
 )
+from core.espuino_transfer import copy_to_sd, plan_album, safe_name, upload_to_device
 from core.mediahub_cards import DB_FILENAME, MediahubError, db_file, format_card_id, load_cards, play_mode_label
 from gui import theme
 
@@ -372,4 +374,108 @@ class AssignCardDialog(QDialog):
             QMessageBox.warning(self, "Karte zuweisen", str(exc))
             return
         QApplication.restoreOverrideCursor()
+        self.accept()
+
+
+class TransferWorker(QThread):
+    """Kopiert bzw. laedt die Plaene nacheinander hoch (core/espuino_transfer.py)"""
+    progress = pyqtSignal(int, int, str)  # Bytes fertig, Bytes gesamt, Text
+    failed = pyqtSignal(str)
+    done = pyqtSignal(int, int, bool)  # kopiert, uebersprungen, abgebrochen
+
+    def __init__(self, plans, sd_root: str, host: str, parent=None):
+        super().__init__(parent)
+        self.plans = plans
+        self.sd_root = sd_root
+        self.host = host
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        total = sum(p.total for p in self.plans)
+        offset = 0
+        copied = skipped = 0
+        try:
+            for plan in self.plans:
+                def report(done, _total, name, offset=offset, folder=plan.folder):
+                    self.progress.emit(offset + done, total, f"{folder}/{name}" if name else folder)
+                if self.sd_root:
+                    result = copy_to_sd(plan, self.sd_root, report, lambda: self._cancel)
+                else:
+                    result = upload_to_device(plan, self.host, report, lambda: self._cancel)
+                copied += result.copied
+                skipped += result.skipped
+                offset += plan.total
+                if result.cancelled:
+                    self.done.emit(copied, skipped, True)
+                    return
+        except DeviceError as exc:
+            self.failed.emit(str(exc))
+            return
+        self.done.emit(copied, skipped, False)
+
+
+class TransferDialog(QDialog):
+    """Vor dem Uebertragen: Zielordner und Weg (SD-Karte im PC oder WLAN)"""
+
+    WLAN_BYTES_PER_SECOND = 400 * 1024  # grobe Schaetzung fuer den Hinweis
+
+    def __init__(self, albums, sd_root: str, host: str, parent=None):
+        super().__init__(parent)
+        self.albums = albums  # LibraryAlbum
+        self.sd_root = sd_root if sd_root and os.path.isdir(sd_root) else ""
+        self.host = host
+        self.setWindowTitle("Auf den ESPuino übertragen")
+        self.setMinimumWidth(560)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.folder_edit = QLineEdit()
+        if len(albums) == 1:
+            self.folder_edit.setText("/" + safe_name(albums[0].name))
+            form.addRow("Zielordner:", self.folder_edit)
+        else:
+            self.folder_edit.hide()
+            form.addRow("Alben:", QLabel(f"{len(albums)} Alben, je ein Ordner mit dem Albumnamen"))
+        size = sum(os.path.getsize(t) for a in albums for t in a.tracks if os.path.isfile(t))
+        if self.sd_root:
+            way = f"Kopieren auf die SD-Karte im Kartenleser ({self.sd_root})"
+        else:
+            minutes = max(1, round(size / self.WLAN_BYTES_PER_SECOND / 60))
+            way = (f"Über das WLAN zum ESPuino ({host}) – das dauert, etwa {minutes} Minute"
+                   f"{'' if minutes == 1 else 'n'}. Schneller geht es mit der SD-Karte im Kartenleser.")
+        way_label = QLabel(way)
+        way_label.setWordWrap(True)
+        form.addRow("Weg:", way_label)
+        form.addRow("Umfang:", QLabel(f"{sum(len(a.tracks) for a in albums)} Dateien, {size / 1e6:.0f} MB"))
+        layout.addLayout(form)
+        self.assign_check = QCheckBox("Danach eine Karte für dieses Album zuweisen")
+        self.assign_check.setChecked(True)
+        self.assign_check.setVisible(len(albums) == 1 and bool(host))
+        layout.addWidget(self.assign_check)
+        note = QLabel("Dateien, die es im Zielordner schon gibt, werden übersprungen.")
+        note.setStyleSheet(f"color: {theme.OVERLAY2};")
+        layout.addWidget(note)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Übertragen")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Abbrechen")
+        buttons.accepted.connect(self.try_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.plans = []
+
+    @property
+    def assign_after(self) -> bool:
+        return not self.assign_check.isHidden() and self.assign_check.isChecked()
+
+    def try_accept(self):
+        try:
+            if len(self.albums) == 1:
+                self.plans = [plan_album(self.albums[0].tracks, self.folder_edit.text())]
+            else:
+                self.plans = [plan_album(a.tracks, "/" + safe_name(a.name)) for a in self.albums]
+        except DeviceError as exc:
+            QMessageBox.warning(self, "Auf den ESPuino übertragen", str(exc))
+            return
         self.accept()

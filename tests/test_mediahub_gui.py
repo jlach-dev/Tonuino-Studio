@@ -89,7 +89,8 @@ def test_espuino_mode_shows_mediahub_cards(app, hub):
         for action in (window.action_system_files, window.action_wipe_card, window.action_tag_lookup,
                        window.action_series_cover_batch, window.reader_menu.menuAction()):
             assert not action.isVisible()
-        assert not window.library_view.sd_transfer  # kein "Auf SD-Karte übertragen" im Kachelmenue
+        assert window.library_view.transfer_label == "Auf den ESPuino übertragen"  # nicht ins TonUINO-Schema
+        assert not window.library_view.transfer_enabled()  # Quelle Mediahub: kein Ziel
         assert window.stack.currentWidget() is window.mediahub_page
         cards = window.mediahub_sidebar.card_list
         assert cards.count() == 2
