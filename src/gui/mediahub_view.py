@@ -1,24 +1,22 @@
 """
-Ansicht "Mediahub-Karten" im ESPuino-Modus (siehe core/app_mode.py und
-core/mediahub_cards.py): Seitenleiste mit Kartenliste, Kartenseite und der
-Dialog zum Einrichten (db.json des Mediahub und Mediathek auf dem PC).
+Ansicht "ESPuino-Karten" im ESPuino-Modus (siehe core/app_mode.py): Seitenleiste
+mit Kartenliste und Kartenseite. Die Karten kommen direkt vom ESPuino
+(core/espuino_device.py) oder aus dem Mediahub (core/mediahub_cards.py); die
+Dialoge stehen in gui/espuino_dialogs.py.
 
 Eigene Datei des Forks (siehe core/branding.py).
 """
 
-import os
 from typing import Dict, List, Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPixmap
 from PyQt6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QStackedWidget, QVBoxLayout,
+    QWidget,
 )
 
-from core.mediahub_cards import (
-    DB_FILENAME, MediahubCard, MediahubError, MediahubFolder, db_file, format_card_id, load_cards, play_mode_label,
-)
+from core.mediahub_cards import MediahubCard, MediahubFolder, format_card_id, play_mode_label
 from gui import theme
 from gui.common import heading_font
 
@@ -26,88 +24,10 @@ PREVIEW_HEIGHT = 240
 CARD_ROLE = Qt.ItemDataRole.UserRole
 
 
-class MediahubSetupDialog(QDialog):
-    """Datenordner (bzw. db.json) des Mediahub und die Mediathek waehlen"""
-
-    def __init__(self, db_path: str = "", media_root: str = "", parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Mediahub einrichten")
-        self.setMinimumWidth(620)
-        layout = QVBoxLayout(self)
-        intro = QLabel(
-            "ESPuino-Studio liest die Karten aus der Datei <b>db.json</b> im Datenordner des ESPuino-Mediahub "
-            "(z. B. auf dem NAS). Dazu die Mediathek wählen, die der Mediahub als <i>/media</i> nutzt – derselbe "
-            "Ordner, nur so, wie er auf diesem PC erreichbar ist.<br><br>"
-            "Am Mediahub wird nichts geändert: Studio liest db.json nur und spricht den Mediahub nicht an. "
-            "Kartencover liegen im Datenordner von Studio.")
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
-
-        form = QFormLayout()
-        self.db_edit = QLineEdit(db_path)
-        self.db_edit.setPlaceholderText(f"…/mediahub-data/{DB_FILENAME}")
-        form.addRow("db.json:", self._with_browse(self.db_edit, self._browse_db))
-        self.media_edit = QLineEdit(media_root)
-        self.media_edit.setPlaceholderText("Ordner mit Musik und Hörspielen")
-        form.addRow("Mediathek:", self._with_browse(self.media_edit, self._browse_media))
-        layout.addLayout(form)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Übernehmen")
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Abbrechen")
-        buttons.accepted.connect(self._accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    @staticmethod
-    def _with_browse(edit: QLineEdit, slot) -> QWidget:
-        row = QWidget()
-        lay = QHBoxLayout(row)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(edit, 1)
-        button = QPushButton("Wählen …")
-        button.setObjectName("ghostButton")
-        button.clicked.connect(slot)
-        lay.addWidget(button)
-        return row
-
-    def _browse_db(self):
-        start = os.path.dirname(self.db_edit.text().strip()) or ""
-        path, _ = QFileDialog.getOpenFileName(self, "db.json des Mediahub wählen", start,
-                                              f"Mediahub-Datenbank ({DB_FILENAME});;JSON (*.json)")
-        if path:
-            self.db_edit.setText(path)
-
-    def _browse_media(self):
-        path = QFileDialog.getExistingDirectory(self, "Mediathek wählen", self.media_edit.text().strip())
-        if path:
-            self.media_edit.setText(path)
-
-    @property
-    def db_path(self) -> str:
-        return self.db_edit.text().strip()
-
-    @property
-    def media_root(self) -> str:
-        return self.media_edit.text().strip()
-
-    def _accept(self):
-        try:
-            data = load_cards(self.db_path)
-        except MediahubError as exc:
-            QMessageBox.warning(self, "Mediahub einrichten", str(exc))
-            return
-        if not os.path.isdir(self.media_root):
-            QMessageBox.warning(self, "Mediahub einrichten", "Bitte die Mediathek als vorhandenen Ordner wählen.")
-            return
-        self.db_edit.setText(str(db_file(self.db_path)))
-        self.card_count = len(data.cards)
-        self.accept()
-
-
 class MediahubSidebar(QWidget):
     """Seitenleiste im ESPuino-Modus: Einrichten, Neu einlesen, Kartenliste"""
     setup_requested = pyqtSignal()
+    assign_requested = pyqtSignal()
     reload_requested = pyqtSignal()
     card_selected = pyqtSignal(str)  # card_id
 
@@ -116,13 +36,18 @@ class MediahubSidebar(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
-        self.btn_setup = QPushButton("Mediahub einrichten …")
-        self.btn_setup.setObjectName("primaryButton")
-        self.btn_setup.setToolTip("db.json des ESPuino-Mediahub und die Mediathek wählen")
+        self.btn_setup = QPushButton("ESPuino einrichten …")
+        self.btn_setup.setToolTip("Karten direkt vom ESPuino im WLAN oder aus dem ESPuino-Mediahub lesen")
         self.btn_setup.clicked.connect(self.setup_requested)
         layout.addWidget(self.btn_setup)
+        self.btn_assign = QPushButton("Karte zuweisen …")
+        self.btn_assign.setObjectName("primaryButton")
+        self.btn_assign.setToolTip("Karte auf den ESPuino legen und einen Ordner der SD-Karte zuweisen")
+        self.btn_assign.clicked.connect(self.assign_requested)
+        self.btn_assign.hide()
+        layout.addWidget(self.btn_assign)
         self.btn_reload = QPushButton("Karten neu einlesen")
-        self.btn_reload.setToolTip("db.json erneut lesen, z. B. nachdem im Mediahub Karten zugewiesen wurden")
+        self.btn_reload.setToolTip("Karten erneut lesen, z. B. nachdem anderswo Karten zugewiesen wurden")
         self.btn_reload.clicked.connect(self.reload_requested)
         layout.addWidget(self.btn_reload)
         self.filter_edit = QLineEdit()
@@ -217,7 +142,7 @@ class MediahubPage(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.overview_title = QLabel("Mediahub-Karten")
+        self.overview_title = QLabel("ESPuino-Karten")
         self.overview_title.setFont(heading_font(18))
         self.overview_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.overview_title)
@@ -227,7 +152,7 @@ class MediahubPage(QWidget):
         layout.addWidget(self.overview_text)
         row = QHBoxLayout()
         row.addStretch(1)
-        self.btn_overview_setup = QPushButton("Mediahub einrichten …")
+        self.btn_overview_setup = QPushButton("ESPuino einrichten …")
         self.btn_overview_setup.setObjectName("primaryButton")
         self.btn_overview_setup.clicked.connect(self.setup_requested)
         row.addWidget(self.btn_overview_setup)
@@ -304,7 +229,7 @@ class MediahubPage(QWidget):
         self.btn_overview_print.setEnabled(can_print)
         self.pages.setCurrentIndex(0)
 
-    def show_card(self, card: MediahubCard, folder: MediahubFolder):
+    def show_card(self, card: MediahubCard, folder: MediahubFolder, place: str = "in der Mediathek"):
         self.card = card
         self.title_label.setText(card.label)
         self.id_label.setText(f"Karte {format_card_id(card.card_id)}")
@@ -312,8 +237,10 @@ class MediahubPage(QWidget):
         count = len(card.files)
         files = f"{count} Datei" + ("" if count == 1 else "en")
         if folder.missing:
-            files += f", davon {folder.missing} nicht in der Mediathek gefunden"
+            files += f", davon {folder.missing} nicht {place} gefunden"
         meta = [f"ESPuino: {devices}", files]
+        if card.sd_path:
+            meta.insert(1, f"SD-Karte: {card.sd_path}")
         if card.play_mode:
             meta.append(f"Abspielmodus: {play_mode_label(card.play_mode)}")
         self.meta_label.setText(" · ".join(meta))
@@ -322,7 +249,8 @@ class MediahubPage(QWidget):
             warnings.append("Die Karte ist auf mehreren ESPuinos unterschiedlich belegt – gezeigt ist die "
                             "neueste Zuweisung.")
         if not folder.tracks:
-            warnings.append("Keine Datei dieser Karte in der Mediathek gefunden – stimmt der Mediathek-Ordner?")
+            warnings.append(f"Keine Datei dieser Karte {place} gefunden – ist der Ordner unter "
+                            "„ESPuino einrichten“ richtig?")
         self.warning_label.setText("\n".join(warnings))
         self.warning_label.setVisible(bool(warnings))
         self.btn_cover.setEnabled(bool(folder.tracks))

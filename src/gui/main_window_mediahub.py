@@ -3,8 +3,10 @@ Hauptfenster: Modus TonUINO | ESPuino (Teil von MainWindow)
 
 Im ESPuino-Modus heisst die App "ESPuino-Studio". SD-Karte, Ordnerliste,
 RFID-Panel, Systemdateien und SD leeren sind ausgeblendet; statt der SD-Ansicht
-zeigt der erste Reiter die Karten aus dem ESPuino-Mediahub (core/mediahub_cards.py)
-mit Cover-Manager, KI-Stapel und Druckbogen. Die Bibliothek bleibt.
+zeigt der erste Reiter die Karten - direkt vom ESPuino im WLAN
+(core/espuino_device.py) oder aus dem ESPuino-Mediahub (core/mediahub_cards.py) -
+mit Cover-Manager, KI-Stapel und Druckbogen. Direkt am ESPuino lassen sich
+Karten auch zuweisen. Die Bibliothek bleibt.
 Der Modus wird beim Start angewendet; ein Wechsel wirkt nach einem Neustart.
 
 Eigene Datei des Forks, damit gui/main_window.py nah am Original bleibt. Die
@@ -17,19 +19,21 @@ import logging
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import QMenu, QMessageBox
 
+from core import espuino_device as dev
 from core import mediahub_cards as mh
 from core.app_mode import MODE_ESPUINO, MODE_TONUINO, MODES, current_mode, display_name, set_mode
 from core.card_store import card_paths
 from gui.about_dialog import show_about
 from gui.cover_manager_dialog import CoverManagerDialog, get_archive
-from gui.mediahub_view import MediahubPage, MediahubSetupDialog, MediahubSidebar
+from gui.espuino_dialogs import AssignCardDialog, EspuinoSetupDialog
+from gui.mediahub_view import MediahubPage, MediahubSidebar
 from gui.print_sheet_dialog import PrintSheetDialog
 
 log = logging.getLogger(__name__)
 
 MODE_MENU_LABELS = {
     MODE_TONUINO: "TonUINO – SD-Karte und RFID-Karten",
-    MODE_ESPUINO: "ESPuino – Karten aus dem Mediahub",
+    MODE_ESPUINO: "ESPuino – Karten vom Gerät oder aus dem Mediahub",
 }
 
 
@@ -46,6 +50,8 @@ class MediahubMixin:
         self.app_mode = current_mode()
         self._mediahub_data = None
         self._mediahub_media_root = ""
+        self._espuino_source = dev.SOURCE_DEVICE
+        self._espuino_host = ""
         self._add_mode_menu()
         if not self._is_espuino():
             return
@@ -68,13 +74,14 @@ class MediahubMixin:
         self._rewire(self.action_card_cover_batch, "Kartencover für alle Karten ohne Cover …",
                      self._mediahub_generate_missing)
         self._rewire(self.action_print_sheet, "Druckbogen (PDF) erstellen …", self._mediahub_print_sheet)
-        self.action_mediahub_setup = QAction("Mediahub einrichten …", self)
+        self.action_mediahub_setup = QAction("ESPuino einrichten …", self)
         self.action_mediahub_setup.triggered.connect(self._mediahub_setup)
         self.settings_menu.insertAction(self.action_system_files, self.action_mediahub_setup)
 
         self.mediahub_sidebar = MediahubSidebar()
         self.mediahub_sidebar.setup_requested.connect(self._mediahub_setup)
         self.mediahub_sidebar.reload_requested.connect(self._mediahub_reload)
+        self.mediahub_sidebar.assign_requested.connect(self._espuino_assign)
         self.mediahub_sidebar.card_selected.connect(self._mediahub_on_card_clicked)
         sidebar_layout = self.folder_list.parentWidget().layout()
         sidebar_layout.insertWidget(sidebar_layout.indexOf(self.folder_list), self.mediahub_sidebar, 1)
@@ -86,8 +93,7 @@ class MediahubMixin:
         self.mediahub_page.print_requested.connect(self._mediahub_print_sheet)
         self.stack.addWidget(self.mediahub_page)
         self._sd_page = self.mediahub_page
-        self.view_switch.setTabText(0, "Mediahub-Karten")
-        self.view_switch.setTabToolTip(0, "Karten aus dem ESPuino-Mediahub: Kartencover gestalten und drucken")
+        self.view_switch.setTabToolTip(0, "Karten des ESPuino: Kartencover gestalten und drucken")
         self.view_switch.setTabToolTip(1, "Hörspiele und Musik auf PC und NAS – Album-Cover und Tags")
         if self.view_switch.currentIndex() == 0:
             self.stack.setCurrentWidget(self.mediahub_page)
@@ -153,32 +159,57 @@ class MediahubMixin:
     # --- Karten lesen ---------------------------------------------------------------
 
     def _mediahub_setup(self):
+        source, host, sd_root = dev.settings()
         db_path, media_root = mh.settings_paths()
-        dialog = MediahubSetupDialog(db_path, media_root, self)
+        dialog = EspuinoSetupDialog(source, host, sd_root, db_path, media_root, self)
         if dialog.exec():
-            mh.save_settings_paths(dialog.db_path, dialog.media_root)
+            if dialog.source == dev.SOURCE_DEVICE:
+                dev.save_settings(dev.SOURCE_DEVICE, dialog.host, dialog.sd_root)
+            else:
+                dev.save_settings(dev.SOURCE_MEDIAHUB, host, sd_root)
+                mh.save_settings_paths(dialog.db_path, dialog.media_root)
             self._mediahub_reload()
 
+    def _espuino_is_device(self) -> bool:
+        return self._espuino_source == dev.SOURCE_DEVICE
+
+    def _espuino_place(self) -> str:
+        return "auf der SD-Karte" if self._espuino_is_device() else "in der Mediathek"
+
     def _mediahub_reload(self):
-        db_path, media_root = mh.settings_paths()
+        source, host, sd_root = dev.settings()
+        self._espuino_source, self._espuino_host = source, host
         sidebar, page = self.mediahub_sidebar, self.mediahub_page
-        sidebar.btn_reload.setEnabled(bool(db_path))
-        self._mediahub_media_root = media_root
-        if not db_path:
+        device = source == dev.SOURCE_DEVICE
+        self.view_switch.setTabText(0, "ESPuino-Karten" if device else "Mediahub-Karten")
+        page.overview_title.setText("ESPuino-Karten" if device else "Mediahub-Karten")
+        if device:
+            configured, root = bool(host), sd_root
+            sidebar.btn_assign.setVisible(True)
+            sidebar.btn_assign.setEnabled(configured)
+            not_configured = ("Noch nicht eingerichtet: die Adresse des ESPuino im WLAN und seine SD-Karte "
+                              "im Kartenleser wählen. Studio liest dann seine Karten und kann neue zuweisen.")
+        else:
+            db_path, root = mh.settings_paths()
+            configured = bool(db_path)
+            sidebar.btn_assign.setVisible(False)
+            not_configured = ("Noch nicht eingerichtet: die db.json des ESPuino-Mediahub und die Mediathek "
+                              "wählen. Studio liest die Karten nur, am Mediahub ändert sich nichts.")
+        sidebar.btn_reload.setEnabled(configured)
+        self._mediahub_media_root = root
+        if not configured:
             self._mediahub_data = None
             sidebar.set_cards([], {})
-            page.show_overview("Noch nicht eingerichtet: die db.json des ESPuino-Mediahub und die Mediathek "
-                               "wählen. Studio liest die Karten nur, am Mediahub ändert sich nichts.",
-                               configured=False)
+            page.show_overview(not_configured, configured=False)
             return
         try:
-            data = mh.load_cards(db_path)
-        except mh.MediahubError as exc:
-            log.warning("Mediahub: %s", exc)
+            data = dev.load_cards(host, root) if device else mh.load_cards(db_path)
+        except (mh.MediahubError, dev.DeviceError) as exc:
+            log.warning("ESPuino-Karten: %s", exc)
             self._mediahub_data = None
             sidebar.set_cards([], {})
             page.show_overview(str(exc), configured=False)
-            self._status("Mediahub-Karten konnten nicht gelesen werden")
+            self._status("Karten konnten nicht gelesen werden")
             return
         self._mediahub_data = data
         has_cover = self._mediahub_cover_map()
@@ -191,7 +222,26 @@ class MediahubMixin:
             self._mediahub_show_card(selected)
         else:
             self._mediahub_show_overview(has_cover)
-        self._status(f"{len(data.cards)} Mediahub-Karten eingelesen")
+        self._status(f"{len(data.cards)} Karten " + ("vom ESPuino" if device else "aus dem Mediahub") + " eingelesen")
+
+    def _espuino_assign(self, preset_card: str = ""):
+        if not self._espuino_is_device() or not self._espuino_host:
+            return
+        _source, host, sd_root = dev.settings()
+        known = {c.card_id: c.label for c in (self._mediahub_data.cards if self._mediahub_data else [])}
+        dialog = AssignCardDialog(host, sd_root, known, self)
+        if preset_card:
+            dialog.card_edit.setText(preset_card)
+        accepted = dialog.exec()
+        entry = dialog.result_entry
+        dialog.deleteLater()
+        if not accepted or not entry:
+            return
+        card_id = str(entry.get("id"))
+        self._status(f"Karte {mh.format_card_id(card_id)} zugewiesen: {entry.get('fileOrUrl')}")
+        self._mediahub_reload()
+        if mh.card_by_id(self._mediahub_data, card_id) is not None:
+            self.mediahub_sidebar.select(card_id)
 
     def _mediahub_cover_map(self) -> dict:
         archive = get_archive(self, ask=False)
@@ -204,7 +254,8 @@ class MediahubMixin:
         data = self._mediahub_data
         total = len(data.cards)
         without = sum(1 for c in data.cards if not has_cover.get(c.card_id))
-        lines = [f"{total} Karte{'' if total == 1 else 'n'} aus dem Mediahub, davon {without} ohne Kartencover."]
+        origin = "vom ESPuino" if self._espuino_is_device() else "aus dem Mediahub"
+        lines = [f"{total} Karte{'' if total == 1 else 'n'} {origin}, davon {without} ohne Kartencover."]
         skipped = []
         if data.skipped_webradio:
             skipped.append(f"{data.skipped_webradio} Webradio-Karte{'' if data.skipped_webradio == 1 else 'n'}")
@@ -212,10 +263,15 @@ class MediahubMixin:
             skipped.append(f"{data.skipped_empty} ohne Dateien")
         if data.pending:
             skipped.append(f"{data.pending} noch nicht zugewiesen")
+        if data.skipped_function:
+            skipped.append(f"{data.skipped_function} Funktionskarte{'' if data.skipped_function == 1 else 'n'}")
+        if data.skipped_mediahub:
+            skipped.append(f"{data.skipped_mediahub} vom Mediahub verwaltet")
         if skipped:
             lines.append("Nicht gezeigt: " + ", ".join(skipped) + ".")
         if not self._mediahub_media_root:
-            lines.append("Mediathek fehlt – bitte unter „Mediahub einrichten“ wählen.")
+            lines.append(("SD-Karte" if self._espuino_is_device() else "Mediathek")
+                         + " fehlt – für Cover bitte unter „ESPuino einrichten“ wählen.")
         lines.append("\nLinks eine Karte wählen.")
         self.mediahub_page.show_overview("\n".join(lines), configured=True, can_batch=without > 0,
                                          can_print=total > without)
@@ -229,7 +285,7 @@ class MediahubMixin:
         if card is None:
             return
         folder = mh.build_folder(card, self._mediahub_media_root, get_archive(self, ask=False))
-        self.mediahub_page.show_card(card, folder)
+        self.mediahub_page.show_card(card, folder, self._espuino_place())
 
     def _mediahub_on_card_clicked(self, card_id: str):
         self._mediahub_show_card(card_id)
@@ -242,8 +298,8 @@ class MediahubMixin:
 
     def _mediahub_require_data(self) -> bool:
         if self._mediahub_data is None:
-            QMessageBox.information(self, "Mediahub", "Bitte zuerst den Mediahub einrichten "
-                                                      "(Einstellungen → Mediahub einrichten).")
+            QMessageBox.information(self, "ESPuino", "Bitte zuerst einrichten "
+                                                     "(Einstellungen → ESPuino einrichten).")
             return False
         return True
 
@@ -261,8 +317,8 @@ class MediahubMixin:
             return
         folder = mh.build_folder(card, self._mediahub_media_root, archive)
         if not folder.tracks:
-            QMessageBox.information(self, "Keine Dateien", "Keine Datei dieser Karte in der Mediathek gefunden. "
-                                                           "Bitte unter „Mediahub einrichten“ die Mediathek prüfen.")
+            QMessageBox.information(self, "Keine Dateien", f"Keine Datei dieser Karte {self._espuino_place()} "
+                                                           "gefunden. Bitte unter „ESPuino einrichten“ prüfen.")
             return
         self._release_files()
         dialog = CoverManagerDialog(folder, card.label, self.metadata_manager, archive, self,
@@ -286,8 +342,8 @@ class MediahubMixin:
             return
         folders = [f for f in self._mediahub_folders(archive) if f.tracks and not f.card_path]
         if not folders:
-            QMessageBox.information(self, "Nichts zu tun", "Alle Karten mit Dateien in der Mediathek haben "
-                                                           "bereits ein Kartencover.")
+            QMessageBox.information(self, "Nichts zu tun", f"Alle Karten mit Dateien {self._espuino_place()} "
+                                                           "haben bereits ein Kartencover.")
             return
         self._confirm_and_start_cover_batch(folders, "Karten", archive)
 
@@ -313,6 +369,6 @@ class MediahubMixin:
         folders = [f for f in self._mediahub_folders(get_archive(self, ask=False)) if f.card_path]
         if not folders:
             QMessageBox.information(self, "Keine Kartencover", "Es gibt noch keine gespeicherten Kartencover "
-                                                               "für die Mediahub-Karten.")
+                                                               "für die ESPuino-Karten.")
             return
         PrintSheetDialog(folders, {}, self).exec()

@@ -13,8 +13,9 @@ from core.branding import APP_NAME
 TEXT = (
     "<p>Wofür möchtest du das Programm nutzen?</p>"
     "<p><b>TonUINO</b>: SD-Karte mit nummerierten Ordnern, RFID-Karten, Kartencover und Druckbogen.</p>"
-    f"<p><b>ESPuino</b>: Karten aus dem ESPuino-Mediahub, Kartencover und Druckbogen. "
-    f"Das Programm heißt dann „{ESPUINO_APP_NAME}“, SD-Karten- und RFID-Funktionen sind ausgeblendet.</p>"
+    f"<p><b>ESPuino</b>: Karten direkt am ESPuino zuweisen (oder aus dem ESPuino-Mediahub lesen), "
+    f"Kartencover und Druckbogen. Das Programm heißt dann „{ESPUINO_APP_NAME}“, die Funktionen für die "
+    "TonUINO-SD-Karte und den RFID-Leser sind ausgeblendet.</p>"
     "<p>Die Bibliothek gibt es in beiden Fällen. Du kannst das später jederzeit unter "
     "<b>Einstellungen → Modus</b> ändern.</p>"
 )

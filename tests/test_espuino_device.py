@@ -1,0 +1,144 @@
+"""Karten direkt vom ESPuino: REST-Aufrufe gegen einen nachgebauten ESPuino
+(lokaler HTTP-Server, erfundene Daten) und Zuordnung zu Dateien auf der SD-Karte"""
+
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+from core import espuino_device as dev
+
+CARD_A = "001002003004"
+CARD_B = "100200300400"
+
+
+class FakeEspuino:
+    def __init__(self):
+        self.assignments = {
+            CARD_A: {"id": CARD_A, "fileOrUrl": "/Hörspiele/Fuchsbande", "playMode": 3,
+                     "lastPlayPos": 0, "trackLastPlayed": 0},
+            CARD_B: {"id": CARD_B, "fileOrUrl": "/Musik/Lieder/02.mp3", "playMode": 1,
+                     "lastPlayPos": 0, "trackLastPlayed": 0},
+            "200200200200": {"id": "200200200200", "modId": 110},
+            "300300300300": {"id": "300300300300", "fileOrUrl": "http://radio.invalid/stream", "playMode": 8},
+            "400400400400": {"id": "400400400400", "fileOrUrl": "http://hub.invalid", "playMode": 18},
+        }
+        self.posts = []
+        fake = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _send(self, code, payload):
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path == "/info":
+                    self._send(200, {"software": {"version": "Software-revision: 20261008-DEV", "branch": "dev"}})
+                elif self.path == "/rfid":
+                    self._send(200, list(fake.assignments.values()))
+                else:
+                    self._send(404, {})
+
+            def do_POST(self):
+                data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                fake.posts.append(data)
+                if self.path != "/rfid" or not data.get("id"):
+                    self.send_response(500)
+                    self.end_headers()
+                    return
+                entry = {"id": data["id"], "fileOrUrl": data["fileOrUrl"], "playMode": data["playMode"],
+                         "lastPlayPos": 0, "trackLastPlayed": 0}
+                fake.assignments[data["id"]] = entry
+                self._send(200, entry)
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.host = f"127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def esp():
+    fake = FakeEspuino()
+    yield fake
+    fake.close()
+
+
+@pytest.fixture
+def sd(tmp_path):
+    root = tmp_path / "sd"
+    for rel in ("Hörspiele/Fuchsbande/01.mp3", "Hörspiele/Fuchsbande/02.mp3", "Hörspiele/Fuchsbande/cover.jpg",
+                "Hörspiele/Fuchsbande/Bonus/03.mp3", "Musik/Lieder/02.mp3"):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"ID3" + b"\0" * 32)
+    return root
+
+
+def test_normalize_host():
+    assert dev.normalize_host(" http://192.168.178.124/ ") == "192.168.178.124"
+    assert dev.normalize_host("espuino.local:8080") == "espuino.local:8080"
+    assert dev.ws_url("192.168.178.124") == "ws://192.168.178.124/ws"
+    for bad in ("", "   ", "a b", "192.168.1.1?x=1"):
+        with pytest.raises(dev.DeviceError):
+            dev.normalize_host(bad)
+
+
+def test_info_and_cards(esp, sd):
+    info = dev.fetch_info(esp.host)
+    assert dev.firmware_label(info) == "20261008-DEV (dev)"
+    data = dev.load_cards(esp.host, str(sd))
+    assert [c.card_id for c in data.cards] == [CARD_B, CARD_A]  # sortiert nach Name: "02.mp3" vor "Fuchsbande"
+    by_id = {c.card_id: c for c in data.cards}
+    assert by_id[CARD_A].name == "Fuchsbande"
+    assert by_id[CARD_A].files == ["Hörspiele/Fuchsbande/01.mp3", "Hörspiele/Fuchsbande/02.mp3"]
+    assert by_id[CARD_A].sd_path == "/Hörspiele/Fuchsbande"
+    assert by_id[CARD_A].album_id == "mediahub" + CARD_A  # Cover gehoert zur Karte, wie im Mediahub-Modus
+    assert by_id[CARD_B].files == ["Musik/Lieder/02.mp3"]
+    assert (data.skipped_function, data.skipped_webradio, data.skipped_mediahub) == (1, 1, 1)
+
+
+def test_recursive_mode_includes_subfolders(sd):
+    files, found = dev.card_files(str(sd), "/Hörspiele/Fuchsbande", 16)
+    assert found and files[-1] == "Hörspiele/Fuchsbande/Bonus/03.mp3" and len(files) == 3
+
+
+def test_missing_folder_or_no_sd_root(sd):
+    assert dev.card_files(str(sd), "/Gibt es nicht", 3) == (["Gibt es nicht"], False)
+    assert dev.card_files("", "/Hörspiele/Fuchsbande", 3) == (["Hörspiele/Fuchsbande"], False)
+    assert dev.card_files(str(sd), "/../draussen", 3)[1] is False
+
+
+def test_assign_card(esp):
+    result = dev.assign_card(esp.host, "555666777888", "/Hörspiele/Neu", 5)
+    assert result["fileOrUrl"] == "/Hörspiele/Neu"
+    assert esp.posts == [{"id": "555666777888", "fileOrUrl": "/Hörspiele/Neu", "playMode": 5}]
+    for args in (("abc", "/x", 3), ("555666777888", "", 3), ("555666777888", "/" + "x" * 300, 3),
+                 ("555666777888", "/x", 0)):
+        with pytest.raises(dev.DeviceError):
+            dev.assign_card(esp.host, *args)
+    assert len(esp.posts) == 1  # ungueltige Eingaben erreichen das Geraet nicht
+
+
+def test_sd_path_from_local(sd):
+    assert dev.sd_path_from_local(str(sd), str(sd / "Hörspiele" / "Fuchsbande")) == "/Hörspiele/Fuchsbande"
+    with pytest.raises(dev.DeviceError):
+        dev.sd_path_from_local(str(sd), str(sd.parent))
+    with pytest.raises(dev.DeviceError):
+        dev.sd_path_from_local(str(sd), str(sd))
+
+
+def test_unreachable_device():
+    with pytest.raises(dev.DeviceError, match="nicht erreichbar"):
+        dev.fetch_assignments("127.0.0.1:9")

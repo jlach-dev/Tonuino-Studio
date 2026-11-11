@@ -65,6 +65,8 @@ a = Analysis(
         'PyQt6.QtGui',
         'PyQt6.QtWidgets',
         'PyQt6.QtMultimedia',
+        'PyQt6.QtWebSockets',  # ESPuino direkt: aufgelegte Karte am Websocket erkennen
+        'PyQt6.QtNetwork',
         # pyserial waehlt sein tools.list_ports-Backend je nach Plattform per
         # dynamischem Import zur Laufzeit aus - PyInstallers statische Analyse
         # findet das nicht von selbst und muss es explizit genannt bekommen,

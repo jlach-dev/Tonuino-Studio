@@ -84,6 +84,7 @@ class MediahubCard:
     devices: List[Device] = field(default_factory=list)  # Geraete, auf denen die Karte zugewiesen ist
     source_esp: str = ""  # Geraet der Zuweisung, die gilt (die neueste)
     conflict: bool = False  # auf den Geraeten unterschiedlicher Inhalt
+    sd_path: str = ""  # nur bei Karten direkt vom ESPuino: Ziel auf seiner SD-Karte ("/Ordner")
 
     @property
     def album_id(self) -> str:
@@ -101,6 +102,8 @@ class MediahubData:
     skipped_webradio: int = 0
     skipped_empty: int = 0
     pending: int = 0
+    skipped_function: int = 0  # nur direkt vom ESPuino: Funktionskarten (Lautstaerke, Pause, ...)
+    skipped_mediahub: int = 0  # nur direkt vom ESPuino: Karten, die der Mediahub verwaltet
 
 
 @dataclass
