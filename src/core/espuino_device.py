@@ -208,6 +208,7 @@ class DeviceState:
     assignments: Dict[str, Tuple[str, int]] = field(default_factory=dict)  # Karte -> (Ordner, Modus)
     folders: Optional[List[str]] = None  # "/Ordner" im Wurzelverzeichnis; None = unbekannt
     folders_from_pc: bool = False  # Ordner von der SD-Karte im Kartenleser gelesen
+    backup_date: str = ""  # Zuweisungen aus backup.txt der SD-Karte (ESPuino nicht erreichbar): deren Stand
     skipped_function: int = 0
     skipped_webradio: int = 0
     skipped_mediahub: int = 0
@@ -245,6 +246,36 @@ def list_dirs(host: str, sd_path: str = "/") -> Set[str]:
 
 
 NOT_CONNECTED = "Nicht verbunden"
+BACKUP_FILE = "backup.txt"  # Sicherung der Zuweisungen, die der ESPuino auf seine SD-Karte schreibt
+_BACKUP_LINE = re.compile(r"^\^(\d+)\^#(.*)#(\d+)#(\d+)#(\d+)\s*$")
+
+
+def parse_backup(text: str) -> List[dict]:
+    """backup.txt des ESPuino: je Zeile ^Karte^#Pfad#Position#Abspielmodus#Titel.
+    Gibt Eintraege wie GET /rfid zurueck; Zeilen in anderem Format (etwa
+    Funktionskarten) werden uebersprungen."""
+    entries = []
+    for line in text.lstrip("\ufeff").splitlines():
+        match = _BACKUP_LINE.match(line.strip("\r"))
+        if match:
+            card_id, path, _pos, mode, _track = match.groups()
+            entries.append({"id": card_id, "fileOrUrl": path, "playMode": int(mode)})
+    return entries
+
+
+def read_backup(sd_root: str, state: "DeviceState") -> bool:
+    """Zuweisungen aus backup.txt der SD-Karte im Kartenleser in state uebernehmen.
+    Nur ein Stand der Sicherung: der ESPuino schreibt sie bei jeder Aenderung neu."""
+    path = Path(sd_root) / BACKUP_FILE
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        stamp = path.stat().st_mtime
+    except OSError:
+        return False
+    from datetime import datetime
+    _parse_assignments(parse_backup(text), state)
+    state.backup_date = datetime.fromtimestamp(stamp).strftime("%d.%m.%Y %H:%M")
+    return True
 
 
 def fetch_state(host: str, sd_root: str = "", connect: bool = True) -> DeviceState:
@@ -268,6 +299,8 @@ def fetch_state(host: str, sd_root: str = "", connect: bool = True) -> DeviceSta
     except (DeviceError, TypeError, ValueError) as exc:
         state.error = str(exc)
     if sd_root and os.path.isdir(sd_root):
+        if not state.reachable:
+            read_backup(sd_root, state)
         state.folders_from_pc = True
         state.folders = sorted("/" + p.name for p in Path(sd_root).iterdir()
                                if p.is_dir() and p.name != "System Volume Information" and not p.name.startswith("."))
@@ -346,7 +379,7 @@ def build_cards(known, state: DeviceState, library_index, sd_root: str) -> Tuple
             files, found = card_files(sd_root, card.sd_folder, card.play_mode)
             local_tracks = [str(Path(sd_root).joinpath(*f.split("/"))) for f in files] if found else []
         entry = state.assignments.get(card.card_id)
-        if not state.reachable:
+        if not state.reachable and not state.backup_date:
             status, target = "", ""
         elif entry is None:
             status, target = NOT_ASSIGNED, ""

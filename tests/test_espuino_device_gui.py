@@ -746,3 +746,23 @@ def test_pre_assign_without_espuino_then_assign_after_connecting(setup, monkeypa
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_status_from_backup_file_while_espuino_is_off(setup):
+    """ESPuino aus, SD-Karte im PC: "Zugewiesen" kommt aus backup.txt"""
+    from core.espuino_cards import ASSIGNED
+    from gui.main_window import MainWindow
+    (setup["sd"] / "backup.txt").write_text("^%s^#/Hörspiele/Fuchsbande#0#3#0\n" % CARD_A, encoding="utf-8")
+    window = MainWindow()  # einmal verbunden: Karten bekannt
+    window.close()
+    window.deleteLater()
+    window = MainWindow()
+    try:
+        window._espuino_connected = False
+        window._mediahub_reload()
+        assert window._mediahub_card(CARD_A).device_status == ASSIGNED
+        assert "backup.txt vom" in window.espuino_sidebar.device_label.text()
+        assert "Sicherung backup.txt" in window.mediahub_page.device_text.text()
+    finally:
+        window.close()
+        window.deleteLater()

@@ -181,3 +181,19 @@ def test_card_id_from_uid_matches_the_espuino():
     assert dev.card_id_from_uid("04A1B2C3D4E5F6") == "004161178195"  # 7-Byte-UID: die ersten vier Bytes
     assert dev.card_id_from_uid("5c:42:91:02") == "092066145002"
     assert dev.card_id_from_uid("0102") == "" and dev.card_id_from_uid("xyz") == ""
+
+
+def test_parse_backup_file_of_the_espuino(tmp_path):
+    text = ("﻿^001002003004^#/Hörspiele/Fuchsbande#0#3#0\r\n"
+            "^100200300400^#/Musik/Lieder/02.mp3#14#1#4\n"
+            "kaputte Zeile\n^200200200200^#110\n")
+    assert dev.parse_backup(text) == [
+        {"id": "001002003004", "fileOrUrl": "/Hörspiele/Fuchsbande", "playMode": 3},
+        {"id": "100200300400", "fileOrUrl": "/Musik/Lieder/02.mp3", "playMode": 1}]
+    (tmp_path / "backup.txt").write_text(text, encoding="utf-8")
+    state = dev.fetch_state("127.0.0.1:9", str(tmp_path), connect=False)  # ESPuino aus, SD-Karte im PC
+    assert not state.reachable and state.backup_date
+    assert state.assignments == {"001002003004": ("/Hörspiele/Fuchsbande", 3),
+                                 "100200300400": ("/Musik/Lieder/02.mp3", 1)}
+    empty = dev.fetch_state("127.0.0.1:9", str(tmp_path / "fehlt"), connect=False)
+    assert not empty.backup_date and empty.assignments == {}

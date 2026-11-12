@@ -206,6 +206,8 @@ class EspuinoDeviceSidebar(QWidget):
             lines.append(f"<span style='color:{theme.YELLOW}'>nicht erreichbar</span>")
         if state.folders_from_pc:
             lines.append("SD-Karte steckt im PC")
+        if state.backup_date:
+            lines.append(f"Zuweisungen aus backup.txt vom {state.backup_date}")
         self.device_label.setText("<br>".join(lines))
         can_drop = state.reachable or state.folders_from_pc
         self.folder_list.drop_enabled = can_drop

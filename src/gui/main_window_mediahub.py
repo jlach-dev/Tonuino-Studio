@@ -825,7 +825,13 @@ class MediahubMixin:
         without = sum(1 for c in data.cards if not has_cover.get(c.card_id))
         missing = sum(1 for c in data.cards if needs_transfer(c))
         lines = [f"{total} bekannte Karte{'' if total == 1 else 'n'}, davon {without} ohne Kartencover."]
-        if state is not None and not state.reachable:
+        if state is not None and not state.reachable and state.backup_date:
+            lines.append(f"Der ESPuino ist nicht erreichbar – „Zugewiesen“ zeigt den Stand seiner Sicherung "
+                         f"backup.txt auf der SD-Karte vom {state.backup_date}.")
+            if missing:
+                lines.append(f"{missing} Karte{' lässt' if missing == 1 else 'n lassen'} sich auf die SD-Karte "
+                             "übertragen; zugewiesen wird nach dem Verbinden.")
+        elif state is not None and not state.reachable:
             lines.append(f"Der ESPuino ist nicht erreichbar – Status unbekannt ({state.error})")
         elif missing:
             lines.append(f"{missing} Karte{' lässt' if missing == 1 else 'n lassen'} sich auf diesen ESPuino "
