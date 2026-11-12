@@ -40,6 +40,7 @@ from core.mediahub_cards import format_card_id, play_mode_label
 from gui import theme
 
 IMAGE_W, IMAGE_H = 300, 189  # Kartenformat quer
+OFFLINE_NOTE = 'ESPuino nicht verbunden: „Vormerken“ merkt sich die Zuordnung, zugewiesen wird nach dem Verbinden mit „Fehlende auf den ESPuino übertragen“.'
 DEFAULT_MODE = 3  # Hoerbuch (merkt sich die Stelle)
 
 
@@ -343,8 +344,7 @@ class CardReaderDialog(QDialog):
         self.albums = []
         self.folder_notes = {}
         self.set_folders(folders)
-        box.setEnabled(bool(self.host))
-        self.assign_note.setText("" if self.host else "Zum Zuweisen mit dem ESPuino verbinden.")
+        self.assign_note.setText("" if self.host else OFFLINE_NOTE)
         return box
 
     def set_albums(self, albums: Iterable):
@@ -396,9 +396,8 @@ class CardReaderDialog(QDialog):
         self.host = host
         self._device_folders = {f.strip("/").casefold() for f in device_folders}
         self.set_folders(folders, notes)
-        self.assign_box.setEnabled(bool(host))
         if not host:
-            self.assign_note.setText("Zum Zuweisen mit dem ESPuino verbinden.")
+            self.assign_note.setText(OFFLINE_NOTE)
         elif not was_connected:
             self.assign_note.setText("")
             self.status_label.setText("Verbinde mit dem ESPuino …")
@@ -455,8 +454,11 @@ class CardReaderDialog(QDialog):
 
     def _update_assign_button(self, *_):
         current = self.info if self.info is not None and self.info.card_id == self.card_id else None
-        self.btn_assign.setText("Neu zuweisen" if current is not None and current.assignment else "Zuweisen")
-        self.btn_assign.setEnabled(bool(self.host) and self.card_id.isdigit() and bool(self.sd_path))
+        if not self.host:
+            self.btn_assign.setText("Vormerken")
+        else:
+            self.btn_assign.setText("Neu zuweisen" if current is not None and current.assignment else "Zuweisen")
+        self.btn_assign.setEnabled(self.card_id.isdigit() and bool(self.sd_path))
 
     def preset(self, card_id: str = "", folder: str = "", album=None):
         """Vorbelegen (Ordner aus der Ordnerseite, Karte aus der Kartenliste); der
@@ -480,9 +482,15 @@ class CardReaderDialog(QDialog):
             QMessageBox.information(self, "Karte zuweisen", "Bitte einen Ordner (oder eine Datei) wählen.")
             return False
         album = self._album_for_path(path)
-        if album is not None and not self.on_device(path):
+        if album is not None and not self.on_device(path) and (self.host or self.sd_root):
             self.assign_note.setText(f"Übertrage „{album.name}“ …")
             self.transfer_requested.emit(card_id, album, path, mode)  # Hauptfenster: uebertragen, dann zuweisen
+            return True
+        if not self.host:  # ohne ESPuino: nur im Kartenverzeichnis vormerken
+            album = album or (self._preset_album if self._preset_folder and
+                              self._preset_folder.strip("/").casefold() == path.strip("/").casefold() else None)
+            self.assigned.emit(card_id, path, mode, album)
+            self.assignment_done(card_id, path)
             return True
         before = self.lookup(card_id)
         if before.assignment and before.assignment.strip("/").casefold() != path.strip("/").casefold():
@@ -506,9 +514,10 @@ class CardReaderDialog(QDialog):
         return True
 
     def assignment_done(self, card_id: str, path: str):
-        """Nach dem Zuweisen (auch nach dem Uebertragen): Karte neu zeigen"""
+        """Nach dem Zuweisen bzw. Vormerken (auch nach dem Uebertragen): Karte neu zeigen"""
         self.show_info(self.lookup(card_id))
-        self.assign_note.setText(f"Karte {format_card_id(card_id)} zugewiesen: {path}")
+        done = "zugewiesen" if self.host else "vorgemerkt (wird nach dem Verbinden zugewiesen)"
+        self.assign_note.setText(f"Karte {format_card_id(card_id)} {done}: {path}")
         self.assign_note.setStyleSheet(f"color: {theme.GREEN};")
         if self._preset_folder:
             self._set_path(self._preset_folder)  # gleich die naechste Karte fuer diesen Ordner
@@ -604,6 +613,6 @@ class CardReaderDialog(QDialog):
         self.card_edit.setText(info.card_id)
         self._set_path(self._preset_folder or info.assignment or info.known_folder)
         self._set_mode(info.mode or DEFAULT_MODE)
-        self.assign_note.setText("" if self.host else "Zum Zuweisen mit dem ESPuino verbinden.")
+        self.assign_note.setText("" if self.host else OFFLINE_NOTE)
         self.assign_note.setStyleSheet(f"color: {theme.OVERLAY2};")
         self._update_assign_button()

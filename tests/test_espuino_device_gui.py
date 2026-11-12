@@ -95,7 +95,7 @@ def test_unreachable_device_keeps_known_cards(setup):
         assert "nicht erreichbar" in window.espuino_sidebar.device_label.text()
         assert window.espuino_sidebar.btn_assign.isEnabled()  # auslesen geht (ACR122U), zuweisen nicht
         reader = window._espuino_read_cards()
-        assert not reader.assign_box.isEnabled() and "verbinden" in reader.assign_note.text()
+        assert reader.btn_assign.text() == "Vormerken" and "Vormerken" in reader.assign_note.text()
         reader.close()
     finally:
         window.close()
@@ -510,10 +510,10 @@ def test_open_window_follows_the_connection(setup):
         window._espuino_connected = False
         window._mediahub_reload()
         reader = window._espuino_read_cards()
-        assert not reader.assign_box.isEnabled()
+        assert reader.btn_assign.text() == "Vormerken"
         window._espuino_connected = True
         window._mediahub_reload()
-        assert reader.assign_box.isEnabled() and reader.host
+        assert reader.host and reader.btn_assign.text() == "Zuweisen"
         choices = reader.folder_choices
         assert "/Hörspiele" in choices
         reader.close()
@@ -709,6 +709,40 @@ def test_sd_card_in_reader_works_while_espuino_is_off(setup, tmp_path, monkeypat
                             lambda plans, local, host, assignments, finished: runs.append((local, assignments)))
         window._espuino_transfer_missing()
         assert runs and runs[0][0] == str(sd) and all(a is None for a in runs[0][1])  # nicht zuweisen
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+
+def test_pre_assign_without_espuino_then_assign_after_connecting(setup, monkeypatch):
+    """Ohne ESPuino vormerken (Ordner schon auf der SD-Karte, kein Album in der Bibliothek);
+    nach dem Verbinden weist "Fehlende uebertragen" die Karte zu"""
+    from PyQt6.QtWidgets import QMessageBox
+    from gui.espuino_device_view import needs_transfer
+    from gui.main_window import MainWindow
+    esp = setup["esp"]
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    window = MainWindow()
+    try:
+        window._espuino_connected = False
+        window._mediahub_reload()
+        reader = window._espuino_read_cards()
+        reader.on_message('{"rfidId":"333444555666"}')  # z. B. vom ACR122U
+        reader._set_path("/Hörspiele/Neu")
+        assert reader.btn_assign.text() == "Vormerken" and reader.btn_assign.isEnabled()
+        assert reader.try_assign()
+        assert esp.posts == [] and "vorgemerkt" in reader.assign_note.text()
+        assert window._espuino_known.get("333444555666").sd_folder == "/Hörspiele/Neu"
+        reader.close()
+
+        window._espuino_connected = True
+        window._mediahub_reload()
+        card = window._mediahub_card("333444555666")
+        assert card.folder_present is True and not card.library_path and needs_transfer(card)
+        window._espuino_transfer_missing()
+        assert {"id": "333444555666", "fileOrUrl": "/Hörspiele/Neu", "playMode": 3} in esp.posts
+        assert window._mediahub_card("333444555666").device_status == "assigned"
     finally:
         window.close()
         window.deleteLater()

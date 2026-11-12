@@ -280,10 +280,16 @@ def can_transfer(card: MediahubCard) -> bool:
     return bool(card.library_path and card.sd_path) and not single
 
 
+def can_assign_only(card: MediahubCard) -> bool:
+    """Ohne Album in der Bibliothek, aber der Ordner liegt schon auf der SD-Karte:
+    die Karte laesst sich (etwa nach dem Vormerken) zuweisen, nur nicht uebertragen"""
+    return not can_transfer(card) and bool(card.sd_path) and card.folder_present is True
+
+
 def needs_transfer(card: MediahubCard) -> bool:
     """Auf dem Geraet unvollstaendig: Ordner fehlt oder Karte nicht (so) zugewiesen"""
-    return can_transfer(card) and (card.folder_present is False
-                                   or card.device_status in (NOT_ASSIGNED, ASSIGNED_OTHER))
+    return (can_transfer(card) or can_assign_only(card)) and (
+        card.folder_present is False or card.device_status in (NOT_ASSIGNED, ASSIGNED_OTHER))
 
 
 COL_CHECK, COL_NAME, COL_NUMBER, COL_ASSIGNED, COL_SD, COL_LIBRARY, COL_COVER = range(7)
