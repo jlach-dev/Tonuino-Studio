@@ -215,3 +215,30 @@ def test_parse_backup_file_of_the_espuino(tmp_path):
                                  "100200300400": ("/Musik/Lieder/02.mp3", 1)}
     empty = dev.fetch_state("127.0.0.1:9", str(tmp_path / "fehlt"), connect=False)
     assert not empty.backup_date and empty.assignments == {}
+
+
+def test_unreadable_sd_card_does_not_crash(tmp_path, monkeypatch):
+    """SD-Karte steckt, liefert aber E/A-Fehler (WinError 1117): kein Absturz, Dateien gelten als fehlend"""
+    from pathlib import Path
+    from core import espuino_device as dev
+    (tmp_path / "Conni").mkdir()
+    real_stat = Path.stat
+
+    def broken_stat(self, *a, **k):
+        if "Conni" in str(self):
+            raise OSError(22, "E/A-Gerätefehler")
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(Path, "stat", broken_stat)
+    files, found = dev.card_files(str(tmp_path), "/Conni", 3)
+    assert files == ["Conni"] and found is False
+    state = dev.DeviceState(host="")
+    state.folders_from_pc = True
+    assert dev.folder_exists(state, str(tmp_path), "/Conni") is None
+
+    def broken_iterdir(self):
+        raise OSError(22, "E/A-Gerätefehler")
+
+    monkeypatch.setattr(Path, "iterdir", broken_iterdir)
+    state = dev.fetch_state("127.0.0.1:9", str(tmp_path))
+    assert not state.folders_from_pc and "nicht lesbar" in state.sd_error

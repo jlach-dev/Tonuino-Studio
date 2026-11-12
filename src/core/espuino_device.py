@@ -23,6 +23,7 @@ Eigene Datei des Forks (siehe core/branding.py).
 
 import codecs
 import json
+import logging
 import os
 import re
 import urllib.error
@@ -33,6 +34,8 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Set, Tuple
 
 from core.mediahub_cards import KIND_FILES, Device, MediahubCard, MediahubData
+
+log = logging.getLogger(__name__)
 
 SETTINGS_SOURCE = "espuino/source"
 SETTINGS_HOST = "espuino/host"
@@ -209,12 +212,15 @@ def card_files(sd_root: str, sd_path: str, play_mode: int) -> Tuple[List[str], b
     if local is None:
         return [rel_fallback], False
     root = Path(sd_root)
-    if local.is_file():
-        return [local.relative_to(root).as_posix()], True
-    if local.is_dir():
-        files = _audio_files(local, play_mode in RECURSIVE_MODES)
-        if files:
-            return [f.relative_to(root).as_posix() for f in files], True
+    try:
+        if local.is_file():
+            return [local.relative_to(root).as_posix()], True
+        if local.is_dir():
+            files = _audio_files(local, play_mode in RECURSIVE_MODES)
+            if files:
+                return [f.relative_to(root).as_posix() for f in files], True
+    except OSError as exc:  # SD-Karte abgezogen oder defekt (etwa WinError 1117)
+        log.warning("SD-Karte: %s nicht lesbar: %s", local, exc)
     return [rel_fallback], False
 
 
@@ -231,6 +237,7 @@ class DeviceState:
     assignments: Dict[str, Tuple[str, int]] = field(default_factory=dict)  # Karte -> (Ordner, Modus)
     folders: Optional[List[str]] = None  # "/Ordner" im Wurzelverzeichnis; None = unbekannt
     folders_from_pc: bool = False  # Ordner von der SD-Karte im Kartenleser gelesen
+    sd_error: str = ""  # SD-Karte im PC steckt, laesst sich aber nicht lesen
     backup_date: str = ""  # Zuweisungen aus backup.txt der SD-Karte (ESPuino nicht erreichbar): deren Stand
     skipped_function: int = 0
     skipped_webradio: int = 0
@@ -321,12 +328,20 @@ def fetch_state(host: str, sd_root: str = "", connect: bool = True) -> DeviceSta
         state.reachable = True
     except (DeviceError, TypeError, ValueError) as exc:
         state.error = str(exc)
+    local_folders = None
     if sd_root and os.path.isdir(sd_root):
+        try:
+            local_folders = sorted("/" + p.name for p in Path(sd_root).iterdir()
+                                   if p.is_dir() and p.name != "System Volume Information"
+                                   and not p.name.startswith("."))
+        except OSError as exc:  # Karte steckt, laesst sich aber nicht lesen: wie ohne Karte weiter
+            log.warning("SD-Karte %s nicht lesbar: %s", sd_root, exc)
+            state.sd_error = f"SD-Karte im PC nicht lesbar ({exc.strerror or exc})"
+    if local_folders is not None:
         if not state.reachable:
             read_backup(sd_root, state)
         state.folders_from_pc = True
-        state.folders = sorted("/" + p.name for p in Path(sd_root).iterdir()
-                               if p.is_dir() and p.name != "System Volume Information" and not p.name.startswith("."))
+        state.folders = local_folders
     elif state.reachable:
         try:
             state.dirs["/"] = list_dirs(state.host, "/")
@@ -342,7 +357,10 @@ def folder_exists(state: DeviceState, sd_root: str, sd_folder: str) -> Optional[
     if not parts:
         return None
     if state.folders_from_pc:
-        return Path(sd_root).joinpath(*parts).is_dir()
+        try:
+            return Path(sd_root).joinpath(*parts).is_dir()
+        except OSError:
+            return None
     if state.folders is None or not state.reachable:
         return None
     parent = "/" + "/".join(parts[:-1]) if len(parts) > 1 else "/"
