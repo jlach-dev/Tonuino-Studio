@@ -126,6 +126,7 @@ class MediahubPage(QWidget):
     setup_requested = pyqtSignal()
     cover_requested = pyqtSignal(str)  # card_id
     batch_requested = pyqtSignal()
+    series_batch_requested = pyqtSignal()  # Kartencover fuer eine Serie (Anker, Stilbibel)
     print_requested = pyqtSignal()
     transfer_requested = pyqtSignal(str)  # card_id: Album auf diesen ESPuino bringen und zuweisen
     back_requested = pyqtSignal()  # von der Karte zurueck zur Kartentabelle (ESPuino direkt)
@@ -194,6 +195,11 @@ class MediahubPage(QWidget):
         self.btn_device_batch = QPushButton("Kartencover für alle Karten ohne Cover …")
         self.btn_device_batch.clicked.connect(self.batch_requested)
         row.addWidget(self.btn_device_batch)
+        self.btn_device_series = QPushButton("Kartencover für eine Serie …")
+        self.btn_device_series.setToolTip("Serienprofil wählen: alle Karten dieser Serie ohne Cover bekommen ein "
+                                          "KI-Cover mit Anker-Bildern und Stilbibel – einheitlicher Look")
+        self.btn_device_series.clicked.connect(self.series_batch_requested)
+        row.addWidget(self.btn_device_series)
         self.btn_device_print = QPushButton("Druckbogen …")
         self.btn_device_print.clicked.connect(self.print_requested)
         row.addWidget(self.btn_device_print)

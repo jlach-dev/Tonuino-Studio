@@ -142,9 +142,13 @@ class CardCoverMixin:
                 result.append(folder)
         return result
 
+    def _series_batch_ready(self) -> bool:
+        """Gibt es etwas, woraus der Serienstapel Folgen sucht? (ESPuino-Modus: die Karten)"""
+        return self._require_sd_card()
+
     def _generate_series_card_covers(self):
         """Alle Folgen einer Serie ohne Kartencover: KI-Cover mit Ankern und Stilbibel"""
-        if not self._require_sd_card():
+        if not self._series_batch_ready():
             return
         if self._cover_batch_worker is not None and self._cover_batch_worker.isRunning():
             return
@@ -174,8 +178,8 @@ class CardCoverMixin:
         finally:
             QApplication.restoreOverrideCursor()
         if not folders:
-            QMessageBox.information(self, "Nichts zu tun", f"Alle Ordner der Serie „{profile.name}“ haben bereits "
-                                                            "ein Kartencover (oder keiner gehört dazu).")
+            QMessageBox.information(self, "Nichts zu tun", f"Alle {self._series_unit()} der Serie „{profile.name}“ "
+                                                            "haben bereits ein Kartencover (oder keine gehört dazu).")
             return
         settings = QSettings()
         style = profile.style or settings.value(SETTINGS_STYLE, DEFAULT_STYLE, type=str)
@@ -184,7 +188,7 @@ class CardCoverMixin:
         bible = "mit Stilbibel" if profile.style_bible.strip() else "ohne Stilbibel"
         if not confirm_action(
                 self, "Kartencover für die Serie erzeugen",
-                f"Für {len(folders)} Ordner der Serie „{profile.name}“ wird je ein Kartencover erzeugt "
+                f"Für {len(folders)} {self._series_unit()} der Serie „{profile.name}“ wird je ein Kartencover erzeugt "
                 f"(Stil „{style}“, {orientation_label}, {len(anchors)} Anker-Bild(er), {bible}).\n\n"
                 f"Geschätzte Kosten: ca. {len(folders) * ESTIMATED_COST_PER_IMAGE:.2f} USD. Fortfahren?",
                 default_no=False):
@@ -192,9 +196,13 @@ class CardCoverMixin:
         self._start_cover_batch(folders, client, style, orientation, archive=archive, series_profile=profile,
                                 anchor_images=anchors)
 
+    def _series_unit(self) -> str:
+        return "Ordner"
+
     def _start_cover_batch(self, folders: list, client, style: str, orientation: str, **worker_kwargs):
         self._release_files()
         self._cover_batch_errors = []
+        self._cover_batch_refused = []
         self._cover_batch_dialog = QProgressDialog("Kartencover werden erzeugt …", "Abbrechen", 0, len(folders), self)
         self._cover_batch_dialog.setWindowTitle("Kartencover")
         self._cover_batch_dialog.setWindowModality(Qt.WindowModality.WindowModal)
@@ -206,6 +214,7 @@ class CardCoverMixin:
         worker.progress.connect(self._on_card_cover_batch_progress)
         worker.folder_done.connect(self._on_card_cover_batch_folder_done)
         worker.error.connect(lambda name, msg: self._cover_batch_errors.append(f"{name}: {msg}"))
+        worker.refused.connect(self._cover_batch_refused.append)
         worker.completed.connect(self._on_card_cover_batch_finished)
         keep_open_until_done(self._cover_batch_dialog, worker.cancel, "Wird nach dem aktuellen Cover abgebrochen …")
         self._cover_batch_worker = worker
@@ -227,4 +236,39 @@ class CardCoverMixin:
             text = "\n".join(self._cover_batch_errors)
             if REFUSED_SHORT in text:
                 text += "\n\n" + REFUSAL_BATCH_HINT
-            QMessageBox.warning(self, "Einige Kartencover fehlgeschlagen", text)
+            refused = list(getattr(self, "_cover_batch_refused", []))
+            box = QMessageBox(QMessageBox.Icon.Warning, "Einige Kartencover fehlgeschlagen", text, parent=self)
+            rework = None
+            if refused:
+                rework = box.addButton(f"Abgelehnte nacharbeiten ({len(refused)}) …",
+                                       QMessageBox.ButtonRole.AcceptRole)
+                box.setInformativeText("„Nacharbeiten“ öffnet für jede abgelehnte Karte nacheinander den "
+                                       "Cover-Manager.")
+            box.addButton("Schließen", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if rework is not None and box.clickedButton() is rework:
+                self._rework_refused(refused)
+
+    def _rework_refused(self, folders: list):
+        """Abgelehnte Karten nacheinander im Cover-Manager oeffnen; zwischen zweien
+        laesst sich aufhoeren"""
+        for i, folder in enumerate(folders, start=1):
+            if i > 1:
+                name = folder.name or (f"Ordner {folder.index:02d}" if folder.index is not None else "Karte")
+                answer = QMessageBox.question(self, "Nacharbeiten", f"Weiter mit „{name}“ ({i}/{len(folders)})?")
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+            self._open_cover_for_batch_folder(folder)
+
+    def _open_cover_for_batch_folder(self, folder):
+        """Cover-Manager fuer einen Ordner der SD-Karte (aus einem Stapel)"""
+        if folder is None or not folder.tracks:
+            return
+        self._release_files()
+        archive = get_archive(self)
+        dialog = CoverManagerDialog(folder, self._resolve_folder_name(folder), self.metadata_manager, archive, self,
+                                    focus=CoverManagerDialog.FOCUS_CARD)
+        dialog.exec()
+        if dialog.card_changed:
+            self.status_bar.showMessage(f"Kartencover für Ordner {folder.index:02d} gespeichert")
+        dialog.deleteLater()

@@ -554,3 +554,46 @@ def test_folder_picker_searches_names_artists_and_paths(app, tmp_path):
         assert picker.chosen_album is albums[1] and picker.chosen_folder == ""
     finally:
         picker.deleteLater()
+
+
+def test_series_batch_and_rework_on_espuino_cards(setup, monkeypatch):
+    """Serienstapel im ESPuino-Modus: Karten der Serie ohne Cover; abgelehnte lassen sich nacharbeiten"""
+    from core import cover_generator, cover_research
+    from core.cover_generator import CONTEXT_MOTIF, ImageRefused
+    from gui.cover_manager_dialog import get_archive
+    from gui.main_window import MainWindow
+    from gui.workers import CoverBatchWorker
+    window = MainWindow()
+    try:
+        assert window.action_series_cover_batch.isVisible() is not False
+        assert "Karten einer Serie" in window.action_series_cover_batch.text()
+        archive = get_archive(window, ask=False)
+        profile = archive.series.create("Die Fuchsbande")
+        card = window._mediahub_card(CARD_A)
+        archive.ensure_album(card.album_id, "Fuchsbande")
+        archive.assign_album(card.album_id, profile.id)
+        folders = window._series_folders(profile, archive)
+        assert [f.card_id for f in folders] == [CARD_A] and window._series_unit() == "Karten"
+
+        # Google lehnt ab: der Worker meldet die Karte zum Nacharbeiten
+        monkeypatch.setattr(cover_research, "gather_folder_info", lambda folder, *a, **k: object())
+        monkeypatch.setattr(cover_research, "research", lambda *a, **k: object())
+
+        def refuse(*_a, **_k):
+            raise ImageRefused(CONTEXT_MOTIF)
+        monkeypatch.setattr(cover_generator, "generate_art", refuse)
+        monkeypatch.setattr(cover_generator, "GenerationRequest", lambda **k: type("R", (), {})())
+        worker = CoverBatchWorker(folders, window.metadata_manager, object(), "t", "i", "ai", "Stil", "portrait")
+        refused, errors = [], []
+        worker.refused.connect(refused.append)
+        worker.error.connect(lambda name, msg: errors.append(msg))
+        worker.run()
+        assert refused == folders and "abgelehnt" in errors[0]
+
+        opened = []
+        monkeypatch.setattr(window, "_mediahub_open_cover", lambda card_id="": opened.append(card_id))
+        window._rework_refused(refused)
+        assert opened == [CARD_A]
+    finally:
+        window.close()
+        window.deleteLater()

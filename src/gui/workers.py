@@ -573,6 +573,7 @@ class CoverBatchWorker(QThread):
     progress = pyqtSignal(int, int, str)  # aktueller Index, Gesamtzahl, Ordnername
     folder_done = pyqtSignal(object)  # Ordnernummer bzw. der Folder ohne Nummer
     error = pyqtSignal(str, str)  # Ordner, Fehlermeldung
+    refused = pyqtSignal(object)  # von Google abgelehnt: der Ordner (zum Nacharbeiten im Cover-Manager)
     completed = pyqtSignal(int)  # Anzahl erfolgreich
 
     def __init__(self, folders: list, metadata_manager: MetadataManager, client,
@@ -651,8 +652,11 @@ class CoverBatchWorker(QThread):
                 done += 1
                 self.folder_done.emit(folder.index if folder.index is not None else folder)
             except Exception as e:
+                from core.cover_generator import ImageRefused
                 log.exception("Batch-Cover fuer %s fehlgeschlagen", label)
                 self.error.emit(label, getattr(e, "short", str(e)))  # Tipps nur einmal, siehe Hauptfenster
+                if isinstance(e, ImageRefused):
+                    self.refused.emit(folder)
         self.completed.emit(done)
 
 

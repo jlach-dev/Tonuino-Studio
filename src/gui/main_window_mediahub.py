@@ -80,7 +80,7 @@ class MediahubMixin:
                        self.folder_list, self.rfid_panel):
             widget.hide()
         for action in (self.action_show_all_mp3, self.reader_menu.menuAction(), self.action_system_files,
-                       self.action_wipe_card, self.action_series_cover_batch, self.action_tag_lookup):
+                       self.action_wipe_card, self.action_tag_lookup):
             action.setVisible(False)
         # Kachelmenue: statt TonUINO-Schema (01/001.mp3) ein Ordner mit Albumnamen auf der ESPuino-SD-Karte
         self.library_view.transfer_label = "Auf den ESPuino übertragen"
@@ -92,6 +92,7 @@ class MediahubMixin:
         self._rewire(self.action_card_cover_batch, "Kartencover für alle Karten ohne Cover …",
                      self._mediahub_generate_missing)
         self._rewire(self.action_print_sheet, "Druckbogen (PDF) erstellen …", self._mediahub_print_sheet)
+        self.action_series_cover_batch.setText("Kartencover für alle Karten einer Serie ohne Cover …")
         self.action_mediahub_setup = QAction("ESPuino einrichten …", self)
         self.action_mediahub_setup.triggered.connect(self._mediahub_setup)
         self.settings_menu.insertAction(self.action_system_files, self.action_mediahub_setup)
@@ -125,6 +126,7 @@ class MediahubMixin:
         self.mediahub_page.setup_requested.connect(self._mediahub_setup)
         self.mediahub_page.cover_requested.connect(self._mediahub_open_cover)
         self.mediahub_page.batch_requested.connect(self._mediahub_generate_missing)
+        self.mediahub_page.series_batch_requested.connect(self._generate_series_card_covers)
         self.mediahub_page.print_requested.connect(self._mediahub_print_sheet)
         self.mediahub_page.transfer_requested.connect(self._espuino_transfer_card)
         self.mediahub_page.back_requested.connect(self._espuino_back)
@@ -840,6 +842,47 @@ class MediahubMixin:
                                                            "haben bereits ein Kartencover.")
             return
         self._confirm_and_start_cover_batch(folders, "Karten", archive)
+
+    # --- Serienstapel und Nacharbeiten (Methoden aus gui/main_window_cards.py) --------
+
+    def _series_batch_ready(self) -> bool:
+        if not self._is_espuino():
+            return super()._series_batch_ready()
+        return self._mediahub_require_data()
+
+    def _series_unit(self) -> str:
+        return "Karten" if self._is_espuino() else super()._series_unit()
+
+    def _series_folders(self, profile, archive) -> list:
+        """ESPuino-Modus: Karten ohne Kartencover, die zur Serie gehoeren - ueber das
+        Album im Archiv zugeordnet oder mit erkannter Reihe gleichen Namens (Tags)"""
+        if not self._is_espuino():
+            return super()._series_folders(profile, archive)
+        from core.cover_research import gather_folder_info
+        from core.series import detect_series, normalize_series_name
+        key = normalize_series_name(profile.name)
+        result, seen = [], set()
+        for folder in self._mediahub_folders(archive):
+            if not folder.tracks or folder.card_path or folder.album_id in seen:
+                continue  # mehrere Karten fuer dasselbe Album: ein Cover reicht
+            record = archive.load_album(folder.album_id) if folder.album_id else None
+            if record is not None and record.series_id:
+                if record.series_id == profile.id:
+                    result.append(folder)
+                    seen.add(folder.album_id)
+                continue
+            info = gather_folder_info(folder, self.metadata_manager, max_titles=5)
+            name, _mb = detect_series(info, lookup=lambda _rg: [])
+            if name and normalize_series_name(name) == key:
+                result.append(folder)
+                seen.add(folder.album_id)
+        return result
+
+    def _open_cover_for_batch_folder(self, folder):
+        if isinstance(folder, mh.MediahubFolder):
+            self._mediahub_open_cover(folder.card_id)
+            return
+        super()._open_cover_for_batch_folder(folder)
 
     def _on_card_cover_batch_folder_done(self, done):
         if isinstance(done, mh.MediahubFolder):

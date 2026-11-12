@@ -87,8 +87,9 @@ def test_espuino_mode_shows_mediahub_cards(app, hub):
         for widget in (window.btn_open_sd, window.folder_list, window.rfid_panel, window.btn_purge_card):
             assert widget.isHidden()
         for action in (window.action_system_files, window.action_wipe_card, window.action_tag_lookup,
-                       window.action_series_cover_batch, window.reader_menu.menuAction()):
+                       window.reader_menu.menuAction()):
             assert not action.isVisible()
+        assert window.action_series_cover_batch.isVisible()  # Serienstapel geht auch mit Karten
         assert window.library_view.transfer_label == "Auf den ESPuino übertragen"  # nicht ins TonUINO-Schema
         assert not window.library_view.transfer_enabled()  # Quelle Mediahub: kein Ziel
         assert window.stack.currentWidget() is window.mediahub_page

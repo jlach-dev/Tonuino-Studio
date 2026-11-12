@@ -517,6 +517,12 @@ Beide Einträge im Menü **Kartencover** erzeugen KI-Cover und **speichern sie o
 
 Probiere Stil und Anker zuerst an einem Ordner aus.
 
+Im ESPuino-Modus gibt es beides ebenso, für die **Karten** statt der Ordner: **Kartencover für alle Karten ohne Cover …** und **Kartencover für alle Karten einer Serie ohne Cover …** (im Menü **Kartencover** und als Knöpfe unter der Kartenliste). Zeigen mehrere Karten auf dasselbe Album, entsteht nur ein Cover; es gilt für alle.
+
+Erzeugt wird je Ordner bzw. Karte nur die **Vorderseite**: Die App sammelt Tags und Titel, recherchiert per Gemini, worum es geht, erzeugt ein Motiv im eingestellten Stil und setzt Serie und Titel als Kartentext. **Abbrechen** stoppt nach dem gerade laufenden Cover.
+
+**Lehnt Google ein Motiv ab,** überspringt der Stapel diesen Ordner und macht weiter. Am Ende listet die App alle fehlgeschlagenen. Waren Ablehnungen dabei, bietet sie **Abgelehnte nacharbeiten (n) …** an: Dann öffnet sich für jeden abgelehnten Ordner nacheinander der Cover-Manager, wo du ohne Vorlage, mit eigenem Wunsch, mit abgedeckten Stellen oder mit dem Album-Cover und **Rand per Blur (ohne KI)** weiterkommst. Zwischen zweien fragt die App, ob es weitergehen soll.
+
 **Datenschutz:** Für KI-Kartencover gehen Titel, Tags, die Recherche-Ergebnisse sowie das Album-Cover und gewählte Vorlagen als Referenzbilder an Google (Gemini API). Es gelten die Bedingungen von Google.
 
 ---
@@ -609,7 +615,7 @@ Welcher Weg passt, hängt davon ab, wie dein ESPuino eingerichtet ist. Ohne Medi
 
 Beim allerersten Start fragt die App danach. Später: **Einstellungen** → **Modus** → **ESPuino – Karten vom Gerät oder aus dem Mediahub**. Der Wechsel wirkt nach einem Neustart; die App bietet **Jetzt neu starten** an. Zurück geht es mit **TonUINO – SD-Karte und RFID-Karten**.
 
-Im ESPuino-Modus heißt die App **ESPuino-Studio**. Der erste Reiter heißt **ESPuino-Karten** (mit Mediahub **Mediahub-Karten**), die **Bibliothek** bleibt. Ausgeblendet ist alles rund um die TonUINO-SD-Karte (**SD-Karte öffnen**, die Ordnerliste, **Alle MP3 Dateien anzeigen**, **TonUINO-Systemdateien …**, **SD-Karte leeren und neu einrichten …**), außerdem der Bereich **RFID-Karte** mit dem Menü **RFID-Leser**, **Kartencover für alle Folgen der Serie ohne Cover …** und **Tags von MusicBrainz …**.
+Im ESPuino-Modus heißt die App **ESPuino-Studio**. Der erste Reiter heißt **ESPuino-Karten** (mit Mediahub **Mediahub-Karten**), die **Bibliothek** bleibt. Ausgeblendet ist alles rund um die TonUINO-SD-Karte (**SD-Karte öffnen**, die Ordnerliste, **Alle MP3 Dateien anzeigen**, **TonUINO-Systemdateien …**, **SD-Karte leeren und neu einrichten …**), außerdem der Bereich **RFID-Karte** mit dem Menü **RFID-Leser** und **Tags von MusicBrainz …**. Der Serienstapel heißt hier **Kartencover für alle Karten einer Serie ohne Cover …**.
 
 Der ESPuino speichert nichts auf der Karte. Er erkennt sie an ihrer Nummer, die Zuordnung zur Musik steht im ESPuino oder im Mediahub. Einen RFID-Leser am PC brauchst du deshalb nicht.
 
