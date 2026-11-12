@@ -660,7 +660,7 @@ class CoverExtendWorker(QThread):
     """Erweitert ein Bild per Bildmodell auf das Kartenformat (Outpainting). Mit masking geht
     es abgedeckt an Google, und die abgedeckten Stellen kommen danach aus dem Original zurueck."""
     done = pyqtSignal(object)  # PIL.Image
-    doubtful = pyqtSignal()  # vor done: Das Motiv weicht stark vom Original ab
+    doubtful = pyqtSignal()  # vor done: Motiv weicht stark ab oder harte Naht am Rand des Originals
     failed = pyqtSignal(str)
     refused = pyqtSignal(str)  # von Google abgelehnt: hier hilft das Abdecken
 
@@ -673,17 +673,17 @@ class CoverExtendWorker(QThread):
         self.masking = masking
 
     def run(self):
-        from core.cover_generator import ImageRefused, extend_masked, extend_to_card
+        from core.cover_generator import ImageRefused, check_extension, extend_masked, extend_to_card
         try:
             if self.masking is not None:
                 result = extend_masked(self.client, self.image_model, self.image_bytes, self.orientation,
                                        self.masking)
-                image = result.image
-                if result.doubtful:
-                    self.doubtful.emit()
             else:
                 image = extend_to_card(self.client, self.image_model, self.image_bytes, self.orientation)
-            self.done.emit(image)
+                result = check_extension(image, self.image_bytes)
+            if result.doubtful:
+                self.doubtful.emit()
+            self.done.emit(result.image)
         except ImageRefused as e:
             log.info("KI-Randergaenzung abgelehnt")
             self.refused.emit(str(e))

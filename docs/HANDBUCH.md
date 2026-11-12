@@ -452,6 +452,8 @@ Das Ergebnis heißt **KI-Rand (abgedeckt)**. Die App misst, wo das Motiv im Bild
 
 Weicht das Motiv am Bildrand stark vom Original ab, zeigt die App **Ergebnis bitte prüfen**. Die KI hat dann vermutlich Figuren verändert oder verdoppelt. Das Bild liegt trotzdem unter **Neu**. **Neuer Versuch …** öffnet das Fenster wieder mit deinen Formen und kostet erneut einen Bildaufruf. Die Warnung ist ein Hinweis und erkennt nicht jeden Fehler.
 
+Dieselbe Warnung kommt auch beim normalen **Rand per KI**, wenn die KI das Motiv als Kasten mit harten Kanten eingesetzt und nur außen herum neu gemalt hat. **Neuer Versuch** startet dann ohne Abdeck-Fenster einen neuen Bildaufruf.
+
 Lehnt Google auch dieses Bild ab, kannst du mit deinen Formen weiterarbeiten. Nichts wird automatisch wiederholt, jeder Versuch ist ein eigener Bildaufruf. Das Abdecken garantiert keine Annahme. Googles Nutzungsregeln verbieten das Umgehen von Sicherheitsfiltern; nutze die Funktion nur für eigene Karten und auf eigene Verantwortung.
 
 ### Rückseite

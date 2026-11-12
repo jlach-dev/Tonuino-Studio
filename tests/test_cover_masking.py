@@ -8,8 +8,9 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
 from core import card_store
 from core.card_layout import CardSpec, ORIENTATION_LANDSCAPE, ORIENTATION_PORTRAIT, fits_card_format
 from core.cover_archive import KIND_ONLINE, CoverArchive
-from core.cover_generator import (EXTEND_DOUBTFUL_DIFFERENCE, ExtendMasking, ImageRefused, MaskedExtension,
-                                  extend_masked, locate_original, restore_covered)
+from core.cover_generator import (EXTEND_DOUBTFUL_DIFFERENCE, EXTEND_PROMPT, EXTEND_SEAM_LIMIT, ExtendMasking,
+                                  ImageRefused, MaskedExtension, extend_masked, locate_original, restore_covered,
+                                  seam_strength)
 from core.image_masking import EFFECT_BLUR, EFFECT_FILL, MaskShape, SHAPE_ELLIPSE, SHAPE_RECT, apply_masks, shape_mask
 from core.sd_card import SDCard
 
@@ -90,8 +91,23 @@ def generated_from(image, canvas=(600, 400), scale_x=1.0, scale_y=1.0, shift=(0,
     """So liefert die KI: das Motiv etwas anders skaliert und verschoben auf einer groesseren Flaeche"""
     width, height = round(image.width * canvas[1] / image.height * scale_x), round(canvas[1] * scale_y)
     result = Image.new("RGB", canvas, (90, 90, 90))
-    result.paste(image.resize((width, height), Image.Resampling.BILINEAR),
-                 ((canvas[0] - width) // 2 + shift[0], (canvas[1] - height) // 2 + shift[1]))
+    left, top = (canvas[0] - width) // 2 + shift[0], (canvas[1] - height) // 2 + shift[1]
+    scaled = image.resize((width, height), Image.Resampling.BILINEAR)
+    result.paste(scaled, (left, top))
+    # Wie bei einer gelungenen Erweiterung laeuft das Bild ohne Kante weiter: Randspalten fortsetzen
+    if left > 0:
+        result.paste(scaled.crop((0, 0, 1, height)).resize((left, height)), (0, top))
+    if left + width < canvas[0]:
+        result.paste(scaled.crop((width - 1, 0, width, height)).resize((canvas[0] - left - width, height)),
+                     (left + width, top))
+    return result
+
+
+def boxed(image, canvas=(600, 400)):
+    """Fehlerbild: das Motiv als Kasten auf einer fremden Flaeche, mit harter Kante"""
+    result = Image.new("RGB", canvas, (150, 110, 70))
+    width = round(image.width * canvas[1] / image.height)
+    result.paste(image.resize((width, canvas[1])), ((canvas[0] - width) // 2, 0))
     return result
 
 
@@ -170,10 +186,52 @@ def test_doubtful_when_the_edges_do_not_match():
     assert bad.doubtful
 
 
+def test_seam_is_found_where_the_ai_pasted_a_box():
+    original = motif()
+    assert seam_strength(generated_from(original), original.size) < EXTEND_SEAM_LIMIT
+    assert seam_strength(boxed(original), original.size) > 0.8
+    # auch wenn die Kante ein paar Pixel neben der erwarteten Stelle liegt
+    shifted = Image.new("RGB", (600, 400), (150, 110, 70))
+    shifted.paste(original, (104, 0))
+    assert seam_strength(shifted, original.size) > 0.8
+    portrait = Image.new("RGB", (400, 600), (150, 110, 70))
+    portrait.paste(original, (0, 100))
+    assert seam_strength(portrait, original.size) > 0.8
+    assert seam_strength(Image.new("RGB", (600, 400)), (600, 400)) == 0.0  # nichts erweitert
+
+
+def test_masked_extension_with_box_is_doubtful():
+    original = motif()
+    result = restore_covered(boxed(original), original, ())
+    assert result.seam > EXTEND_SEAM_LIMIT and result.doubtful
+
+
+def test_prompt_forbids_a_pasted_panel():
+    assert "seam" in EXTEND_PROMPT and "panel" in EXTEND_PROMPT
+
+
+def test_worker_checks_plain_extension_for_a_seam(qt_app, monkeypatch):
+    from core import cover_generator
+    from gui.workers import CoverExtendWorker
+
+    buffer = io.BytesIO()
+    motif().save(buffer, "PNG")
+    for generated, expected in ((boxed(motif()), ["doubtful"]), (generated_from(motif()), [])):
+        monkeypatch.setattr(cover_generator, "extend_to_card", lambda *args, image=generated: image)
+        worker = CoverExtendWorker(None, "m", buffer.getvalue(), ORIENTATION_LANDSCAPE)
+        order = []
+        worker.doubtful.connect(lambda: order.append("doubtful"))
+        worker.done.connect(lambda image: order.append(image))
+        worker.run()
+        assert order == expected + [generated]  # das Bild der KI bleibt unveraendert
+
+
 def test_doubtful_check_works_for_portrait_extension():
     original = motif()
     canvas = Image.new("RGB", (400, 600), (90, 90, 90))
     canvas.paste(original, (0, 100))
+    canvas.paste(original.crop((0, 0, 400, 1)).resize((400, 100)), (0, 0))  # ohne Kante weitergefuehrt
+    canvas.paste(original.crop((0, 399, 400, 400)).resize((400, 100)), (0, 500))
     good = restore_covered(canvas, original, ())
     assert good.image.size == (400, 600) and not good.doubtful
     canvas.paste(ImageOps.flip(original), (0, 100))
@@ -566,6 +624,57 @@ def test_refusal_offers_masking_and_keeps_shapes(manager, monkeypatch):
     dialog.selected = picture
     dialog._extend_selected()  # ein neuer Lauf beginnt wieder ohne Formen
     assert dialog._mask_shapes == []
+
+
+def test_new_try_after_seam_warning_runs_without_masking(manager, monkeypatch):
+    cm, dialog = manager
+    picture = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes((400, 400)), KIND_ONLINE)
+    dialog._add_candidate(picture, select=True)
+    started, masks = [], []
+
+    class Signal:
+        def connect(self, slot):
+            pass
+
+    class Worker:
+        done = failed = refused = finished = doubtful = Signal()
+
+        def __init__(self, *args):
+            started.append(args)
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+
+    class FakeBox:
+        Icon, ButtonRole = cm.QMessageBox.Icon, cm.QMessageBox.ButtonRole
+
+        def __init__(self, parent):
+            self.buttons = []
+
+        def __getattr__(self, name):
+            return lambda *args: None
+
+        def addButton(self, text, role):
+            self.buttons.append(text)
+            return text
+
+        def exec(self):
+            return 0
+
+        def clickedButton(self):
+            return self.buttons[0]  # "Neuer Versuch"
+
+    monkeypatch.setattr(cm, "CoverExtendWorker", Worker)
+    monkeypatch.setattr(cm, "QMessageBox", FakeBox)
+    monkeypatch.setattr(dialog, "_open_mask_dialog", lambda: masks.append(True))
+    dialog._extend_selected()
+    dialog._on_extend_doubtful()
+    dialog._on_extended(Image.new("RGB", (600, 400)))
+    assert len(started) == 2 and len(started[1]) == 4 and not masks  # erneut ohne Abdeckung, kein Abdeck-Fenster
+    assert dialog.selected.label.startswith("KI-Rand ·")  # das erste Bild bleibt unter "Neu"
 
 
 def test_refused_error_type_is_kept():

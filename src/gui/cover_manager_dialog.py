@@ -2582,14 +2582,22 @@ class CoverManagerDialog(QDialog):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle("Ergebnis bitte prüfen")
-        box.setText("Das Motiv weicht stark vom Original ab. Die KI hat es vermutlich verändert, zum Beispiel Figuren "
-                    "doppelt gezeichnet oder verschoben, und die zurückgeholten Stellen passen dann nicht mehr.\n\n"
-                    "Sieh dir das Bild an, bevor du es zuweist. Ein neuer Versuch fällt oft besser aus.")
-        btn_again = box.addButton("Neuer Versuch …", QMessageBox.ButtonRole.AcceptRole)
+        masked = self._extend_masking is not None
+        box.setText("Das Ergebnis sieht nicht sauber aus. Die KI hat das Motiv vermutlich als Kasten mit sichtbaren "
+                    "Kanten eingesetzt oder es verändert, zum Beispiel Figuren doppelt gezeichnet oder verschoben"
+                    + (", und die zurückgeholten Stellen passen dann nicht mehr" if masked else "") + ".\n\n"
+                    "Sieh dir das Bild an, bevor du es zuweist. Ein neuer Versuch (1 Bildaufruf) fällt oft "
+                    "besser aus.")
+        btn_again = box.addButton("Neuer Versuch …" if masked else "Neuer Versuch",
+                                  QMessageBox.ButtonRole.AcceptRole)
         box.addButton("Bild behalten", QMessageBox.ButtonRole.RejectRole)
         box.exec()
-        if box.clickedButton() == btn_again:
+        if box.clickedButton() != btn_again:
+            return
+        if masked:
             self._open_mask_dialog()
+        elif self._extend_source is not None and self._ki_ready():
+            self._start_extend(self._extend_source)
 
     def _add_edge_version(self, source: SideSource, image: Image.Image, name: str, kind: str, meta: dict):
         base = source.candidate

@@ -269,7 +269,9 @@ def generate_art(source: str, req: GenerationRequest, client=None, model: str = 
 EXTEND_PROMPT = (
     "Extend (outpaint) the attached image to a {shape} format. Keep the original image completely unchanged "
     "and centered at its full size; only continue the background, colors and textures naturally beyond its "
-    "edges so the result is one seamless picture. Do not add new text, letters, logos, characters or objects. "
+    "edges so the result is one seamless picture. Do not paste the original as a separate panel: there must be "
+    "no visible seam, border, frame or straight edge where the original ends, and anything cut off at its "
+    "edges continues naturally into the new area. Do not add new text, letters, logos, characters or objects. "
     "If you cannot create this image, return no image and instead state the specific reason in one short "
     "German sentence."
 )
@@ -301,6 +303,13 @@ EXTEND_MAX_SHIFT = 0.10  # weiter weicht keine Kante ab; schuetzt vor Fehlmessun
 EXTEND_STRIP_WIDTH = 0.03
 EXTEND_STRIP_INSET = 0.025
 EXTEND_DOUBTFUL_DIFFERENCE = 15.0  # Erfahrungswert aus 27 Testbildern: Darueber hat die KI das Motiv oft veraendert
+# Naht: Manchmal setzt die KI das Motiv als Kasten ein und malt nur aussen herum; dann laeuft an seinem Rand
+# eine harte senkrechte (bzw. waagrechte) Kante durchs Bild. Gemessen wird der Anteil der Zeilen, in denen
+# zwei Nachbarpixel dort deutlich springen, abzueglich des Ueblichen in der Umgebung. 27 Testbilder ohne
+# Kasten: hoechstens 0,26; ein Bild mit Kasten 0,51, ein Bild mit verdoppelten Figuren 0,43.
+EXTEND_SEAM_JUMP = 12
+EXTEND_SEAM_LIMIT = 0.35
+EXTEND_SEAM_SEARCH = 0.012  # so weit (Anteil der Bildbreite) darf die Kante neben der erwarteten Stelle liegen
 
 
 @dataclass(frozen=True)
@@ -313,10 +322,40 @@ class ExtendMasking:
 class MaskedExtension:
     image: Image.Image
     edge_difference: float
+    seam: float = 0.0
 
     @property
     def doubtful(self) -> bool:
-        return self.edge_difference > EXTEND_DOUBTFUL_DIFFERENCE
+        return self.edge_difference > EXTEND_DOUBTFUL_DIFFERENCE or self.seam > EXTEND_SEAM_LIMIT
+
+
+def seam_strength(generated: Image.Image, original_size) -> float:
+    """Wie deutlich an den Raendern des Originals eine durchgehende harte Kante im KI-Bild steht (0 bis 1)"""
+    gray = generated.convert("L")
+    box = _expected_box(gray.size, original_size)
+    if box[2] - box[0] >= gray.width - 2:  # oben und unten erweitert: Spalten und Zeilen tauschen
+        if box[3] - box[1] >= gray.height - 2:
+            return 0.0
+        gray = gray.transpose(Image.Transpose.TRANSPOSE)
+        box = (box[1], box[0], box[3], box[2])
+    width, height = gray.size
+    if width < 8 or height < 8:
+        return 0.0
+    # Streifen oben und unten (Schrift, Balken) setzen sich oft sauber fort und zaehlen nicht mit
+    top, bottom = round(height * 0.15), round(height * 0.85)
+    jumps = ImageChops.difference(gray.crop((1, top, width, bottom)), gray.crop((0, top, width - 1, bottom)))
+    hits = jumps.point(lambda value: 255 if value > EXTEND_SEAM_JUMP else 0)
+    profile = [value / 255 for value in hits.resize((width - 1, 1), Image.Resampling.BOX).tobytes()]
+    near = max(2, round(width * EXTEND_SEAM_SEARCH))
+    result = 0.0
+    for edge in (box[0], box[2]):
+        x = round(edge)
+        window = profile[max(0, x - near): x + near]
+        around = sorted(profile[max(0, x - 6 * near): max(0, x - 2 * near)] + profile[x + 2 * near: x + 6 * near])
+        if window:
+            usual = around[len(around) // 2] if around else 0.0
+            result = max(result, max(window) - usual)
+    return result
 
 
 def _weighted_mean(image: Image.Image, weight: Image.Image) -> float:
@@ -401,7 +440,7 @@ def restore_covered(generated: Image.Image, original: Image.Image, shapes) -> Ma
     # Die Form selbst bleibt voll deckend, weich wird es nur nach aussen
     patch = covered.filter(ImageFilter.GaussianBlur(radius)).point(lambda value: min(255, value * 2))
     result.paste(original, (round(box[0] * scale_x), round(box[1] * scale_y)), patch)
-    return MaskedExtension(result, edge_difference)
+    return MaskedExtension(result, edge_difference, seam_strength(generated, original.size))
 
 
 def extend_masked(client, model: str, image_bytes: bytes, orientation: str, masking: ExtendMasking,
@@ -424,8 +463,17 @@ def extend_masked(client, model: str, image_bytes: bytes, orientation: str, mask
                          "image_size": image_size or get_image_size()},
     )
     result = restore_covered(generated, original, masking.shapes)
-    log.info("KI-Rand abgedeckt: Abweichung am Rand %.1f", result.edge_difference)
+    log.info("KI-Rand abgedeckt: Abweichung am Rand %.1f, Naht %.2f", result.edge_difference, result.seam)
     return result
+
+
+def check_extension(image: Image.Image, image_bytes: bytes) -> MaskedExtension:
+    """KI-Rand ohne Abdeckung: Das Bild bleibt wie es ist, geprueft wird nur auf eine harte Naht"""
+    with Image.open(io.BytesIO(image_bytes)) as img:
+        size = img.size
+    seam = seam_strength(image, size)
+    log.info("KI-Rand: Naht %.2f", seam)
+    return MaskedExtension(image, 0.0, seam)
 
 
 # --- Rueckseite ---------------------------------------------------------------------------------
