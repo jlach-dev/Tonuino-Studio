@@ -490,6 +490,11 @@ QLabel#folderNameLabel {
     font-size: 10pt;
 }
 
+QLabel#folderSeriesLabel {
+    color: @OVERLAY2@;
+    font-size: 9pt;
+}
+
 /* Read-only Ordnerliste: mp3/advert Tonuio-Systemordner */
 QLabel#folderBadgeSpecial {
     background-color: @BASE@;

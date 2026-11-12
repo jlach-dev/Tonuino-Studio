@@ -163,6 +163,7 @@ class LibraryMixin:
         self.action_library_rescan.setEnabled(True)
         self.library_view.set_library(self._library, index, get_archive(self, ask=False))
         self.library_view.set_sd_map(self._sd_album_map)
+        self._refresh_folder_series()
         if self.current_folder is not None:
             self._update_library_hint(self.current_folder)
         if self._library_rescan_pending:
@@ -227,10 +228,51 @@ class LibraryMixin:
             mode = self._ask_replace_or_append(target, len(paths))
             if mode is None:
                 return
+        if target is None:  # neue Ordner: Alben, die schon auf der Karte liegen, nicht doppelt anlegen
+            present = self._albums_already_on_card(paths)
+            if present:
+                answer = self._ask_already_on_card(present, len(paths))
+                if answer is None:
+                    return
+                if answer == "skip":
+                    paths = [p for p in paths if p not in present]
+                    if not paths:
+                        return
         for i, path in enumerate(paths):
             # mehrere Alben auf einen Ordner: nur das erste ersetzt, die weiteren haengen an
             self._import_queue.append((path, target, mode if i == 0 else library_import.MODE_APPEND, None))
         self._start_next_import()
+
+    def _albums_already_on_card(self, paths: list) -> dict:
+        """Pfad -> (Ordnernummer, Albumname) fuer gezogene Alben, die schon auf der SD-Karte liegen"""
+        present = {}
+        index = self.library_view.index
+        for path in paths:
+            album = index.find(path) if index is not None else None
+            folder = self._sd_album_map.get(album.album_id) if album is not None and album.album_id else None
+            if folder is not None and self.sd_card is not None and folder in self.sd_card.folders:
+                present[path] = (folder, album.name)
+        return present
+
+    def _ask_already_on_card(self, present: dict, total: int):
+        """Rueckfrage: "skip" (nur die neuen anlegen), "add" (trotzdem neu) oder None (abbrechen)"""
+        lines = [f"„{name}“ liegt schon in Ordner {folder:02d}" for folder, name in list(present.values())[:12]]
+        if len(present) > 12:
+            lines.append(f"… und {len(present) - 12} weitere")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Schon auf der SD-Karte")
+        box.setText(("Dieses Album liegt" if len(present) == 1 else f"{len(present)} dieser Alben liegen")
+                    + " schon auf der SD-Karte:\n\n" + "\n".join(lines))
+        rest = total - len(present)
+        skip = box.addButton("Überspringen" + (f" (nur {rest} neue anlegen)" if rest else ""),
+                             QMessageBox.ButtonRole.AcceptRole)
+        add = box.addButton("Trotzdem als neuen Ordner", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Abbrechen", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(skip)
+        box.exec()
+        clicked = box.clickedButton()
+        return "skip" if clicked is skip else "add" if clicked is add else None
 
     def _on_tracks_dropped(self, paths: list, identity):
         """Einzelne Tracks (aus dem Album-Panel oder dem Explorer) auf die Ordnerliste

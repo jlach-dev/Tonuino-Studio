@@ -329,8 +329,8 @@ def is_reserved(card: MediahubCard) -> bool:
     return bool(card.sd_path) and card.device_status in (NOT_ASSIGNED, ASSIGNED_OTHER)
 
 
-COL_CHECK, COL_NAME, COL_NUMBER, COL_ASSIGNED, COL_RESERVED, COL_SD, COL_LIBRARY, COL_COVER = range(8)
-CARD_HEADERS = ["", "Karte", "Nummer", "Zugewiesen", "Vorgemerkt", "SD-Karte", "Bibliothek", "Cover"]
+COL_CHECK, COL_NAME, COL_SERIES, COL_NUMBER, COL_ASSIGNED, COL_RESERVED, COL_SD, COL_LIBRARY, COL_COVER = range(9)
+CARD_HEADERS = ["", "Karte", "Serie", "Nummer", "Zugewiesen", "Vorgemerkt", "SD-Karte", "Bibliothek", "Cover"]
 FILTER_MARK = " ▾"  # am Spaltenkopf: hier ist gefiltert
 
 
@@ -364,7 +364,7 @@ class KnownCardsTable(QWidget):
         header = self.tree.header()
         header.setSectionResizeMode(COL_CHECK, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
-        for column in range(COL_NUMBER, COL_COVER + 1):
+        for column in range(COL_SERIES, COL_COVER + 1):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(False)
@@ -410,7 +410,10 @@ class KnownCardsTable(QWidget):
 
     # --- Inhalt -----------------------------------------------------------------------
 
-    def set_cards(self, cards: List[MediahubCard], has_cover: Dict[str, bool], reachable: bool):
+    def set_cards(self, cards: List[MediahubCard], has_cover: Dict[str, bool], reachable: bool,
+                  series: Optional[Dict[str, str]] = None):
+        """series: Kartennummer -> Serie (wie in der Bibliothek)"""
+        series = series or {}
         self._reachable = reachable
         self._missing = {c.card_id for c in cards if needs_transfer(c)}
         self._reserved = {c.card_id for c in cards if is_reserved(c)}
@@ -423,7 +426,7 @@ class KnownCardsTable(QWidget):
             status = STATUS_TEXT.get(card.device_status, "?")
             library = "✓" if card.library_path else "fehlt"
             reserved = "?" if not card.device_status else ("✓" if is_reserved(card) else "–")
-            item = QTreeWidgetItem(["", card.label, format_card_id(card.card_id), status, reserved, folder, library,
+            item = QTreeWidgetItem(["", card.label, series.get(card.card_id) or "–", format_card_id(card.card_id), status, reserved, folder, library,
                                     "✓" if has_cover.get(card.card_id) else "–"])
             item.setData(0, FOLDER_ROLE, card.card_id)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -554,7 +557,7 @@ class KnownCardsTable(QWidget):
         needle = self.filter_edit.text().strip().casefold()
         for row in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(row)
-            text = (item.text(COL_NAME) + " " + str(item.data(0, FOLDER_ROLE))).casefold()
+            text = " ".join((item.text(COL_NAME), item.text(COL_SERIES), str(item.data(0, FOLDER_ROLE)))).casefold()
             hidden = bool(needle) and needle not in text
             for column, values in self._hidden_values.items():
                 if item.text(column) in values:
@@ -685,6 +688,10 @@ class FolderPage(QWidget):
         self.title_label.setObjectName("folderTitle")
         self.title_label.setWordWrap(True)
         info.addWidget(self.title_label)
+        self.series_label = QLabel()  # Serie wie in der Bibliothek, wie auf der Kartenseite
+        self.series_label.setObjectName("folderSubtitle")
+        self.series_label.hide()
+        info.addWidget(self.series_label)
         self.path_label = QLabel()
         self.path_label.setObjectName("folderSubtitle")
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -730,6 +737,10 @@ class FolderPage(QWidget):
         self.can_delete_files = False
         add_file_delete_menu(self.file_list, lambda: self.can_delete_files, self.delete_file_requested)
         layout.addWidget(self.file_list, 1)
+
+    def set_series(self, series: str):
+        self.series_label.setText(series)
+        self.series_label.setVisible(bool(series))
 
     def show_folder(self, folder: str, meta: List[str], preview_path: str, cards: List[MediahubCard],
                     has_cover: Dict[str, bool], can_assign: bool, can_cover: bool = False,

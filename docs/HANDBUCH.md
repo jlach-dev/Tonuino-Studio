@@ -1,6 +1,6 @@
 # Tonuino-Studio – Benutzerhandbuch
 
-Gilt für Version 2.1.0. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
+Gilt für Version 2.2.0. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
 
 > Die Bilder zeigen die echte Oberfläche, aber erfundene Hörspiele mit selbst gezeichneten Covern. Sie entstehen mit `tools/make_manual_screenshots.py`.
 
@@ -154,7 +154,8 @@ Die Grenzen: 99 Ordner, 255 Tracks je Ordner. Die Systemordner **mp3** und **adv
 - **Umbenennen:** Doppelklick auf den Ordner oder Titel, oder der Knopf mit dem Tooltip **Ordner umbenennen (der Name wird in die Tags der Tracks geschrieben)**. Der Name landet in einem eigenen Tag aller Tracks; dein Album-Tag bleibt unberührt. Leerst du das Feld, gilt wieder der Album-Tag. Enter oder ein Klick daneben übernimmt, Esc verwirft. Der Ordner muss dafür Tracks enthalten. Die Nummer auf der Karte ändert sich nie.
 - **Ordner löschen** im Kopfbereich entfernt den gezeigten Ordner samt Inhalt nach einer Rückfrage endgültig. RFID-Karten dieses Ordners laufen danach ins Leere.
 - **Rechtsklick in der Ordnerliste:** **Umbenennen** (F2), **Ordnernummer ändern …**, **Ordner löschen …** (Entf), dazu **Neuer Ordner**, **SD-Karte bereinigen …** und **SD-Karte leeren und neu einrichten …**.
-- **Mehrere Ordner löschen:** Markiere sie mit **Strg**- oder **Umschalt**-Klick und drücke **Entf** oder wähle im Rechtsklick-Menü **… Ordner löschen …**. Die Rückfrage zählt die Ordner auf.
+- **Mehrere Ordner löschen:** Markiere sie mit **Strg**- oder **Umschalt**-Klick und drücke **Entf** oder wähle im Rechtsklick-Menü **… Ordner löschen …**. Die Rückfrage zählt die Ordner auf und nennt Trackzahl und Größe.
+- **Serie und Filter:** Hinter dem Ordnernamen steht seine **Serie**, sobald die Bibliothek den Ordner einem Album zuordnet: das Serienprofil im Cover-Archiv, sonst der Interpret des Albums, etwa „Bibi und Tina“. Sie steht auch im Kopf der Ordnerseite. Über der Liste wählst du **Alle Serien**, eine Serie oder **Ohne Serie**; **Ordner filtern …** sucht in Nummer, Name und Serie.
 - **Ordnernummer ändern …:** Ist die Nummer belegt, tauschen beide Ordner ihre Nummern. RFID-Karten gehen nach der Nummer und spielen danach einen anderen Ordner oder nichts, bis du sie neu programmierst.
 - Der Kopf des Ordners zeigt **aus Bibliothek: …**, wenn der Ordner zu einem Bibliotheksalbum gehört, und warnt, wenn die Bibliothek mehr Tracks hat als die Karte.
 
@@ -247,6 +248,7 @@ Jede Kachel zeigt Cover, Titel, Interpret, Trackzahl, Dauer und Abzeichen:
 | Abzeichen | Bedeutung |
 | --- | --- |
 | **auf SD als 03** | Das Album liegt in Ordner 03 der geöffneten Karte. |
+| **auf ESPuino** | Nur im ESPuino-Modus: Das Album liegt schon auf der SD-Karte des ESPuino. |
 | **Kartencover ✓** | Im Archiv gibt es ein Kartencover. |
 | **neu** | Das Album ist noch nicht im Archiv. |
 | **offline** | Der Speicherort ist gerade nicht erreichbar. |
@@ -261,7 +263,7 @@ Doppelklick öffnet das Album mit Trackliste und denselben Knöpfen. **Zurück z
 
 Die SD-Karte muss geöffnet sein. Ziehe dann:
 
-- **auf eine freie Fläche der Ordnerliste:** Jedes Album bekommt einen neuen Ordner.
+- **auf eine freie Fläche der Ordnerliste:** Jedes Album bekommt einen neuen Ordner. Liegt ein Album schon auf der Karte (Kachel mit **auf SD als …**), fragt die App nach: **Überspringen** legt nur die neuen an, **Trotzdem als neuen Ordner** kopiert es ein zweites Mal.
 - **auf einen Ordner mit Tracks:** Die App fragt **Ersetzen**, **Anhängen** oder **Abbrechen**. Bei mehreren Alben ersetzt nur das erste, die weiteren werden angehängt.
 - **auf die Ordneransicht:** Das gilt für den gerade gezeigten Ordner.
 
@@ -689,12 +691,13 @@ Ist **Danach eine Karte für dieses Album zuweisen** angehakt, öffnet sich ansc
 
 ### ESPuino direkt: Seitenleiste, bekannte Karten und Status
 
-Die **Seitenleiste** zeigt den ESPuino: Adresse, Firmware, Größe und freien Platz der SD-Karte, darunter die Ordner auf seiner SD-Karte (**Auf dem ESPuino**). Ordner, auf die keine Karte zeigt, sind grau. Hinter dem Ordnernamen steht seine **Serie**: das Serienprofil des Albums im Cover-Archiv, sonst der Interpret des Albums in der Bibliothek, etwa „Bibi und Tina“. Darüber wählst du **Alle Serien**, eine Serie oder **Ohne Serie**. Das Feld **Ordner filtern …** grenzt die Liste zusätzlich ein. Ein Klick auf einen Ordner mit Karte öffnet dieselbe Ansicht wie ein Klick auf die Karte: oben Karte, Cover-Manager und Übertragen, darunter **Karten für diesen Ordner** (die gezeigte fett, ein Klick wechselt zur anderen) mit **Weitere Karte zuweisen …**, darunter die Dateien. Ein Ordner ohne Karte zeigt das passende Album aus der Bibliothek, seine Dateien, **Karte zuweisen …** und **Cover-Manager …**. Mehrere Karten für dasselbe Album sind kein Problem, jede spielt es. Rechtsklick auf einen Ordner → **Karte zuweisen …** mit diesem Ordner. **Neu einlesen** liest alles erneut.
+Die **Seitenleiste** zeigt den ESPuino: Adresse, Firmware, Größe und freien Platz der SD-Karte, darunter die Ordner auf seiner SD-Karte (**Auf dem ESPuino**). Ordner, auf die keine Karte zeigt, sind grau. Hinter dem Ordnernamen steht seine **Serie**: das Serienprofil des Albums im Cover-Archiv, sonst der Interpret des Albums in der Bibliothek, etwa „Bibi und Tina“. Darüber wählst du **Alle Serien**, eine Serie oder **Ohne Serie**. Das Feld **Ordner filtern …** grenzt die Liste zusätzlich ein. Ein Klick auf einen Ordner mit Karte öffnet dieselbe Ansicht wie ein Klick auf die Karte: oben Karte, Cover-Manager und Übertragen, darunter **Karten für diesen Ordner** (die gezeigte fett, ein Klick wechselt zur anderen) mit **Weitere Karte zuweisen …**, darunter die Dateien. Ein Ordner ohne Karte zeigt das passende Album aus der Bibliothek mit seiner Serie unter dem Titel, seine Dateien, **Karte zuweisen …** und **Cover-Manager …**. Mehrere Karten für dasselbe Album sind kein Problem, jede spielt es. Rechtsklick auf einen Ordner → **Karte zuweisen …** mit diesem Ordner. **Neu einlesen** liest alles erneut.
 
 Der Reiter **ESPuino-Karten** zeigt die **bekannten Karten**. Die App merkt sich selbst, wofür jede Karte steht (Ordner, Abspielmodus und das Album in der Bibliothek), in `espuino/cards.json` im Datenordner. Denn die Zuweisungen speichert der ESPuino in seinem eigenen Speicher, die Dateien liegen auf der SD-Karte: Nach einem Wechsel der SD-Karte zeigen seine Karten ins Leere, und ein zweiter ESPuino kennt die Karten gar nicht. Zuweisungen, die die App noch nicht kennt, übernimmt sie beim Einlesen.
 
 Die Spalten der Tabelle:
 
+- **Serie:** wie in der Bibliothek, das Serienprofil im Cover-Archiv, sonst der Interpret des Albums. Das Feld **Karten filtern …** sucht auch darin.
 - **Zugewiesen:** ✓ auf diesem ESPuino so zugewiesen, – nicht zugewiesen, **anders** dort anders belegt, ? ESPuino nicht erreichbar.
 - **SD-Karte:** Ordner auf der SD-Karte des ESPuino ✓ vorhanden, **fehlt**, ? unbekannt.
 - **Bibliothek:** Album in der Bibliothek ✓ gefunden oder **fehlt**. Nur mit Album lässt sich eine Karte auf den ESPuino übertragen.
@@ -847,6 +850,10 @@ Sichere vor allem vor Schritten, die sich nicht rückgängig machen lassen: **SD
 ## 16. Fehlerbehebung
 
 Die Statusleiste unten im Hauptfenster zeigt die letzte Meldung, etwa Ergebnisse von Importen, RFID-Fehler oder fehlende Programme wie FFmpeg. Schau dort zuerst nach.
+
+### Fehler melden
+
+**Einstellungen** → **Fehler melden / Feedback …** stellt Version, Modus, System, bei ESPuino die Firmware und die letzten Zeilen des Protokolls zusammen. Benutzerordner, IP-Adressen und Kartennummern sind darin unkenntlich gemacht. Beschreibe oben, was passiert ist. Die App sendet nichts selbst: **In Zwischenablage kopieren**, oder **Im Forum melden …** (kopiert und öffnet das Forum zum Modus) bzw. **GitHub-Issue öffnen …** (kopiert und öffnet ein neues Issue, dafür brauchst du ein GitHub-Konto). Dort fügst du den Text ein.
 
 ### Die KI liefert kein Bild
 

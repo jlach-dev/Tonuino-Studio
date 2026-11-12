@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QFrame, QFileDialog, QMessageBox,
     QStatusBar, QSplitter, QToolButton, QApplication, QLineEdit,
     QAbstractItemView, QProgressDialog,
-    QMenuBar, QStyle, QStyleOptionViewItem, QDialog, QTabBar, QInputDialog, QMenu
+    QMenuBar, QStyle, QStyleOptionViewItem, QDialog, QTabBar, QInputDialog, QMenu, QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint, QRect, QProcess, QProcessEnvironment
 from PyQt6.QtGui import QCursor, QPixmap, QIcon, QActionGroup, QBrush, QColor, QKeySequence, QShortcut
@@ -62,6 +62,30 @@ SHOW_ALL_MP3_KEY = "library/show_all_mp3"
 # Zuletzt geoeffneter SD-Karten-Pfad (Vorbelegung der Verzeichnisauswahl)
 LAST_SD_PATH_KEY = "library/last_sd_path"
 READER_MODE_KEY = "rfid/reader_mode"
+FOLDER_SERIES_ROLE = Qt.ItemDataRole.UserRole + 7  # Serie des Ordners (Filter in der Ordnerliste)
+
+
+def folder_size(folder) -> int:
+    """Bytes aller Dateien eines Ordners (fuer die Loesch-Rueckfrage); unlesbares zaehlt nicht"""
+    total = 0
+    try:
+        for entry in os.scandir(folder.path):
+            try:
+                if entry.is_file():
+                    total += entry.stat().st_size
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return total
+
+
+def format_size(size: int) -> str:
+    if size >= 1024 ** 3:
+        return f"{size / 1024 ** 3:.1f} GB".replace(".", ",")
+    if size >= 1024 ** 2:
+        return f"{size / 1024 ** 2:.1f} MB".replace(".", ",")
+    return f"{max(1, size // 1024)} KB"
 
 
 class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, QMainWindow):
@@ -260,6 +284,11 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
 
     # --- Fenstergroesse / Vollbild ----------------------------------------------------
 
+    def _show_feedback(self):
+        from gui.feedback_dialog import FeedbackDialog
+        state = getattr(self, "_espuino_state", None)
+        FeedbackDialog(self, firmware=getattr(state, "firmware", "") or "").exec()
+
     def _create_menu_bar(self, menu_bar: QMenuBar):
         """Erstellt das Menue Einstellungen in der Menueleiste des Fensters
         (Updates, RFID-Leser)."""
@@ -271,6 +300,9 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
         action_about = menu.addAction(f"Über {APP_NAME} …")
         action_about.triggered.connect(lambda: show_about(self))
         self.action_about = action_about
+        action_feedback = menu.addAction("Fehler melden / Feedback …")
+        action_feedback.triggered.connect(self._show_feedback)
+        self.action_feedback = action_feedback
 
         menu.addSeparator()
 
@@ -509,6 +541,18 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
 
         self.folder_list_label = QLabel("Ordner:")
         layout.addWidget(self.folder_list_label)
+        # Filter wie im ESPuino-Modus: Suchfeld und Serienauswahl
+        self.folder_filter_edit = QLineEdit()
+        self.folder_filter_edit.setPlaceholderText("Ordner filtern …")
+        self.folder_filter_edit.setClearButtonEnabled(True)
+        self.folder_filter_edit.textChanged.connect(self._apply_folder_filter)
+        layout.addWidget(self.folder_filter_edit)
+        self.folder_series_combo = QComboBox()
+        self.folder_series_combo.setToolTip("Nur Ordner einer Serie zeigen (Serienprofil im Archiv, sonst "
+                                            "Interpret des Albums in der Bibliothek)")
+        self.folder_series_combo.currentIndexChanged.connect(self._apply_folder_filter)
+        self.folder_series_combo.hide()
+        layout.addWidget(self.folder_series_combo)
         self.folder_list = FolderListWidget()
         self.folder_list.setObjectName("folderList")
         self.folder_list.setToolTip("Alben aus der Bibliothek oder dem Explorer hierher ziehen: auf freie Fläche "
@@ -997,12 +1041,68 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
             self.folder_list.addItem(item)
             self.folder_list.setItemWidget(item, self._create_folder_item_widget(folder, folder.name))
 
+        self._refresh_folder_series()
+
         # Namen der noch unbekannten Ordner im Hintergrund nachladen
         pending = [f for i, f in self.sd_card.folders.items() if i not in self._folder_name_cache]
         if pending:
             self._folder_name_worker = FolderNameWorker(pending, self.metadata_manager)
             self._folder_name_worker.name_found.connect(self._set_folder_name)
             self._folder_name_worker.start()
+
+    # --- Serie und Filter in der Ordnerliste ---------------------------------------
+
+    def _folder_series(self, folder_index) -> str:
+        """Serie eines Ordners wie in der Bibliothek (ueber das zugeordnete Bibliotheksalbum)"""
+        if not isinstance(folder_index, int):
+            return ""
+        album_id = next((aid for aid, idx in self._sd_album_map.items() if idx == folder_index), "")
+        return self.library_view.series_name(album_id) if album_id else ""
+
+    def _refresh_folder_series(self):
+        """Serie je Ordner neu bestimmen (nach dem Abgleich mit der Bibliothek)"""
+        names = set()
+        for row in range(self.folder_list.count()):
+            item = self.folder_list.item(row)
+            series = self._folder_series(item.data(Qt.ItemDataRole.UserRole))
+            item.setData(FOLDER_SERIES_ROLE, series)
+            widget = self.folder_list.itemWidget(item)
+            label = getattr(widget, "series_label", None)
+            if label is not None:
+                label.setText(series)
+                label.setVisible(bool(series))
+            if series:
+                names.add(series)
+        combo = self.folder_series_combo
+        current = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Alle Serien", None)
+        for name in sorted(names, key=str.casefold):
+            combo.addItem(name, name)
+        combo.addItem("Ohne Serie", "")
+        index = combo.findData(current) if current is not None else 0
+        combo.setCurrentIndex(max(0, index))
+        combo.setVisible(bool(names))
+        combo.blockSignals(False)
+        self._apply_folder_filter()
+        if self.current_folder is not None and not self.current_folder.is_special:
+            self._update_folder_title(self.current_folder)
+
+    def _apply_folder_filter(self, *_):
+        needle = self.folder_filter_edit.text().strip().casefold()
+        series = self.folder_series_combo.currentData()  # None: alle Serien
+        for row in range(self.folder_list.count()):
+            item = self.folder_list.item(row)
+            identity = item.data(Qt.ItemDataRole.UserRole)
+            widget = self.folder_list.itemWidget(item)
+            name = widget.name_label.text() if widget is not None else ""
+            item_series = item.data(FOLDER_SERIES_ROLE) or ""
+            number = f"{identity:02d}" if isinstance(identity, int) else str(identity)
+            hidden = bool(needle) and needle not in f"{number} {name} {item_series}".casefold()
+            if series is not None and item_series != series:
+                hidden = True
+            item.setHidden(hidden)
 
     def _stop_folder_name_worker(self):
         worker = self._folder_name_worker
@@ -1152,6 +1252,11 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
         name_label.setObjectName("folderNameLabelSpecial" if folder.is_special else "folderNameLabel")
         row.addWidget(name_label, 1)
         widget.name_label = name_label
+        series_label = QLabel()
+        series_label.setObjectName("folderSeriesLabel")
+        series_label.hide()
+        row.addWidget(series_label)
+        widget.series_label = series_label
 
         return widget
 
@@ -1219,6 +1324,9 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
         """Titel und Untertitel im Kopfbereich"""
         self.folder_title.setText(folder.name if folder.is_special else self._resolve_folder_name(folder))
         subtitle = "Tonuino-Systemordner (nicht editierbar)" if folder.is_special else f"Ordner {folder.index:02d}"
+        series = "" if folder.is_special else self._folder_series(folder.index)
+        if series:
+            subtitle += f"  ·  {series}"
         self.folder_title_row.relayout()
         self.folder_subtitle.setText(subtitle)
         # Hat der Ordner keinen eigenen Namen (aus den Tags), waere der Untertitel
@@ -1649,17 +1757,19 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
     def _delete_confirmation_text(self, folders: list) -> str:
         rfid_hint = ("\n\nRFID-Karten, die auf {} zeigen, laufen danach ins Leere, bis du sie neu "
                      "programmierst.")
+        size = sum(folder_size(f) for f in folders)
+        amount = f" ({format_size(size)})" if size else ""
         if len(folders) == 1:
             folder = folders[0]
             return (f"Ordner {folder.index:02d} „{self._resolve_folder_name(folder)}“ mit "
-                    f"{folder.track_count} Track(s) wirklich von der SD-Karte löschen? Das lässt sich nicht "
+                    f"{folder.track_count} Track(s){amount} wirklich von der SD-Karte löschen? Das lässt sich nicht "
                     "rückgängig machen."
                     + rfid_hint.format("diesen Ordner"))
         names = [f"{f.index:02d} {self._resolve_folder_name(f)}" for f in folders[:12]]
         if len(folders) > 12:
             names.append(f"… und {len(folders) - 12} weitere")
         tracks = sum(f.track_count for f in folders)
-        return (f"{len(folders)} Ordner mit zusammen {tracks} Track(s) wirklich von der SD-Karte löschen? Das "
+        return (f"{len(folders)} Ordner mit zusammen {tracks} Track(s){amount} wirklich von der SD-Karte löschen? Das "
                 "lässt sich nicht rückgängig machen.\n\n" + "\n".join(names) + rfid_hint.format("diese Ordner"))
 
     def _on_folders_deleted(self, folders: list, errors: Optional[list], failure: str):

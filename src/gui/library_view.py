@@ -342,6 +342,7 @@ class LibraryView(QWidget):
         self.library: Optional[Library] = None
         self.index = LibraryIndex()
         self.sd_map: Dict[str, int] = {}  # Album-ID -> Ordnernummer auf der SD-Karte
+        self.device_map: Dict[str, str] = {}  # ESPuino: Albumpfad (klein) -> Ordner auf seiner SD-Karte
         self._series_of: Dict[str, str] = {}  # Album-ID -> Serien-ID (Archiv)
         self._series_names: Dict[str, str] = {}
         self._card_ids: set = set()  # Album-IDs mit Kartencover im Archiv
@@ -561,6 +562,21 @@ class LibraryView(QWidget):
         self.sd_map = dict(sd_map or {})
         self._refresh()
 
+    def series_name(self, album_id: str) -> str:
+        """Serie eines Albums: Serienprofil im Archiv, sonst der Interpret des Bibliotheksalbums"""
+        if not album_id:
+            return ""
+        name = self._series_names.get(self._series_of.get(album_id, ""), "")
+        if name:
+            return name
+        album = next((a for a in self.index.albums if a.album_id == album_id), None)
+        return (album.artist or "").strip() if album is not None else ""
+
+    def set_device_map(self, device_map: Dict[str, str]):
+        """ESPuino-Modus: Alben, die schon auf der SD-Karte des ESPuino liegen"""
+        self.device_map = {os.path.normcase(k): v for k, v in (device_map or {}).items()}
+        self._refresh()
+
     def set_scanning(self, scanning: bool):
         self.btn_rescan.setEnabled(not scanning)
         if scanning:
@@ -597,6 +613,8 @@ class LibraryView(QWidget):
             badges.append((STATE_LABELS[STATE_OFFLINE], "Offline"))
         if album.album_id and album.album_id in self.sd_map:
             badges.append((f"auf SD als {self.sd_map[album.album_id]:02d}", "Sd"))
+        elif self.device_map and os.path.normcase(album.path) in self.device_map:
+            badges.append(("auf ESPuino", "Sd"))
         if album.album_id and album.album_id in self._card_ids:
             badges.append(("Kartencover ✓", "Card"))
         if album.state == STATE_NEW and not album.offline:

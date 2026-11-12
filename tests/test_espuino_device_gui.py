@@ -52,6 +52,7 @@ def test_source_defaults(app):
 
 def test_window_shows_device_and_known_cards(setup):
     from core.espuino_cards import ASSIGNED
+    from gui.espuino_device_view import COL_LIBRARY, COL_RESERVED, COL_SD
     from gui.main_window import MainWindow
     window = MainWindow()
     try:
@@ -63,9 +64,9 @@ def test_window_shows_device_and_known_cards(setup):
         assert side.folder_list.drop_enabled
         table = page.cards_table.tree
         assert table.topLevelItemCount() == 2 and page.pages.currentIndex() == 2
-        assert table.headerItem().text(5) == "SD-Karte" and table.headerItem().text(6) == "Bibliothek"
-        assert table.headerItem().text(4) == "Vorgemerkt"
-        assert {table.topLevelItem(i).text(6) for i in range(2)} == {"fehlt"}  # kein Album in der Bibliothek
+        assert table.headerItem().text(COL_SD) == "SD-Karte" and table.headerItem().text(COL_LIBRARY) == "Bibliothek"
+        assert table.headerItem().text(COL_RESERVED) == "Vorgemerkt"
+        assert {table.topLevelItem(i).text(COL_LIBRARY) for i in range(2)} == {"fehlt"}  # kein Album in der Bibliothek
         text = page.device_text.text()
         assert "2 bekannte Karten" in text and "1 Funktionskarte" in text and "1 vom Mediahub verwaltet" in text
         window._mediahub_show_card(CARD_A)
@@ -881,6 +882,7 @@ def test_drop_album_already_on_card_is_recognised(setup, tmp_path, monkeypatch):
         window._espuino_known.save()
         window._mediahub_reload()
         assert window._espuino_existing_folders(album) == ["/Musik/Lieder"]
+        assert ("auf ESPuino", "Sd") in window.library_view.badges_for(album)  # Badge in der Bibliothek
         runs, assigned = [], []
         monkeypatch.setattr(window, "_espuino_run_transfer", lambda *a: runs.append(a))
         monkeypatch.setattr(window, "_espuino_assign", lambda **k: assigned.append(k))
@@ -971,6 +973,17 @@ def test_card_page_shows_series(setup, tmp_path):
         window._mediahub_show_card(CARD_A)
         label = window.mediahub_page.series_label
         assert label.text() == "Die Fuchsbande" and not label.isHidden()
+        # Kartentabelle: eigene Spalte, filterbar ueber Spaltenkopf und Suchfeld
+        from gui.espuino_device_view import COL_SERIES
+        table = window.mediahub_page.cards_table
+        rows = [table.tree.topLevelItem(i) for i in range(table.tree.topLevelItemCount())]
+        series = sorted(item.text(COL_SERIES) for item in rows)
+        assert series == ["Die Fuchsbande", "–"]
+        table.filter_edit.setText("fuchsbande")
+        assert sum(not item.isHidden() for item in rows) == 1
+        table.filter_edit.setText("")
+        table.set_value_filter(COL_SERIES, {"Die Fuchsbande"})
+        assert [item.text(COL_SERIES) for item in rows if not item.isHidden()] == ["–"]
     finally:
         window.close()
         window.deleteLater()

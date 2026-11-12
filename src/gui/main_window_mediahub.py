@@ -366,9 +366,11 @@ class MediahubMixin:
         device = dev.find_device(host)
         self.espuino_sidebar.set_state(host, state, folder_cards, device.label if device else "",
                                        self._espuino_folder_series(state.folders or []))
+        self.library_view.set_device_map(self._espuino_device_albums(state, data.cards))
         has_cover = self._mediahub_cover_map()
         # Uebertragen geht auch ohne ESPuino, wenn seine SD-Karte im PC steckt
-        page.cards_table.set_cards(data.cards, has_cover, state.reachable or state.folders_from_pc)
+        page.cards_table.set_cards(data.cards, has_cover, state.reachable or state.folders_from_pc,
+                                   {c.card_id: self._mediahub_card_series(c) for c in data.cards})
         if page.card is not None and mh.card_by_id(data, page.card.card_id) is not None:
             self._mediahub_show_card(page.card.card_id)
         else:
@@ -441,6 +443,18 @@ class MediahubMixin:
                 reader.assignment_done(card_id, folder)
 
         self._espuino_run_transfer([plan_album(album.tracks, folder)], local, host, [assignment], finished)
+
+    def _espuino_device_albums(self, state, cards) -> dict:
+        """Albumpfad -> Ordner auf der SD-Karte des ESPuino (fuer das Badge "auf ESPuino" in der Bibliothek)"""
+        result = {}
+        for card in cards:
+            if card.library_path and card.folder_present:
+                result[card.library_path] = card.sd_path
+        for folder in state.folders or []:
+            album = self._espuino_album_for_folder(folder)
+            if album is not None:
+                result.setdefault(album.path, folder)
+        return result
 
     def _espuino_folder_series(self, folders: list) -> dict:
         """Ordner (klein) -> Serie: das Serienprofil des Albums im Archiv, sonst der
@@ -635,6 +649,7 @@ class MediahubMixin:
         can_delete = self._espuino_delete_target() is not None
         self.mediahub_page.show_folder(folder, meta, preview, [], {}, reachable, album is not None, files,
                                        can_delete=can_delete)
+        self.mediahub_page.folder_page.set_series(self._espuino_folder_series([folder]).get(folder.casefold(), ""))
         if self.view_switch.currentIndex() != 0:
             self.view_switch.setCurrentIndex(0)
 
