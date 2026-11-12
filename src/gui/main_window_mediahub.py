@@ -358,7 +358,8 @@ class MediahubMixin:
             self._mediahub_show_overview(has_cover)
         reader = getattr(self, "_espuino_reader", None)
         if reader is not None:
-            reader.set_device(host if state.reachable else "", self._espuino_folder_choices(), state.folders or [])
+            reader.set_device(host if state.reachable else "", self._espuino_folder_choices(), state.folders or [],
+                              self._espuino_folder_notes())
         offline = "" if state.reachable else (" – ohne ESPuino" if not self._espuino_connected
                                               else " – ESPuino nicht erreichbar")
         self._status(f"{len(data.cards)} bekannte Karten" + offline)
@@ -421,6 +422,18 @@ class MediahubMixin:
         self._espuino_run_transfer([plan_album(album.tracks, folder)], local, host, [(card_id, play_mode)],
                                    finished)
 
+    def _espuino_folder_notes(self) -> dict:
+        """Ordner (klein) -> Namen der Karten, die darauf zeigen (fuer die Auswahl beim Zuweisen)"""
+        notes = {}
+        data = self._mediahub_data
+        for card in data.cards if data else []:
+            for folder in {card.sd_path, card.device_target} - {""}:
+                names = notes.setdefault(folder.casefold(), [])
+                label = f"Karte: {card.label}"
+                if label not in names:
+                    names.append(label)
+        return {k: ", ".join(v) for k, v in notes.items()}
+
     def _espuino_folder_choices(self) -> list:
         """Ordner fuer die Auswahlliste beim Zuweisen: auf dem ESPuino und die der bekannten Karten"""
         state = self._espuino_state
@@ -457,7 +470,7 @@ class MediahubMixin:
         reader.transfer_requested.connect(self._espuino_transfer_and_assign)
         reader.set_albums(self._espuino_library_albums())
         reader.set_device(host, self._espuino_folder_choices(),
-                          (state.folders or []) if state is not None else [])
+                          (state.folders or []) if state is not None else [], self._espuino_folder_notes())
         reader.destroyed.connect(lambda *_: setattr(self, "_espuino_reader", None))
         self._espuino_reader = reader
         reader.show()

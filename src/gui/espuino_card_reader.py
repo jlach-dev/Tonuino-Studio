@@ -24,16 +24,16 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 
 from PyQt6.QtCore import QUrl, Qt, pyqtSignal
-from PyQt6.QtWidgets import QCompleter
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWebSockets import QWebSocket
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QMessageBox, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QSizePolicy, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from core.espuino_device import (
-    ASSIGNABLE_MODES, FILE_MODES, DeviceError, assign_card, card_id_from_uid, sd_path_from_local, ws_url,
+    ASSIGNABLE_MODES, FILE_MODES, DeviceError, assign_card, card_id_from_uid, ws_url,
 )
 from core.espuino_transfer import safe_name
 from core.mediahub_cards import format_card_id, play_mode_label
@@ -91,6 +91,119 @@ def _show_image(label: QLabel, path: str):
 
 def _esc(text: str) -> str:
     return html.escape(text)
+
+
+def album_haystack(album) -> str:
+    """Wonach die Suche ein Album findet: Name, Titel, Interpret, Pfad"""
+    return " ".join(str(x) for x in (album.name, getattr(album, "title", ""), getattr(album, "artist", ""),
+                                     getattr(album, "path", ""))).casefold()
+
+
+def matches(needle: str, haystack: str) -> bool:
+    """Alle Woerter der Suche kommen vor (Reihenfolge egal)"""
+    return all(word in haystack for word in needle.casefold().split())
+
+
+class FolderPicker(QDialog):
+    """Ordner auf dem ESPuino oder Album aus der Bibliothek waehlen, mit Suche.
+    Ergebnis: chosen_folder und chosen_album (None bei einem ESPuino-Ordner)."""
+
+    GROUP_ROLE = Qt.ItemDataRole.UserRole + 1
+
+    def __init__(self, folders: Iterable[str], albums: Iterable, on_device: Callable[[str], bool],
+                 album_folder: Callable, parent=None, notes: Optional[dict] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Ordner oder Album wählen")
+        self.resize(1000, 600)
+        self.chosen_folder = ""
+        self.chosen_album = None
+        notes = notes or {}
+        layout = QVBoxLayout(self)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Suchen – Name, Interpret, Serie, Pfad, etwa „bibi pferd“")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._filter)
+        layout.addWidget(self.search)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Name", "Details", "Ort"])
+        self.tree.setColumnWidth(0, 340)
+        self.tree.setColumnWidth(1, 260)
+        self.tree.itemDoubleClicked.connect(lambda item, _col: self._accept_item(item))
+        self.tree.currentItemChanged.connect(lambda *_: self._update_ok())
+        layout.addWidget(self.tree, 1)
+        self.device_group = QTreeWidgetItem(["Auf dem ESPuino", ""])
+        self.library_group = QTreeWidgetItem(["Bibliothek", ""])
+        for group in (self.device_group, self.library_group):
+            group.setFlags(group.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            font = group.font(0)
+            font.setBold(True)
+            group.setFont(0, font)
+            self.tree.addTopLevelItem(group)
+        for folder in sorted(set(folders), key=str.casefold):
+            item = QTreeWidgetItem([folder.strip("/") or folder, notes.get(folder.casefold(), "")])
+            item.setData(0, Qt.ItemDataRole.UserRole, ("folder", folder))
+            item.setData(0, self.GROUP_ROLE, (folder + " " + notes.get(folder.casefold(), "")).casefold())
+            self.device_group.addChild(item)
+        for album in sorted(albums, key=lambda a: a.name.casefold()):
+            target = album_folder(album)
+            details = [getattr(album, "artist", "") or "", f"{len(album.tracks)} Titel"]
+            details.append("auf dem ESPuino" if on_device(target) else "wird übertragen")
+            item = QTreeWidgetItem([album.name, " · ".join(d for d in details if d), os.path.dirname(album.path)])
+            item.setToolTip(0, album.path)
+            item.setToolTip(1, album.path)
+            item.setData(0, Qt.ItemDataRole.UserRole, ("album", album))
+            item.setData(0, self.GROUP_ROLE, album_haystack(album))
+            self.library_group.addChild(item)
+        self.tree.expandAll()
+        buttons = QHBoxLayout()
+        self.count_label = QLabel()
+        self.count_label.setStyleSheet(f"color: {theme.OVERLAY2};")
+        buttons.addWidget(self.count_label, 1)
+        cancel = QPushButton("Abbrechen")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        self.btn_ok = QPushButton("Übernehmen")
+        self.btn_ok.setObjectName("primaryButton")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(lambda: self._accept_item(self.tree.currentItem()))
+        buttons.addWidget(self.btn_ok)
+        layout.addLayout(buttons)
+        self._filter()
+        self.search.setFocus()
+
+    def _filter(self, *_):
+        needle = self.search.text().strip()
+        first = None
+        for group in (self.device_group, self.library_group):
+            shown = 0
+            for i in range(group.childCount()):
+                item = group.child(i)
+                visible = matches(needle, item.data(0, self.GROUP_ROLE)) if needle else True
+                item.setHidden(not visible)
+                if visible:
+                    shown += 1
+                    first = first or item
+            group.setText(1, f"{shown} von {group.childCount()}" if needle else str(group.childCount()))
+        if needle and first is not None:
+            self.tree.setCurrentItem(first)
+        self._update_ok()
+
+    def _update_ok(self):
+        item = self.tree.currentItem()
+        self.btn_ok.setEnabled(item is not None and item.data(0, Qt.ItemDataRole.UserRole) is not None
+                               and not item.isHidden())
+
+    def _accept_item(self, item):
+        data = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
+        if not data:
+            return
+        kind, value = data
+        if kind == "album":
+            self.chosen_album = value
+            self.chosen_folder = ""
+        else:
+            self.chosen_folder = value
+        self.accept()
 
 
 class CardReaderDialog(QDialog):
@@ -198,36 +311,18 @@ class CardReaderDialog(QDialog):
             self.mode_combo.addItem(play_mode_label(str(mode)), mode)
         self.mode_combo.currentIndexChanged.connect(self._update_path_hint)
         form.addRow("Abspielmodus:", self.mode_combo)
-        self.album_combo = QComboBox()
-        self.album_combo.setEditable(True)
-        self.album_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.album_combo.lineEdit().setPlaceholderText("Album aus der Bibliothek suchen …")
-        completer = QCompleter(self.album_combo.model(), self.album_combo)
-        completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self.album_combo.setCompleter(completer)
-        self.album_combo.activated.connect(self._album_chosen)
-        completer.activated[str].connect(lambda text: self._album_chosen(self.album_combo.findText(text)))
-        self.album_combo.setToolTip("Album wählen: Fehlt es auf dem ESPuino, überträgt „Zuweisen“ es zuerst")
-        form.addRow("Aus der Bibliothek:", self.album_combo)
-        self.path_combo = QComboBox()
-        self.path_combo.setEditable(True)
-        self.path_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.path_combo.lineEdit().setPlaceholderText("Ordner auf dem ESPuino wählen oder eintragen")
-        self.path_combo.editTextChanged.connect(self._update_path_hint)
-        self.set_folders(folders)
-        self.btn_browse = QPushButton("Wählen …")
-        self.btn_browse.setObjectName("ghostButton")
-        self.btn_browse.setEnabled(bool(self.sd_root))
-        self.btn_browse.setToolTip("Auf der SD-Karte im Kartenleser wählen" if self.sd_root
-                                   else "Nur mit der SD-Karte im Kartenleser – sonst aus der Liste wählen")
-        self.btn_browse.clicked.connect(self._browse)
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("über „Wählen …“ – Ordner auf dem ESPuino oder Album aus der Bibliothek")
+        self.path_edit.textChanged.connect(self._update_path_hint)
+        self.btn_choose = QPushButton("Wählen …")
+        self.btn_choose.setToolTip("Ordner auf dem ESPuino oder Album aus der Bibliothek suchen und wählen")
+        self.btn_choose.clicked.connect(self.choose)
         path_row = QWidget()
         path_layout = QHBoxLayout(path_row)
         path_layout.setContentsMargins(0, 0, 0, 0)
-        path_layout.addWidget(self.path_combo, 1)
-        path_layout.addWidget(self.btn_browse)
-        form.addRow("Ordner/Datei:", path_row)
+        path_layout.addWidget(self.path_edit, 1)
+        path_layout.addWidget(self.btn_choose)
+        form.addRow("Ordner/Album:", path_row)
         self.path_hint = QLabel()
         self.path_hint.setWordWrap(True)
         self.path_hint.setStyleSheet(f"color: {theme.OVERLAY2};")
@@ -244,24 +339,37 @@ class CardReaderDialog(QDialog):
         row.addWidget(self.btn_assign)
         form.addRow(row)
         self.assign_box = box
+        self.folder_choices = []
+        self.albums = []
+        self.folder_notes = {}
+        self.set_folders(folders)
         box.setEnabled(bool(self.host))
         self.assign_note.setText("" if self.host else "Zum Zuweisen mit dem ESPuino verbinden.")
         return box
 
     def set_albums(self, albums: Iterable):
-        """Alben der Bibliothek zur Auswahl (Objekte mit name, path, tracks)"""
-        self.album_combo.blockSignals(True)
-        self.album_combo.clear()
-        for album in sorted(albums, key=lambda a: a.name.casefold()):
-            self.album_combo.addItem(album.name, album)
-        self.album_combo.setCurrentIndex(-1)
-        self.album_combo.setEditText("")
-        self.album_combo.blockSignals(False)
+        """Alben der Bibliothek zur Auswahl (Objekte mit name, path, tracks, artist)"""
+        self.albums = list(albums)
 
-    def _album_chosen(self, index: int):
-        album = self.album_combo.itemData(index) if index >= 0 else None
-        if album is None:
-            return
+    def set_folders(self, folders: Iterable[str], notes: Optional[dict] = None):
+        """Ordner auf dem ESPuino (und die der bekannten Karten); notes: Ordner (klein) -> Kartennamen"""
+        self.folder_choices = sorted({f for f in folders if f}, key=str.casefold)
+        if notes is not None:
+            self.folder_notes = notes
+
+    def choose(self):
+        """Auswahlfenster: Ordner auf dem ESPuino oder Album aus der Bibliothek"""
+        picker = FolderPicker(self.folder_choices, self.albums, self.on_device, self.album_folder, self,
+                              notes=self.folder_notes)
+        if picker.exec():
+            if picker.chosen_album is not None:
+                self.choose_album(picker.chosen_album)
+            elif picker.chosen_folder:
+                self._album = None
+                self._set_path(picker.chosen_folder)
+        picker.deleteLater()
+
+    def choose_album(self, album):
         self._album = album
         self._set_path(self.album_folder(album))
 
@@ -280,13 +388,14 @@ class CardReaderDialog(QDialog):
     def on_device(self, folder: str) -> bool:
         return folder.strip("/").casefold() in self._device_folders
 
-    def set_device(self, host: str, folders: Iterable[str], device_folders: Iterable[str] = ()):
+    def set_device(self, host: str, folders: Iterable[str], device_folders: Iterable[str] = (),
+                   notes: Optional[dict] = None):
         """Nach jedem Einlesen: Verbindung und Ordner uebernehmen (das Fenster kann
         offen gewesen sein, bevor der ESPuino verbunden war)"""
         was_connected = bool(self.host)
         self.host = host
         self._device_folders = {f.strip("/").casefold() for f in device_folders}
-        self.set_folders(folders)
+        self.set_folders(folders, notes)
         self.assign_box.setEnabled(bool(host))
         if not host:
             self.assign_note.setText("Zum Zuweisen mit dem ESPuino verbinden.")
@@ -299,15 +408,6 @@ class CardReaderDialog(QDialog):
                 self.status_label.setText(str(exc))
         self._update_path_hint()
 
-    def set_folders(self, folders: Iterable[str]):
-        current = self.path_combo.currentText()
-        self.path_combo.blockSignals(True)
-        self.path_combo.clear()
-        for folder in sorted({f for f in folders if f}, key=str.casefold):
-            self.path_combo.addItem(folder)
-        self.path_combo.setEditText(current)
-        self.path_combo.blockSignals(False)
-
     @property
     def card_id(self) -> str:
         return re.sub(r"\s+", "", self.card_edit.text())
@@ -318,11 +418,11 @@ class CardReaderDialog(QDialog):
 
     @property
     def sd_path(self) -> str:
-        path = self.path_combo.currentText().strip().replace("\\", "/")
+        path = self.path_edit.text().strip().replace("\\", "/")
         return path if not path or path.startswith("/") else "/" + path
 
     def _set_path(self, path: str):
-        self.path_combo.setEditText(path)
+        self.path_edit.setText(path)
 
     def _set_mode(self, mode: int):
         index = self.mode_combo.findData(int(mode)) if mode else -1
@@ -334,20 +434,21 @@ class CardReaderDialog(QDialog):
 
     def _update_path_hint(self, *_):
         single = self.play_mode in FILE_MODES
-        self.path_combo.lineEdit().setPlaceholderText("/Ordner/titel.mp3 auf der SD-Karte" if single
-                                                      else "Ordner auf dem ESPuino wählen oder eintragen")
         hint = ""
         path = self.sd_path
         album = self._album_for_path(path)
         if album is not None and self.host and not self.on_device(path):
-            hint = (f"Fehlt auf dem ESPuino – „Zuweisen“ überträgt das Album zuerst "
+            hint = (f"„{album.name}“ fehlt auf dem ESPuino – „Zuweisen“ überträgt es zuerst "
                     f"({len(album.tracks)} Titel) und weist die Karte danach zu.")
-        elif path and self.sd_root:
-            local = self._local(path)
-            if single and not os.path.isfile(local):
-                hint = "Diese Datei gibt es auf der SD-Karte im Kartenleser nicht."
-            elif not single and not os.path.isdir(local):
-                hint = "Diesen Ordner gibt es auf der SD-Karte im Kartenleser nicht."
+        elif album is not None:
+            hint = f"Album „{album.name}“ aus der Bibliothek, liegt auf dem ESPuino."
+        elif single:
+            hint = "Für diesen Abspielmodus den Pfad einer Datei eintragen, etwa /Ordner/titel.mp3."
+        elif path and self.sd_root and not os.path.isdir(self._local(path)):
+            hint = "Diesen Ordner gibt es auf der SD-Karte im Kartenleser nicht."
+        elif path and self.host and self._device_folders and not self.on_device(path) \
+                and path.strip("/").count("/") == 0:
+            hint = "Diesen Ordner gibt es auf dem ESPuino nicht."
         self.path_hint.setText(hint)
         self.path_hint.setVisible(bool(hint))
         self._update_assign_button()
@@ -356,21 +457,6 @@ class CardReaderDialog(QDialog):
         current = self.info if self.info is not None and self.info.card_id == self.card_id else None
         self.btn_assign.setText("Neu zuweisen" if current is not None and current.assignment else "Zuweisen")
         self.btn_assign.setEnabled(bool(self.host) and self.card_id.isdigit() and bool(self.sd_path))
-
-    def _browse(self):
-        start = self.sd_root
-        if self.sd_path and os.path.exists(self._local(self.sd_path)):
-            start = self._local(self.sd_path)
-        if self.play_mode in FILE_MODES:
-            path, _ = QFileDialog.getOpenFileName(self, "Datei auf der SD-Karte wählen", start)
-        else:
-            path = QFileDialog.getExistingDirectory(self, "Ordner auf der SD-Karte wählen", start)
-        if not path:
-            return
-        try:
-            self._set_path(sd_path_from_local(self.sd_root, path))
-        except DeviceError as exc:
-            QMessageBox.warning(self, "Karte zuweisen", str(exc))
 
     def preset(self, card_id: str = "", folder: str = "", album=None):
         """Vorbelegen (Ordner aus der Ordnerseite, Karte aus der Kartenliste); der

@@ -165,7 +165,7 @@ def test_assign_in_the_read_window(setup, monkeypatch):
     try:
         reader = window._espuino_read_cards()
         assert reader.assign_box.isEnabled()
-        choices = [reader.path_combo.itemText(i) for i in range(reader.path_combo.count())]
+        choices = reader.folder_choices
         assert "/Hörspiele" in choices and "/Hörspiele/Fuchsbande" in choices  # Geraet und bekannte Karten
         reader.on_message('{"opmode":0}')
         assert reader.card_id == ""
@@ -478,10 +478,10 @@ def test_assign_album_from_library_transfers_it_first(setup, tmp_path):
         album = LibraryAlbum(path=str(folder), title="Die Fuchsbande", tracks=tracks, album_id="fuchs")
         window.library_view.index.albums.append(album)
         reader = window._espuino_read_cards()
-        assert reader.album_combo.count() == 1
+        assert reader.albums == [album]
         reader.on_message('{"rfidId":"444555666777"}')
-        reader._album_chosen(0)
-        assert reader.sd_path == "/Die Fuchsbande" and "überträgt das Album zuerst" in reader.path_hint.text()
+        reader.choose_album(album)
+        assert reader.sd_path == "/Die Fuchsbande" and "fehlt auf dem ESPuino" in reader.path_hint.text()
         assert reader.try_assign()
         deadline = time.monotonic() + 10
         while "444555666777" not in esp.assignments and time.monotonic() < deadline:
@@ -514,9 +514,43 @@ def test_open_window_follows_the_connection(setup):
         window._espuino_connected = True
         window._mediahub_reload()
         assert reader.assign_box.isEnabled() and reader.host
-        choices = [reader.path_combo.itemText(i) for i in range(reader.path_combo.count())]
+        choices = reader.folder_choices
         assert "/Hörspiele" in choices
         reader.close()
     finally:
         window.close()
         window.deleteLater()
+
+
+
+def test_folder_picker_searches_names_artists_and_paths(app, tmp_path):
+    """Waehlen: Suche ueber Name, Interpret und Pfad (\"bibi\" findet Bibi und Tina), Ordner und Alben"""
+    from core.library import LibraryAlbum
+    from gui.espuino_card_reader import CardReaderDialog, FolderPicker
+    albums = [
+        LibraryAlbum(path=str(tmp_path / "Bibi und Tina" / "Folge 023"), title="Folge 023: Ein Pferd für Tante Paula",
+                     artist="Bibi und Tina", tracks=["a.mp3"]),
+        LibraryAlbum(path=str(tmp_path / "Conni" / "Reiterhof"), title="Conni auf dem Reiterhof",
+                     artist="Conni", tracks=["a.mp3", "b.mp3"]),
+    ]
+    on_device = {"/conni auf dem reiterhof"}
+    picker = FolderPicker(["/Folge 023 Ein Pferd für Tante Paula", "/Musik"], albums,
+                          lambda f: f.casefold() in on_device, CardReaderDialog.album_folder,
+                          notes={"/musik": "Karte: Lieder"})
+    try:
+        def visible(group):
+            return [group.child(i).text(0) for i in range(group.childCount()) if not group.child(i).isHidden()]
+        picker.search.setText("bibi")
+        assert visible(picker.library_group) == ["Folge 023: Ein Pferd für Tante Paula"]  # ueber den Interpreten
+        picker.search.setText("tante pferd")  # alle Woerter, Reihenfolge egal
+        assert visible(picker.device_group) == ["Folge 023 Ein Pferd für Tante Paula"]
+        picker.search.setText("lieder")  # Kartenname am Ordner
+        assert visible(picker.device_group) == ["Musik"] and visible(picker.library_group) == []
+        picker.search.setText("reiterhof")
+        item = next(picker.library_group.child(i) for i in range(2)
+                    if picker.library_group.child(i).text(0) == "Conni auf dem Reiterhof")
+        assert "auf dem ESPuino" in item.text(1) and picker.tree.currentItem() is item
+        picker.btn_ok.click()
+        assert picker.chosen_album is albums[1] and picker.chosen_folder == ""
+    finally:
+        picker.deleteLater()
