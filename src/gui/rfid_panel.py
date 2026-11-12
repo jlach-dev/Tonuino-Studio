@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt
 
 from core.sd_card import Folder
 from core import pmodes
+from core.app_mode import acr122u_allowed
 from core.rfid import RFIDReader, RfidStatus, PLAYBACK_MODES, describe_card
 from core.tonuino_serial import TonuinoSerial, TonuinoSerialError
 from gui.common import heading_font, confirm_action, icon_from_glyph, ClickableLabel
@@ -62,6 +63,9 @@ class RfidPanel(QFrame):
         # Regelmaessige Reader-/Kartenpruefung im Hintergrund-Thread
         self._rfid_poller = RfidPoller(self.rfid_reader)
         self._rfid_poller.status_changed.connect(self._apply_rfid_status)
+        # ESPuino-Modus mit ausgeschaltetem ACR122U: Leser gar nicht erst ansprechen
+        self._acr122u_enabled = acr122u_allowed()
+        self._rfid_poller.paused = not self._acr122u_enabled
         self._rfid_poller.start()
 
     # ---------------------------------------------------------------- Zugriff
@@ -244,13 +248,22 @@ class RfidPanel(QFrame):
         (RFID-Leser), beide teilen sich denselben Bereich in der Sidebar."""
         self._reader_mode = mode
         is_tonuino = mode == self.READER_MODE_TONUINO
-        self._rfid_poller.paused = is_tonuino
+        self._rfid_poller.paused = is_tonuino or not self._acr122u_enabled
         self._last_rfid_status = None  # beim Zurueckwechseln neu anzeigen
         self.acr122u_status_widget.setVisible(not is_tonuino)
         self.tonuino_status_widget.setVisible(is_tonuino)
         if is_tonuino and self.tonuino_port_combo.count() == 0:
             self._refresh_tonuino_ports()
         self._update_program_buttons()
+
+    def set_acr122u_enabled(self, enabled: bool):
+        """ACR122U abfragen oder nicht (ESPuino-Modus); aus: Leser freigeben"""
+        self._acr122u_enabled = bool(enabled)
+        self._rfid_poller.paused = self._reader_mode == self.READER_MODE_TONUINO or not enabled
+        self._last_rfid_status = None
+        if not enabled:
+            with self.rfid_reader.lock:
+                self.rfid_reader.disconnect()
 
     def _refresh_tonuino_ports(self):
         """Aktualisiert die Liste der verfuegbaren COM-Ports fuer den TonUINO"""

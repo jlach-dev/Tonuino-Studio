@@ -387,6 +387,9 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
         self.rfid_panel.set_reader_mode(mode)
 
     def _restore_reader_mode(self):
+        if self._is_espuino():  # siehe gui/main_window_mediahub.py
+            self._espuino_restore_reader()
+            return
         if QSettings().value(READER_MODE_KEY, "", type=str) == RfidPanel.READER_MODE_TONUINO:
             self.action_reader_tonuino.setChecked(True)
             self.rfid_panel.set_reader_mode(RfidPanel.READER_MODE_TONUINO)

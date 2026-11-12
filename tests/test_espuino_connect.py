@@ -136,7 +136,7 @@ def test_start_waits_for_the_choice_and_shows_cards_offline(window_setup, monkey
         side = window.espuino_sidebar
         assert esp.requests == []  # der Start fragt nicht im WLAN
         assert "ESPuino Kinderzimmer" in side.device_label.text() and "nicht verbunden" in side.device_label.text()
-        assert side.btn_connect.text() == "Verbinden …" and not side.btn_assign.isEnabled()
+        assert side.btn_connect.text() == "Verbinden …" and side.btn_assign.isEnabled()  # auslesen per ACR122U
         assert not window._espuino_can_transfer()
 
         class Choose:  # Dialog ersetzt: Nutzer waehlt den ESPuino

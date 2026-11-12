@@ -38,6 +38,7 @@ SETTINGS_HOST = "espuino/host"
 SETTINGS_SD_ROOT = "espuino/sd_root"
 SETTINGS_DEVICES = "espuino/devices"  # JSON-Liste aller eingerichteten ESPuinos
 SETTINGS_ASK_ON_START = "espuino/ask_on_start"
+SETTINGS_USE_ACR122U = "espuino/use_acr122u"  # USB-Leser zum Auslesen (Standard aus)
 SOURCE_DEVICE = "device"
 SOURCE_MEDIAHUB = "mediahub"
 SOURCES = (SOURCE_DEVICE, SOURCE_MEDIAHUB)
@@ -528,6 +529,17 @@ def save_settings(source: str, host: str, sd_root: str, name: Optional[str] = No
         remember_device(host, name=name, sd_root=sd_root)
     s.setValue(SETTINGS_HOST, host)
     s.setValue(SETTINGS_SD_ROOT, sd_root)
+
+
+def use_acr122u() -> bool:
+    """ACR122U im ESPuino-Modus nutzen? Standard aus: der Leser wird dann gar nicht angesprochen"""
+    from PyQt6.QtCore import QSettings
+    return QSettings().value(SETTINGS_USE_ACR122U, False, type=bool)
+
+
+def set_use_acr122u(value: bool) -> None:
+    from PyQt6.QtCore import QSettings
+    QSettings().setValue(SETTINGS_USE_ACR122U, bool(value))
 
 
 def ask_on_start() -> bool:

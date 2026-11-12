@@ -29,7 +29,7 @@ from core.app_mode import MODE_ESPUINO, MODE_TONUINO, MODES, current_mode, displ
 from core.card_store import card_paths
 from gui.about_dialog import show_about
 from gui.cover_manager_dialog import CoverManagerDialog, get_archive
-from gui.espuino_dialogs import AssignCardDialog, EspuinoSetupDialog, TransferDialog, TransferWorker
+from gui.espuino_dialogs import EspuinoSetupDialog, TransferDialog, TransferWorker
 from gui.espuino_device_view import EspuinoDeviceSidebar, album_folder_names
 from gui.mediahub_view import MediahubPage, MediahubSidebar
 from gui.print_sheet_dialog import PrintSheetDialog
@@ -95,6 +95,12 @@ class MediahubMixin:
         self.action_mediahub_setup = QAction("ESPuino einrichten …", self)
         self.action_mediahub_setup.triggered.connect(self._mediahub_setup)
         self.settings_menu.insertAction(self.action_system_files, self.action_mediahub_setup)
+        self.action_use_acr122u = QAction("ACR122U-Leser zum Auslesen nutzen", self)
+        self.action_use_acr122u.setCheckable(True)
+        self.action_use_acr122u.setChecked(dev.use_acr122u())
+        self.action_use_acr122u.setToolTip("USB-Leser ACR122U: Karten auflegen, ohne dass der ESPuino sie abspielt")
+        self.action_use_acr122u.toggled.connect(self._espuino_set_acr122u)
+        self.settings_menu.insertAction(self.action_system_files, self.action_use_acr122u)
 
         self.mediahub_sidebar = MediahubSidebar()
         self.mediahub_sidebar.setup_requested.connect(self._mediahub_setup)
@@ -107,8 +113,7 @@ class MediahubMixin:
         self.espuino_sidebar.setup_requested.connect(self._mediahub_setup)
         self.espuino_sidebar.connect_requested.connect(self.espuino_connect)
         self.espuino_sidebar.reload_requested.connect(self._mediahub_reload)
-        self.espuino_sidebar.assign_requested.connect(self._espuino_assign)
-        self.espuino_sidebar.read_requested.connect(self._espuino_read_cards)
+        self.espuino_sidebar.assign_requested.connect(self._espuino_read_cards)
         self.espuino_sidebar.assign_folder_requested.connect(self._espuino_assign_folder)
         self.espuino_sidebar.folder_selected.connect(self._espuino_show_folder)
         self.espuino_sidebar.albums_dropped.connect(self._espuino_transfer)
@@ -233,6 +238,30 @@ class MediahubMixin:
             self._espuino_connected = False
         self._mediahub_reload()
 
+    def _espuino_restore_reader(self):
+        """ESPuino-Modus (aus MainWindow._restore_reader_mode): als Leser gilt immer der
+        ACR122U (der TonUINO-Weg passt hier nicht), abgefragt nur, wenn unter
+        Einstellungen eingeschaltet"""
+        self.rfid_panel.set_reader_mode(self.rfid_panel.READER_MODE_ACR122U)
+        self.rfid_panel.set_acr122u_enabled(dev.use_acr122u())
+
+    def _espuino_set_acr122u(self, enabled: bool):
+        dev.set_use_acr122u(enabled)
+        self.rfid_panel.set_acr122u_enabled(enabled)
+        reader = getattr(self, "_espuino_reader", None)
+        if reader is None:
+            return
+        poller = self.rfid_panel._rfid_poller
+        if enabled:
+            reader.reader_off("wird gesucht …")
+            poller.status_changed.connect(reader.on_reader_status)
+        else:
+            try:
+                poller.status_changed.disconnect(reader.on_reader_status)
+            except TypeError:
+                pass
+            reader.reader_off()
+
     def _espuino_is_device(self) -> bool:
         return self._espuino_source == dev.SOURCE_DEVICE
 
@@ -339,23 +368,14 @@ class MediahubMixin:
                                                 self.library_view.index)
 
     def _espuino_assign(self, preset_card: str = "", preset_path: str = "", album=None):
-        if not self._espuino_is_device() or not self._espuino_host:
-            return
-        _source, host, sd_root = dev.settings()
+        """Karte zuweisen: oeffnet das Fenster "Karten auslesen und zuweisen", vorbelegt"""
+        reader = self._espuino_read_cards()
+        if reader is not None:
+            reader.preset(card_id=preset_card, folder=preset_path, album=album)
+
+    def _espuino_on_assigned(self, card_id: str, folder: str, play_mode: int, album=None):
+        """Das Fenster hat eine Karte auf dem ESPuino zugewiesen: im Verzeichnis merken"""
         known = getattr(self, "_espuino_known", None) or espuino_cards.load(self._espuino_data_dir())
-        labels = {cid: card.label for cid, card in known.cards.items()}
-        dialog = AssignCardDialog(host, sd_root, labels, self)
-        if preset_card:
-            dialog.card_edit.setText(preset_card)
-        if preset_path:
-            dialog.path_edit.setText(preset_path)
-        accepted = dialog.exec()
-        entry = dialog.result_entry
-        play_mode = dialog.play_mode
-        dialog.deleteLater()
-        if not accepted or not entry:
-            return
-        card_id, folder = str(entry.get("id")), str(entry.get("fileOrUrl") or "")
         if album is None:
             album = self._espuino_album_for_folder(folder)
         known.remember(card_id, name=album.name if album is not None else folder.strip("/").rpartition("/")[2],
@@ -368,36 +388,47 @@ class MediahubMixin:
             log.warning("Kartenverzeichnis nicht gespeichert: %s", exc)
         self._status(f"Karte {mh.format_card_id(card_id)} zugewiesen: {folder}")
         self._mediahub_reload()
-        if mh.card_by_id(self._mediahub_data, card_id) is not None:
-            self._mediahub_on_card_clicked(card_id)
+        reader = getattr(self, "_espuino_reader", None)
+        if reader is not None:
+            reader.set_folders(self._espuino_folder_choices())
 
-    # --- Karte auslesen ---------------------------------------------------------------
+    def _espuino_folder_choices(self) -> list:
+        """Ordner fuer die Auswahlliste beim Zuweisen: auf dem ESPuino und die der bekannten Karten"""
+        state = self._espuino_state
+        folders = set(state.folders or []) if state is not None else set()
+        data = self._mediahub_data
+        folders.update(c.sd_path for c in (data.cards if data else []) if c.sd_path)
+        return sorted(folders, key=str.casefold)
+
+    # --- Karten auslesen und zuweisen ------------------------------------------------
 
     def _espuino_read_cards(self):
-        """Fenster, das jede aufgelegte Karte zeigt (bleibt offen, nicht modal)"""
+        """Fenster, das jede aufgelegte Karte zeigt und zuweisen laesst (nicht modal).
+        Gibt das (ggf. schon offene) Fenster zurueck."""
         from gui.espuino_card_reader import CardReaderDialog
         reader = getattr(self, "_espuino_reader", None)
         if reader is not None:
             reader.raise_()
             reader.activateWindow()
-            return
+            return reader
         if not self._espuino_is_device():
-            return
+            return None
         state = self._espuino_state
         host = self._espuino_host if state is not None and state.reachable else ""
-        reader = CardReaderDialog(host, self._espuino_card_info, self)
-        panel = getattr(self, "rfid_panel", None)  # fragt den ACR122U ab, auch wenn er ausgeblendet ist
-        poller = getattr(panel, "_rfid_poller", None)
-        if poller is not None:
-            if poller.paused:
-                reader.reader_paused("wird nicht abgefragt, weil als RFID-Leser der TonUINO gewählt ist "
-                                     "(im TonUINO-Modus unter RFID-Leser umstellen).")
+        _source, _host, sd_root = dev.settings()
+        reader = CardReaderDialog(host, self._espuino_card_info, self, folders=self._espuino_folder_choices(),
+                                  sd_root=sd_root)
+        poller = getattr(getattr(self, "rfid_panel", None), "_rfid_poller", None)
+        if not dev.use_acr122u() or poller is None:
+            reader.reader_off()
+        else:
             poller.status_changed.connect(reader.on_reader_status)  # loest Qt beim Schliessen selbst
         reader.show_card_requested.connect(self._espuino_reader_show_card)
-        reader.assign_requested.connect(lambda card_id: self._espuino_assign(preset_card=card_id))
+        reader.assigned.connect(self._espuino_on_assigned)
         reader.destroyed.connect(lambda *_: setattr(self, "_espuino_reader", None))
         self._espuino_reader = reader
         reader.show()
+        return reader
 
     def _espuino_reader_show_card(self, card_id: str):
         if mh.card_by_id(self._mediahub_data, card_id) is not None:
@@ -419,15 +450,18 @@ class MediahubMixin:
         entry = state.assignments.get(card_id) if state is not None else None
         if entry is not None:
             info.assignment = entry[0]
+            info.mode = int(entry[1])
             info.play_mode = mh.play_mode_label(str(entry[1]))
         card = mh.card_by_id(self._mediahub_data, card_id)
         if card is None:
             if entry is not None:
                 info.status = "Seit dem letzten Einlesen neu zugewiesen – „Neu einlesen“ zeigt mehr."
             return info
-        info.known, info.name = True, card.label
+        info.known, info.name, info.known_folder = True, card.label, card.sd_path
         if not info.play_mode and card.play_mode:
             info.play_mode = mh.play_mode_label(card.play_mode)
+        if not info.mode and str(card.play_mode).isdigit():
+            info.mode = int(card.play_mode)
         if entry is None and card.sd_path:
             info.status = f"Gehört zu {card.sd_path}, ist aber auf diesem ESPuino nicht zugewiesen."
         elif entry is not None and card.sd_path and not dev.same_folder(entry[0], card.sd_path):

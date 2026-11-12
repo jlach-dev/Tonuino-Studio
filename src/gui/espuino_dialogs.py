@@ -1,29 +1,24 @@
 """
-Dialoge des ESPuino-Modus: Einrichten (ESPuino direkt im WLAN oder Mediahub),
-Karte direkt am ESPuino zuweisen (core/espuino_device.py) und Alben auf seine
-SD-Karte uebertragen (core/espuino_transfer.py).
+Dialoge des ESPuino-Modus: Einrichten (ESPuino direkt im WLAN oder Mediahub)
+und Alben auf seine SD-Karte uebertragen (core/espuino_transfer.py). Karten
+zuweisen: gui/espuino_card_reader.py.
 
 Eigene Datei des Forks (siehe core/branding.py).
 """
 
-import json
 import os
-import re
-from typing import Dict, Optional
 
-from PyQt6.QtCore import QThread, Qt, QUrl, pyqtSignal
-from PyQt6.QtWebSockets import QWebSocket
+from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
+    QApplication, QButtonGroup, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QVBoxLayout, QWidget,
 )
 
 from core.espuino_device import (
-    ASSIGNABLE_MODES, FILE_MODES, SOURCE_DEVICE, SOURCE_MEDIAHUB, DeviceError, assign_card, fetch_info,
-    firmware_label, normalize_host, sd_path_from_local, ws_url,
+    SOURCE_DEVICE, SOURCE_MEDIAHUB, DeviceError, assign_card, fetch_info, firmware_label, normalize_host,
 )
 from core.espuino_transfer import copy_to_sd, plan_album, safe_name, upload_to_device
-from core.mediahub_cards import DB_FILENAME, MediahubError, db_file, format_card_id, load_cards, play_mode_label
+from core.mediahub_cards import DB_FILENAME, MediahubError, db_file, load_cards
 from gui import theme
 
 
@@ -204,176 +199,6 @@ class EspuinoSetupDialog(QDialog):
             return
         self.db_edit.setText(str(db_file(self.db_path)))
         self.card_count = len(data.cards)
-        self.accept()
-
-
-class AssignCardDialog(QDialog):
-    """Neue Karte direkt auf dem ESPuino zuweisen: Studio hoert am Websocket des
-    ESPuino mit, die aufgelegte Karte erscheint hier; dann Abspielmodus und Ordner
-    waehlen und mit POST /rfid speichern, wie in der Weboberflaeche des ESPuino."""
-
-    def __init__(self, host: str, sd_root: str, known: Dict[str, str], parent=None, listen: bool = True):
-        super().__init__(parent)
-        self.host = host
-        self.sd_root = sd_root if sd_root and os.path.isdir(sd_root) else ""
-        self.known = known  # Kartennummer -> Name, fuer die Warnung "schon belegt"
-        self.result_entry: Optional[dict] = None
-        self.setWindowTitle("Karte zuweisen")
-        self.setMinimumWidth(560)
-        layout = QVBoxLayout(self)
-        self.status_label = QLabel("Verbinde mit dem ESPuino …")
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-
-        form = QFormLayout()
-        self.card_edit = QLineEdit()
-        self.card_edit.setPlaceholderText("erscheint, sobald eine Karte auf dem ESPuino liegt")
-        self.card_edit.textChanged.connect(self._update_card_hint)
-        form.addRow("Karte:", self.card_edit)
-        self.card_hint = QLabel()
-        self.card_hint.setWordWrap(True)
-        self.card_hint.setStyleSheet(f"color: {theme.YELLOW};")
-        self.card_hint.hide()
-        form.addRow("", self.card_hint)
-        self.mode_combo = QComboBox()
-        for mode in ASSIGNABLE_MODES:
-            self.mode_combo.addItem(play_mode_label(str(mode)), mode)
-        self.mode_combo.currentIndexChanged.connect(self._update_path_hint)
-        form.addRow("Abspielmodus:", self.mode_combo)
-        self.path_edit = QLineEdit()
-        self.path_edit.textChanged.connect(self._update_path_hint)
-        self.btn_browse = QPushButton("Wählen …")
-        self.btn_browse.setObjectName("ghostButton")
-        self.btn_browse.setEnabled(bool(self.sd_root))
-        self.btn_browse.setToolTip("Auf der SD-Karte im Kartenleser wählen" if self.sd_root
-                                   else "SD-Karte unter „ESPuino einrichten“ angeben, dann geht das per Auswahl")
-        self.btn_browse.clicked.connect(self._browse)
-        path_row = QWidget()
-        path_layout = QHBoxLayout(path_row)
-        path_layout.setContentsMargins(0, 0, 0, 0)
-        path_layout.addWidget(self.path_edit, 1)
-        path_layout.addWidget(self.btn_browse)
-        form.addRow("Ordner/Datei:", path_row)
-        self.path_hint = QLabel()
-        self.path_hint.setWordWrap(True)
-        self.path_hint.setStyleSheet(f"color: {theme.OVERLAY2};")
-        self.path_hint.hide()
-        form.addRow("", self.path_hint)
-        layout.addLayout(form)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        self.btn_ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
-        self.btn_ok.setText("Zuweisen")
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Abbrechen")
-        buttons.accepted.connect(self.try_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        self._update_path_hint()
-
-        self.socket = QWebSocket()
-        self.socket.connected.connect(self._on_connected)
-        self.socket.disconnected.connect(self._on_disconnected)
-        self.socket.textMessageReceived.connect(self.on_message)
-        self.finished.connect(lambda _result: self.socket.close())
-        if listen:
-            try:
-                self.socket.open(QUrl(ws_url(host)))
-            except DeviceError as exc:
-                self.status_label.setText(str(exc))
-
-    def _on_connected(self):
-        self.status_label.setText("Bereit: Bitte die Karte auf den ESPuino legen.")
-
-    def _on_disconnected(self):
-        if not self.isVisible():
-            return
-        self.status_label.setText("Keine Verbindung zum ESPuino. Die Kartennummer lässt sich auch von Hand "
-                                  "eintragen (sie steht in seiner Weboberfläche).")
-
-    def on_message(self, text: str):
-        try:
-            message = json.loads(text)
-        except ValueError:
-            return
-        card_id = str(message.get("rfidId") or "").strip() if isinstance(message, dict) else ""
-        if card_id.isdigit():
-            self.card_edit.setText(card_id)
-            self.status_label.setText(f"Karte {format_card_id(card_id)} erkannt. "
-                                      "Eine andere Karte auflegen, um sie zu wechseln.")
-
-    @property
-    def card_id(self) -> str:
-        return re.sub(r"\s+", "", self.card_edit.text())
-
-    @property
-    def play_mode(self) -> int:
-        return int(self.mode_combo.currentData())
-
-    @property
-    def sd_path(self) -> str:
-        path = self.path_edit.text().strip().replace("\\", "/")
-        return path if not path or path.startswith("/") else "/" + path
-
-    def _local(self, sd_path: str) -> str:
-        return os.path.join(self.sd_root, *[p for p in sd_path.split("/") if p])
-
-    def _update_card_hint(self, *_):
-        name = self.known.get(self.card_id, "")
-        self.card_hint.setText(f"Diese Karte ist schon belegt: „{name}“. Zuweisen ersetzt das." if name else "")
-        self.card_hint.setVisible(bool(name))
-
-    def _update_path_hint(self, *_):
-        single = self.play_mode in FILE_MODES
-        self.path_edit.setPlaceholderText("/Ordner/titel.mp3 auf der SD-Karte" if single
-                                          else "/Ordner auf der SD-Karte")
-        hint = ""
-        path = self.sd_path
-        if path and self.sd_root:
-            local = self._local(path)
-            if single and not os.path.isfile(local):
-                hint = "Diese Datei gibt es auf der SD-Karte im Kartenleser nicht."
-            elif not single and not os.path.isdir(local):
-                hint = "Diesen Ordner gibt es auf der SD-Karte im Kartenleser nicht."
-        self.path_hint.setText(hint)
-        self.path_hint.setVisible(bool(hint))
-
-    def _browse(self):
-        start = self.sd_root
-        if self.sd_path and os.path.exists(self._local(self.sd_path)):
-            start = self._local(self.sd_path)
-        if self.play_mode in FILE_MODES:
-            path, _ = QFileDialog.getOpenFileName(self, "Datei auf der SD-Karte wählen", start)
-        else:
-            path = QFileDialog.getExistingDirectory(self, "Ordner auf der SD-Karte wählen", start)
-        if not path:
-            return
-        try:
-            self.path_edit.setText(sd_path_from_local(self.sd_root, path))
-        except DeviceError as exc:
-            QMessageBox.warning(self, "Karte zuweisen", str(exc))
-
-    def try_accept(self):
-        if not self.card_id.isdigit():
-            QMessageBox.information(self, "Karte zuweisen", "Noch keine Karte: bitte auf den ESPuino legen.")
-            return
-        if not self.sd_path:
-            QMessageBox.information(self, "Karte zuweisen", "Bitte einen Ordner (oder eine Datei) wählen.")
-            return
-        name = self.known.get(self.card_id)
-        if name:
-            answer = QMessageBox.question(self, "Karte ersetzen?",
-                                          f"Karte {format_card_id(self.card_id)} spielt bisher „{name}“. "
-                                          f"Stattdessen „{self.sd_path}“ zuweisen?")
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            self.result_entry = assign_card(self.host, self.card_id, self.sd_path, self.play_mode)
-        except DeviceError as exc:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.warning(self, "Karte zuweisen", str(exc))
-            return
-        QApplication.restoreOverrideCursor()
         self.accept()
 
 

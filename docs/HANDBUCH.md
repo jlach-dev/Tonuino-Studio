@@ -643,27 +643,29 @@ Mit **ESPuino direkt im WLAN** fragt die App beim Start im Fenster **Mit ESPuino
 
 Später wechselst du mit **ESPuino wechseln …** oben in der Seitenleiste (ohne Verbindung: **Verbinden …**). Die bekannten Karten gelten für alle ESPuinos; der Status **zugewiesen** und **Ordner** bezieht sich immer auf den verbundenen.
 
-### Karte zuweisen (ESPuino direkt)
+### Karten auslesen und zuweisen (ESPuino direkt)
 
-**Karte zuweisen …** verbindet sich mit dem ESPuino und wartet auf eine Karte:
+**Karten auslesen und zuweisen …** in der Seitenleiste öffnet ein Fenster, das offen bleibt, bis du es schließt. Halte eine Karte an den ESPuino oder leg sie auf den USB-Leser **ACR122U**. Das Fenster zeigt dann:
 
-1. Leg die Karte auf den ESPuino. Ihre Nummer erscheint im Feld **Karte**. Ist sie schon belegt, sagt die App, womit.
-2. Wähle den **Abspielmodus**, etwa **Hörbuch (merkt sich die Stelle)** oder **Alle Titel des Ordners (sortiert)**.
-3. Wähle unter **Ordner/Datei** den Ordner auf der SD-Karte, mit **Wählen …** oder von Hand, etwa `/Hörspiele/Folge 1`. Für die Modi mit einem einzelnen Titel wählst du eine Datei.
-4. **Zuweisen** speichert die Zuweisung im ESPuino, so wie es seine Weboberfläche tut. Eine schon belegte Karte ersetzt die App erst nach Rückfrage.
-
-Die Dateien müssen dafür schon auf der SD-Karte des ESPuino liegen, siehe den nächsten Abschnitt.
-
-### Karte auslesen (ESPuino direkt)
-
-**Karte auslesen …** in der Seitenleiste öffnet ein Fenster, das so lange liest, bis du es schließt. Halte eine Karte an den ESPuino oder leg sie auf den USB-Leser **ACR122U**, und das Fenster zeigt:
-
-- Kartennummer und Namen;
+- Kartennummer und Namen, unbekannte Karten gelb;
 - wohin sie auf diesem ESPuino zeigt und den Abspielmodus;
 - das Album aus der Bibliothek mit Titelzahl und Dauer;
 - Kartencover vorn und hinten und das Album-Cover.
 
-Das hilft vor allem beim Bekleben vieler Karten, damit jedes Cover auf der richtigen Karte landet. Eine unbekannte Karte zeigt die App gelb; mit **Diese Karte zuweisen …** belegst du sie gleich. **In der Kartenliste zeigen** öffnet die Karte im Reiter **ESPuino-Karten**. Das Fenster liest nur und ändert nichts. Der ESPuino spielt eine aufgelegte Karte wie gewohnt ab; das lässt sich von außen nicht verhindern. Der ACR122U spielt nichts ab und geht auch ohne verbundenen ESPuino. Die App rechnet seine Kartennummer (UID) so um, wie der ESPuino es tut: die ersten vier Bytes, je dreistellig, etwa `5C 42 91 02` → `092 066 145 002`. Ist unter **RFID-Leser** der TonUINO gewählt, fragt die App den ACR122U nicht ab; das Fenster sagt dann Bescheid.
+Das hilft vor allem beim Bekleben vieler Karten. **In der Kartenliste zeigen** öffnet die Karte im Reiter **ESPuino-Karten**.
+
+Darunter, unter **Auf diesem ESPuino zuweisen**, belegst du die Karte gleich:
+
+1. **Karte:** steht nach dem Auflegen da; du kannst die Nummer auch eintippen.
+2. **Abspielmodus:** etwa **Hörbuch (merkt sich die Stelle)** oder **Alle Titel des Ordners (sortiert)**.
+3. **Ordner/Datei:** aus der Liste der Ordner auf dem ESPuino wählen oder eintragen, etwa `/Hörspiele/Folge 1`. **Wählen …** geht zusätzlich, wenn seine SD-Karte im Kartenleser steckt.
+4. **Zuweisen** speichert die Zuweisung im ESPuino, so wie es seine Weboberfläche tut. Bei einer schon belegten Karte heißt der Knopf **Neu zuweisen**. Zeigt sie bisher auf einen anderen Ordner, fragt die App vorher nach.
+
+Eine bekannte Karte bringt ihren Ordner und Modus schon mit. Öffnest du das Fenster über einen Ordner, etwa per Rechtsklick → **Karte zuweisen …**, über die Ordnerseite oder mit **Weitere Karte zuweisen …**, bleibt dieser Ordner für jede weitere aufgelegte Karte stehen. So belegst du schnell ein zweites Kartenset. Zuweisen geht nur, solange der ESPuino verbunden ist; auslesen über den ACR122U auch ohne ihn.
+
+Die Dateien müssen dafür schon auf der SD-Karte des ESPuino liegen, siehe den nächsten Abschnitt.
+
+**ACR122U:** Im ESPuino-Modus fragt die App den Leser nur ab, wenn **Einstellungen** → **ACR122U-Leser zum Auslesen nutzen** eingeschaltet ist. Nach der Installation ist das aus; dann bleibt der Leser für andere Programme frei. Der ESPuino spielt eine aufgelegte Karte wie gewohnt ab, das lässt sich von außen nicht verhindern. Am ACR122U spielt nichts. Die App rechnet die Nummer des ACR122U so um wie der ESPuino: die ersten vier Bytes, je dreistellig, etwa `5C 42 91 02` → `092 066 145 002`. Im TonUINO-Modus wählst du den Leser wie bisher unter **RFID-Leser**.
 
 ### Alben auf den ESPuino übertragen
 

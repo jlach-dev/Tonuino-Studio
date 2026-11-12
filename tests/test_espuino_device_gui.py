@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QApplication
 
 from core import espuino_device as dev
 from core.app_mode import MODE_ESPUINO, SETTINGS_APP_MODE
-from tests.test_espuino_device import CARD_A, CARD_B, FakeEspuino
+from tests.test_espuino_device import CARD_A, FakeEspuino
 
 
 @pytest.fixture(scope="module")
@@ -91,7 +91,10 @@ def test_unreachable_device_keeps_known_cards(setup):
         assert window.mediahub_page.cards_table.tree.topLevelItemCount() == 2
         assert "nicht erreichbar" in window.mediahub_page.device_text.text()
         assert "nicht erreichbar" in window.espuino_sidebar.device_label.text()
-        assert not window.espuino_sidebar.btn_assign.isEnabled()
+        assert window.espuino_sidebar.btn_assign.isEnabled()  # auslesen geht (ACR122U), zuweisen nicht
+        reader = window._espuino_read_cards()
+        assert not reader.assign_box.isEnabled() and "verbinden" in reader.assign_note.text()
+        reader.close()
     finally:
         window.close()
         window.deleteLater()
@@ -150,27 +153,51 @@ def test_device_folder_list_drop_rules(setup):
     widget.deleteLater()
 
 
-def test_assign_dialog_takes_card_from_websocket_and_saves(setup):
-    from gui.espuino_dialogs import AssignCardDialog
+def test_assign_in_the_read_window(setup, monkeypatch):
+    """Karte auflegen, Ordner aus der Liste der ESPuino-Ordner, zuweisen - im selben Fenster"""
+    from core import espuino_cards
+    from gui.main_window import MainWindow
+    from PyQt6.QtWidgets import QMessageBox
     esp = setup["esp"]
-    dialog = AssignCardDialog(esp.host, str(setup["sd"]), {CARD_B: "02.mp3"}, listen=False)
+    window = MainWindow()
     try:
-        dialog.on_message('{"opmode":0}')
-        assert dialog.card_id == ""
-        dialog.on_message('{"rfidId":"%s"}' % CARD_B)
-        assert dialog.card_id == CARD_B and not dialog.card_hint.isHidden()  # schon belegt
-        dialog.on_message('{"rfidId":"555666777888"}')
-        assert dialog.card_id == "555666777888" and dialog.card_hint.isHidden()
-        dialog.path_edit.setText("Hörspiele/Gibt es nicht")
-        assert not dialog.path_hint.isHidden()  # Ordner fehlt auf der SD-Karte
-        dialog.path_edit.setText("Hörspiele/Neu")
-        assert dialog.sd_path == "/Hörspiele/Neu" and dialog.path_hint.isHidden()
-        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData(5))
-        dialog.try_accept()
+        reader = window._espuino_read_cards()
+        assert reader.assign_box.isEnabled()
+        choices = [reader.path_combo.itemText(i) for i in range(reader.path_combo.count())]
+        assert "/Hörspiele" in choices and "/Hörspiele/Fuchsbande" in choices  # Geraet und bekannte Karten
+        reader.on_message('{"opmode":0}')
+        assert reader.card_id == ""
+        reader.on_message('{"rfidId":"%s"}' % CARD_A)  # bekannt: vorbelegt, "Neu zuweisen"
+        assert reader.sd_path == "/Hörspiele/Fuchsbande" and reader.btn_assign.text() == "Neu zuweisen"
+        reader.on_message('{"rfidId":"555666777888"}')
+        assert reader.card_id == "555666777888" and reader.btn_assign.text() == "Zuweisen" and reader.sd_path == ""
+        reader._set_path("Hörspiele/Gibt es nicht")
+        assert not reader.path_hint.isHidden()  # Ordner fehlt auf der SD-Karte im Kartenleser
+        reader._set_path("/Hörspiele/Neu")
+        assert reader.path_hint.isHidden()
+        reader.mode_combo.setCurrentIndex(reader.mode_combo.findData(5))
+        assert reader.try_assign()
         assert esp.posts == [{"id": "555666777888", "fileOrUrl": "/Hörspiele/Neu", "playMode": 5}]
-        assert dialog.result_entry["id"] == "555666777888"
+        known = espuino_cards.load(str(setup["data"]))
+        assert known.get("555666777888").sd_folder == "/Hörspiele/Neu"  # im Verzeichnis gemerkt
+        assert reader.info.assignment == "/Hörspiele/Neu" and reader.btn_assign.text() == "Neu zuweisen"
+
+        # andere Karte auf einen anderen Ordner: Rueckfrage, Nein laesst alles, wie es ist
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
+        reader.on_message('{"rfidId":"%s"}' % CARD_A)
+        reader._set_path("/Hörspiele/Neu")
+        assert not reader.try_assign() and len(esp.posts) == 1
+
+        # vorgegebener Ordner (Ordnerseite, zweites Kartenset) bleibt fuer die naechste Karte stehen
+        window._espuino_assign(preset_path="/Hörspiele/Neu")
+        assert window._espuino_reader is reader and reader.sd_path == "/Hörspiele/Neu"
+        reader.on_message('{"rfidId":"999888777666"}')
+        assert reader.sd_path == "/Hörspiele/Neu" and reader.try_assign()
+        assert reader.sd_path == "/Hörspiele/Neu" and len(esp.posts) == 2
+        reader.close()
     finally:
-        dialog.deleteLater()
+        window.close()
+        window.deleteLater()
 
 
 def test_setup_dialog_checks_address(setup):
@@ -264,7 +291,7 @@ def test_read_cards_window_shows_each_card(setup):
     from gui.main_window import MainWindow
     window = MainWindow()
     try:
-        assert window.espuino_sidebar.btn_read.isEnabled()
+        assert window.espuino_sidebar.btn_assign.isEnabled()
         card = window._mediahub_card(CARD_A)
         card_dir = get_archive(window, ask=False).card_dir(card.album_id)
         card_dir.mkdir(parents=True, exist_ok=True)
@@ -278,11 +305,11 @@ def test_read_cards_window_shows_each_card(setup):
         assert "001" in reader.number_label.text() and reader.info.known
         assert "/Hörspiele/Fuchsbande" in reader.info_label.text()
         assert reader.info.front_path.endswith("card.png") and not reader.front_box.image.pixmap().isNull()
-        assert reader.btn_show.isEnabled() and not reader.btn_assign.isEnabled()
+        assert reader.btn_show.isEnabled() and reader.btn_assign.text() == "Neu zuweisen"
 
         reader.on_message('{"rfidId": "999999999999"}')
         assert not reader.info.known and "Unbekannte Karte" in reader.name_label.text()
-        assert "nicht zugewiesen" in reader.info_label.text() and reader.btn_assign.isEnabled()
+        assert "nicht zugewiesen" in reader.info_label.text() and reader.btn_assign.text() == "Zuweisen"
         reader.on_message('{"status": "ok"}')  # andere Meldungen des ESPuino aendern nichts
         assert reader.count == 2
 
@@ -359,8 +386,10 @@ def test_read_cards_with_acr122u_without_playing_on_the_espuino(setup):
     """Karte auf dem ACR122U: gleiche Anzeige, die UID wird zur ESPuino-Nummer"""
     from core.rfid import RfidStatus
     from gui.main_window import MainWindow
+    dev.set_use_acr122u(True)
     window = MainWindow()
     try:
+        assert not window.rfid_panel._rfid_poller.paused
         window._espuino_read_cards()
         reader = window._espuino_reader
         poller = window.rfid_panel._rfid_poller
@@ -398,6 +427,32 @@ def test_folder_page_opens_the_cover_manager_of_the_album(setup, monkeypatch, tm
         folder_page.btn_cover.click()
         assert opened and opened[0][0] is album
         assert window.mediahub_page.pages.currentWidget() is folder_page  # bleibt auf der Ordnerseite
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+
+def test_acr122u_is_off_by_default_in_espuino_mode(setup):
+    """Einstellung ACR122U (nur ESPuino-Modus, Standard aus): Leser wird nicht abgefragt"""
+    from core.rfid import RfidStatus
+    from gui.main_window import MainWindow
+    assert not dev.use_acr122u()
+    window = MainWindow()
+    try:
+        poller = window.rfid_panel._rfid_poller
+        assert poller.paused and not window.action_use_acr122u.isChecked()
+        reader = window._espuino_read_cards()
+        assert "aus" in reader.reader_label.text()
+        poller.status_changed.emit(RfidStatus(reader="ok", card="ok", uid="01020304"))
+        assert reader.count == 0  # nicht verbunden
+        window.action_use_acr122u.setChecked(True)  # sofort wirksam, auch im offenen Fenster
+        assert dev.use_acr122u() and not poller.paused
+        poller.status_changed.emit(RfidStatus(reader="ok", card="ok", uid="01020304"))
+        assert reader.count == 1 and reader.info.card_id == CARD_A
+        window.action_use_acr122u.setChecked(False)
+        assert poller.paused and "aus" in reader.reader_label.text()
+        reader.close()
     finally:
         window.close()
         window.deleteLater()

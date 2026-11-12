@@ -24,6 +24,15 @@ def current_mode() -> str:
     return value if value in MODES else MODE_TONUINO
 
 
+def acr122u_allowed() -> bool:
+    """Darf der USB-Leser ACR122U abgefragt werden? Im TonUINO-Modus immer (dort
+    waehlt man ihn unter RFID-Leser), im ESPuino-Modus nur, wenn eingeschaltet."""
+    if current_mode() != MODE_ESPUINO:
+        return True
+    from core.espuino_device import use_acr122u
+    return use_acr122u()
+
+
 def set_mode(mode: str) -> None:
     if mode not in MODES:
         raise ValueError(f"Unbekannter Modus: {mode!r}")
