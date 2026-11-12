@@ -137,6 +137,8 @@ class MediahubMixin:
         self.mediahub_page.sibling_selected.connect(self._mediahub_show_card)
         self.mediahub_page.assign_folder_requested.connect(self._espuino_assign_folder)
         self.mediahub_page.cards_table.transfer_missing_requested.connect(self._espuino_transfer_missing)
+        self.mediahub_page.cards_table.transfer_selected_requested.connect(
+            lambda ids: self._espuino_transfer_cards([c for c in map(self._mediahub_card, ids) if c is not None]))
         self.stack.addWidget(self.mediahub_page)
         self._sd_page = self.mediahub_page
         self.view_switch.setTabToolTip(0, "Karten des ESPuino: Kartencover gestalten und drucken")
@@ -351,7 +353,8 @@ class MediahubMixin:
             card = known.get(card_id)
             folder_cards.setdefault(target.strip("/").casefold(), []).append(card.label if card else card_id)
         device = dev.find_device(host)
-        self.espuino_sidebar.set_state(host, state, folder_cards, device.label if device else "")
+        self.espuino_sidebar.set_state(host, state, folder_cards, device.label if device else "",
+                                       self._espuino_folder_series(state.folders or []))
         has_cover = self._mediahub_cover_map()
         page.cards_table.set_cards(data.cards, has_cover, state.reachable)
         if page.card is not None and mh.card_by_id(data, page.card.card_id) is not None:
@@ -423,6 +426,30 @@ class MediahubMixin:
 
         self._espuino_run_transfer([plan_album(album.tracks, folder)], local, host, [(card_id, play_mode)],
                                    finished)
+
+    def _espuino_folder_series(self, folders: list) -> dict:
+        """Ordner (klein) -> Serie: das Serienprofil des Albums im Archiv, sonst der
+        Interpret des Bibliotheksalbums (etwa "Bibi und Tina", "Conni")"""
+        archive = get_archive(self, ask=False)
+        result = {}
+        for folder in folders:
+            cards = self._espuino_folder_cards(folder)
+            series = ""
+            if archive is not None:
+                for card in cards:
+                    record = archive.load_album(card.album_id) if card.album_id else None
+                    profile = archive.series.load(record.series_id) if record is not None and record.series_id \
+                        else None
+                    if profile is not None and profile.name:
+                        series = profile.name
+                        break
+            if not series:
+                album = next((self.library_view.index.find(c.library_path) for c in cards if c.library_path), None) \
+                    or self._espuino_album_for_folder(folder)
+                series = (album.artist or "").strip() if album is not None else ""
+            if series:
+                result[folder.casefold()] = series
+        return result
 
     def _espuino_folder_notes(self) -> dict:
         """Ordner (klein) -> Namen der Karten, die darauf zeigen (fuer die Auswahl beim Zuweisen)"""

@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 from PyQt6.QtCore import QPoint, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPixmap
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton,
+    QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -28,6 +28,7 @@ from gui.library_dnd import DropHighlight, drop_payload_from_mime
 
 FOLDER_ROLE = Qt.ItemDataRole.UserRole
 FOLDER_PREVIEW = 200
+SERIES_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 def _gb(value: int) -> str:
@@ -139,6 +140,11 @@ class EspuinoDeviceSidebar(QWidget):
         layout.addWidget(self.btn_reload)
         self.folders_label = QLabel("Auf dem ESPuino:")
         layout.addWidget(self.folders_label)
+        self.series_combo = QComboBox()
+        self.series_combo.setToolTip("Nur Ordner einer Serie zeigen (Serienprofil im Archiv, sonst Interpret "
+                                     "des Albums in der Bibliothek)")
+        self.series_combo.currentIndexChanged.connect(self._apply_folder_filter)
+        layout.addWidget(self.series_combo)
         self.folder_filter = QLineEdit()
         self.folder_filter.setPlaceholderText("Ordner filtern …")
         self.folder_filter.setClearButtonEnabled(True)
@@ -155,11 +161,15 @@ class EspuinoDeviceSidebar(QWidget):
         self.drop_label.setWordWrap(True)
         self.drop_label.setStyleSheet(f"color: {theme.OVERLAY2};")
         layout.addWidget(self.drop_label)
+        self._fill_series([])  # Serienauswahl erst zeigen, wenn es Serien gibt
 
-    def set_state(self, host: str, state, folder_cards: Dict[str, List[str]], name: str = ""):
+    def set_state(self, host: str, state, folder_cards: Dict[str, List[str]], name: str = "",
+                  folder_series: Optional[Dict[str, str]] = None):
         """state: core.espuino_device.DeviceState oder None (nicht eingerichtet).
         folder_cards: "/Ordner" (klein) -> Kartennamen, die darauf zeigen.
-        name: Name des Geraets in der Liste der ESPuinos"""
+        name: Name des Geraets in der Liste der ESPuinos.
+        folder_series: "/Ordner" (klein) -> Serie (zum Anzeigen und Filtern)"""
+        folder_series = folder_series or {}
         configured = bool(host)
         connected = state is not None and state.error != NOT_CONNECTED
         self.btn_assign.setEnabled(state is not None)  # auch ohne ESPuino: auslesen ueber den ACR122U
@@ -202,27 +212,50 @@ class EspuinoDeviceSidebar(QWidget):
         self.folder_list.drop_hint_blocked = "ESPuino nicht erreichbar" if connected else "Erst verbinden"
         for folder in state.folders or []:
             cards = folder_cards.get(folder.strip("/").casefold(), [])
-            item = QListWidgetItem(folder.strip("/"))
+            series = folder_series.get(folder.casefold(), "")
+            item = QListWidgetItem(folder.strip("/") + (f"   ·   {series}" if series else ""))
             item.setData(FOLDER_ROLE, folder)
+            item.setData(SERIES_ROLE, series)
+            tips = [f"Serie: {series}"] if series else []
             if cards:
-                item.setToolTip("Karte: " + ", ".join(cards))
+                tips.append("Karte: " + ", ".join(cards))
             else:
                 item.setForeground(QBrush(QColor(theme.OVERLAY2)))
-                item.setToolTip("Keine Karte zeigt auf diesen Ordner")
+                tips.append("Keine Karte zeigt auf diesen Ordner")
+            item.setToolTip("\n".join(tips))
             self.folder_list.addItem(item)
+        self._fill_series(sorted({s for s in folder_series.values() if s}, key=str.casefold))
         self._apply_folder_filter()
         if state.folders is None:
             self.folders_label.setText("Auf dem ESPuino: (unbekannt)")
         else:
             self.folders_label.setText(f"Auf dem ESPuino: {len(state.folders)} Ordner")
 
+    def _fill_series(self, names: List[str]):
+        current = self.series_combo.currentData()
+        self.series_combo.blockSignals(True)
+        self.series_combo.clear()
+        self.series_combo.addItem("Alle Serien", None)
+        for name in names:
+            self.series_combo.addItem(name, name)
+        self.series_combo.addItem("Ohne Serie", "")
+        index = self.series_combo.findData(current) if current is not None else 0
+        self.series_combo.setCurrentIndex(max(0, index))
+        self.series_combo.setVisible(bool(names))
+        self.series_combo.blockSignals(False)
+        self._apply_folder_filter()
+
     def _apply_folder_filter(self, *_):
-        """Ordner nach Namen oder Kartennamen filtern (stehen im Tooltip)"""
+        """Ordner nach Serie und nach Namen oder Kartennamen filtern (stehen im Tooltip)"""
         needle = self.folder_filter.text().strip().casefold()
+        series = self.series_combo.currentData()
         for row in range(self.folder_list.count()):
             item = self.folder_list.item(row)
             text = (item.text() + " " + (item.toolTip() or "")).casefold()
-            item.setHidden(bool(needle) and needle not in text)
+            hidden = bool(needle) and needle not in text
+            if series is not None and (item.data(SERIES_ROLE) or "") != series:
+                hidden = True
+            item.setHidden(hidden)
 
     def _folder_menu(self, pos: QPoint):
         item = self.folder_list.itemAt(pos)
@@ -253,13 +286,25 @@ def needs_transfer(card: MediahubCard) -> bool:
                                    or card.device_status in (NOT_ASSIGNED, ASSIGNED_OTHER))
 
 
+COL_CHECK, COL_NAME, COL_NUMBER, COL_ASSIGNED, COL_SD, COL_LIBRARY, COL_COVER = range(7)
+CARD_HEADERS = ["", "Karte", "Nummer", "Zugewiesen", "SD-Karte", "Bibliothek", "Cover"]
+FILTER_MARK = " ▾"  # am Spaltenkopf: hier ist gefiltert
+
+
 class KnownCardsTable(QWidget):
-    """Bekannte Karten mit Status auf dem aktuellen ESPuino"""
+    """Bekannte Karten mit Status auf dem aktuellen ESPuino. Checkboxen fuer eine
+    Auswahl ("Ausgewaehlte uebertragen"); ein Klick auf einen Spaltenkopf sortiert
+    und filtert nach den Werten der Spalte."""
     card_selected = pyqtSignal(str)
     transfer_missing_requested = pyqtSignal()
+    transfer_selected_requested = pyqtSignal(list)  # Kartennummern
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._checked = set()  # Kartennummern, bleibt beim Neueinlesen erhalten
+        self._missing = set()  # Karten, die sich uebertragen lassen und fehlen
+        self._hidden_values = {}  # Spalte -> ausgeblendete Werte
+        self._reachable = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.filter_edit = QLineEdit()
@@ -271,20 +316,43 @@ class KnownCardsTable(QWidget):
         self.tree.setObjectName("trackList")
         self.tree.setRootIsDecorated(False)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.tree.setHeaderLabels(["Karte", "Nummer", "Zugewiesen", "SD-Karte", "Bibliothek", "Cover"])
+        self.tree.setHeaderLabels(CARD_HEADERS)
         header = self.tree.header()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 6):
+        header.setSectionResizeMode(COL_CHECK, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
+        for column in range(COL_NUMBER, COL_COVER + 1):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.itemActivated.connect(lambda item, _col: self.card_selected.emit(item.data(0, FOLDER_ROLE)))
-        self.tree.itemClicked.connect(lambda item, _col: self.card_selected.emit(item.data(0, FOLDER_ROLE)))
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(False)
+        header.sectionClicked.connect(self._header_menu)
+        header.setToolTip("Klick auf einen Spaltenkopf: sortieren und nach Werten filtern")
+        self.tree.itemActivated.connect(self._open)
+        self.tree.itemClicked.connect(self._open)
+        self.tree.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self.tree, 1)
         self.legend = QLabel("Zugewiesen: ✓ auf diesem ESPuino · – nicht zugewiesen · anders: dort anders belegt. "
                              "SD-Karte: Ordner auf der SD-Karte des ESPuino ✓ oder fehlt. "
-                             "Bibliothek: Album in der Bibliothek ✓ oder fehlt (nur dann lässt es sich übertragen).")
+                             "Bibliothek: Album in der Bibliothek ✓ oder fehlt (nur dann lässt es sich übertragen). "
+                             "Klick auf einen Spaltenkopf: sortieren und filtern.")
         self.legend.setWordWrap(True)
         self.legend.setStyleSheet(f"color: {theme.OVERLAY2};")
         layout.addWidget(self.legend)
+        select_row = QHBoxLayout()
+        for text, slot in (("Alle", lambda: self._check_where(lambda _cid: True)),
+                           ("Keine", lambda: self._check_where(lambda _cid: False)),
+                           ("Fehlende markieren", lambda: self._check_where(lambda cid: cid in self._missing))):
+            button = QPushButton(text)
+            button.setObjectName("ghostButton")
+            button.clicked.connect(slot)
+            select_row.addWidget(button)
+        select_row.addStretch(1)
+        self.btn_transfer_selected = QPushButton("Ausgewählte übertragen")
+        self.btn_transfer_selected.setToolTip("Nur die angehakten Karten: Album aus der Bibliothek übertragen "
+                                              "(fehlende Dateien) und auf diesem ESPuino zuweisen")
+        self.btn_transfer_selected.clicked.connect(
+            lambda: self.transfer_selected_requested.emit(self.checked_ids()))
+        select_row.addWidget(self.btn_transfer_selected)
+        layout.addLayout(select_row)
         self.btn_transfer_missing = QPushButton("Fehlende auf den ESPuino übertragen")
         self.btn_transfer_missing.setObjectName("primaryButton")
         self.btn_transfer_missing.setToolTip("Für jede Karte, deren Ordner fehlt oder die auf diesem ESPuino nicht "
@@ -292,42 +360,136 @@ class KnownCardsTable(QWidget):
         self.btn_transfer_missing.clicked.connect(self.transfer_missing_requested)
         layout.addWidget(self.btn_transfer_missing)
 
+    # --- Inhalt -----------------------------------------------------------------------
+
     def set_cards(self, cards: List[MediahubCard], has_cover: Dict[str, bool], reachable: bool):
+        self._reachable = reachable
+        self._missing = {c.card_id for c in cards if needs_transfer(c)}
+        known = {c.card_id for c in cards}
+        self._checked &= known
+        self.tree.blockSignals(True)
         self.tree.clear()
         for card in cards:
             folder = {True: "✓", False: "fehlt", None: "?"}[card.folder_present]
             status = STATUS_TEXT.get(card.device_status, "?")
             library = "✓" if card.library_path else "fehlt"
-            item = QTreeWidgetItem([card.label, format_card_id(card.card_id), status, folder, library,
+            item = QTreeWidgetItem(["", card.label, format_card_id(card.card_id), status, folder, library,
                                     "✓" if has_cover.get(card.card_id) else "–"])
             item.setData(0, FOLDER_ROLE, card.card_id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(COL_CHECK, Qt.CheckState.Checked if card.card_id in self._checked
+                               else Qt.CheckState.Unchecked)
             tips = [f"Ordner: {card.sd_path or '–'}"]
             if card.device_status == ASSIGNED_OTHER:
                 tips.append(f"Auf diesem ESPuino zeigt die Karte auf {card.device_target}")
             tips.append("Album in der Bibliothek: " + (card.library_path or "nicht gefunden"))
-            item.setToolTip(0, "\n".join(tips))
+            item.setToolTip(COL_NAME, "\n".join(tips))
             warn = card.folder_present is False or card.device_status in (NOT_ASSIGNED, ASSIGNED_OTHER)
             if warn:
-                for column in (2, 3):
+                for column in (COL_ASSIGNED, COL_SD):
                     item.setForeground(column, QBrush(QColor(theme.YELLOW)))
             if not card.library_path:
-                item.setForeground(4, QBrush(QColor(theme.OVERLAY2)))
+                item.setForeground(COL_LIBRARY, QBrush(QColor(theme.OVERLAY2)))
             if not has_cover.get(card.card_id):
-                font = item.font(0)
+                font = item.font(COL_NAME)
                 font.setItalic(True)
-                item.setFont(0, font)
+                item.setFont(COL_NAME, font)
             self.tree.addTopLevelItem(item)
-        missing = sum(1 for c in cards if needs_transfer(c))
-        self.btn_transfer_missing.setText(f"Fehlende auf den ESPuino übertragen ({missing})")
-        self.btn_transfer_missing.setEnabled(reachable and missing > 0)
+        self.tree.blockSignals(False)
+        self.btn_transfer_missing.setText(f"Fehlende auf den ESPuino übertragen ({len(self._missing)})")
+        self.btn_transfer_missing.setEnabled(reachable and bool(self._missing))
+        self._apply_filter()
+        self._update_selected_button()
+
+    def _open(self, item, column: int):
+        if column != COL_CHECK:  # Klick auf die Checkbox waehlt nur aus
+            self.card_selected.emit(item.data(0, FOLDER_ROLE))
+
+    def _on_item_changed(self, item, column: int):
+        if column != COL_CHECK:
+            return
+        card_id = item.data(0, FOLDER_ROLE)
+        if item.checkState(COL_CHECK) == Qt.CheckState.Checked:
+            self._checked.add(card_id)
+        else:
+            self._checked.discard(card_id)
+        self._update_selected_button()
+
+    def _check_where(self, predicate):
+        """Angezeigte Karten an- bzw. abhaken (ausgefilterte bleiben, wie sie sind)"""
+        self.tree.blockSignals(True)
+        for row in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(row)
+            if item.isHidden():
+                continue
+            card_id = item.data(0, FOLDER_ROLE)
+            on = predicate(card_id)
+            item.setCheckState(COL_CHECK, Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
+            (self._checked.add if on else self._checked.discard)(card_id)
+        self.tree.blockSignals(False)
+        self._update_selected_button()
+
+    def checked_ids(self) -> List[str]:
+        return [self.tree.topLevelItem(row).data(0, FOLDER_ROLE) for row in range(self.tree.topLevelItemCount())
+                if self.tree.topLevelItem(row).data(0, FOLDER_ROLE) in self._checked]
+
+    def _update_selected_button(self):
+        count = len(self._checked)
+        self.btn_transfer_selected.setText(f"Ausgewählte übertragen ({count})")
+        self.btn_transfer_selected.setEnabled(self._reachable and count > 0)
+
+    # --- Sortieren und Filtern -------------------------------------------------------
+
+    def _header_menu(self, column: int):
+        if column == COL_CHECK:
+            return
+        menu = QMenu(self)
+        up = menu.addAction("Aufsteigend sortieren")
+        up.triggered.connect(lambda: self._sort(column, Qt.SortOrder.AscendingOrder))
+        down = menu.addAction("Absteigend sortieren")
+        down.triggered.connect(lambda: self._sort(column, Qt.SortOrder.DescendingOrder))
+        values = sorted({self.tree.topLevelItem(r).text(column) for r in range(self.tree.topLevelItemCount())},
+                        key=str.casefold)
+        if 1 < len(values) <= 30:  # Namen und Nummern sind zu viele - dafuer gibt es das Suchfeld
+            menu.addSeparator()
+            hidden = self._hidden_values.setdefault(column, set())
+            show_all = menu.addAction("Alle anzeigen")
+            show_all.triggered.connect(lambda: self.set_value_filter(column, set()))
+            for value in values:
+                action = menu.addAction(value or "(leer)")
+                action.setCheckable(True)
+                action.setChecked(value not in hidden)
+                action.toggled.connect(lambda on, v=value: self._toggle_value(column, v, on))
+        header = self.tree.header()
+        menu.exec(header.mapToGlobal(QPoint(header.sectionViewportPosition(column), header.height())))
+
+    def _sort(self, column: int, order):
+        self.tree.sortItems(column, order)
+        self.tree.header().setSortIndicatorShown(True)
+        self.tree.header().setSortIndicator(column, order)
+
+    def _toggle_value(self, column: int, value: str, shown: bool):
+        hidden = set(self._hidden_values.get(column, set()))
+        (hidden.discard if shown else hidden.add)(value)
+        self.set_value_filter(column, hidden)
+
+    def set_value_filter(self, column: int, hidden_values):
+        """Werte einer Spalte ausblenden (leere Menge: alle zeigen)"""
+        self._hidden_values[column] = set(hidden_values)
+        label = CARD_HEADERS[column] + (FILTER_MARK if hidden_values else "")
+        self.tree.headerItem().setText(column, label)
         self._apply_filter()
 
     def _apply_filter(self, *_):
         needle = self.filter_edit.text().strip().casefold()
         for row in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(row)
-            text = (item.text(0) + " " + str(item.data(0, FOLDER_ROLE))).casefold()
-            item.setHidden(bool(needle) and needle not in text)
+            text = (item.text(COL_NAME) + " " + str(item.data(0, FOLDER_ROLE))).casefold()
+            hidden = bool(needle) and needle not in text
+            for column, values in self._hidden_values.items():
+                if item.text(column) in values:
+                    hidden = True
+            item.setHidden(hidden)
 
 
 def album_folder_names(paths: List[str], index) -> List[str]:

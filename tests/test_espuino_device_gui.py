@@ -63,8 +63,8 @@ def test_window_shows_device_and_known_cards(setup):
         assert side.folder_list.drop_enabled
         table = page.cards_table.tree
         assert table.topLevelItemCount() == 2 and page.pages.currentIndex() == 2
-        assert table.headerItem().text(3) == "SD-Karte" and table.headerItem().text(4) == "Bibliothek"
-        assert {table.topLevelItem(i).text(4) for i in range(2)} == {"fehlt"}  # kein Album in der Bibliothek
+        assert table.headerItem().text(4) == "SD-Karte" and table.headerItem().text(5) == "Bibliothek"
+        assert {table.topLevelItem(i).text(5) for i in range(2)} == {"fehlt"}  # kein Album in der Bibliothek
         text = page.device_text.text()
         assert "2 bekannte Karten" in text and "1 Funktionskarte" in text and "1 vom Mediahub verwaltet" in text
         window._mediahub_show_card(CARD_A)
@@ -594,6 +594,79 @@ def test_series_batch_and_rework_on_espuino_cards(setup, monkeypatch):
         monkeypatch.setattr(window, "_mediahub_open_cover", lambda card_id="": opened.append(card_id))
         window._rework_refused(refused)
         assert opened == [CARD_A]
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+
+def test_card_table_checkboxes_sorting_and_value_filters(setup, monkeypatch):
+    """Checkboxen: nur angehakte uebertragen; Spaltenkopf: sortieren und nach Werten filtern"""
+    from PyQt6.QtCore import Qt
+    from gui.espuino_device_view import COL_CHECK, COL_NAME, COL_SD
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        table = window.mediahub_page.cards_table
+        tree = table.tree
+        assert not table.btn_transfer_selected.isEnabled()
+        row = tree.topLevelItem(0)
+        opened = []
+        table.card_selected.connect(opened.append)
+        tree.itemClicked.emit(row, COL_CHECK)  # Klick auf die Checkbox-Spalte oeffnet nichts
+        assert opened == []
+        row.setCheckState(COL_CHECK, Qt.CheckState.Checked)
+        assert table.checked_ids() == [row.data(0, 0x0100)] and table.btn_transfer_selected.isEnabled()
+        assert "(1)" in table.btn_transfer_selected.text()
+        sent = []
+        monkeypatch.setattr(window, "_espuino_transfer_cards", lambda cards: sent.append([c.card_id for c in cards]))
+        table.btn_transfer_selected.click()
+        assert sent == [[row.data(0, 0x0100)]]
+        window._mediahub_reload()  # Auswahl bleibt beim Neueinlesen erhalten
+        assert table.checked_ids() == sent[0]
+        table._check_where(lambda _cid: False)
+        assert table.checked_ids() == []
+        table._check_where(lambda _cid: True)
+        assert len(table.checked_ids()) == 2
+
+        table._sort(COL_NAME, Qt.SortOrder.DescendingOrder)
+        names = [tree.topLevelItem(i).text(COL_NAME) for i in range(tree.topLevelItemCount())]
+        assert names == sorted(names, key=str.casefold, reverse=True)
+        values = {tree.topLevelItem(i).text(COL_SD) for i in range(tree.topLevelItemCount())}
+        hide = next(iter(values))
+        table.set_value_filter(COL_SD, {hide})
+        assert tree.headerItem().text(COL_SD).endswith("▾")
+        assert all(tree.topLevelItem(i).isHidden() == (tree.topLevelItem(i).text(COL_SD) == hide)
+                   for i in range(tree.topLevelItemCount()))
+        table.set_value_filter(COL_SD, set())
+        assert not any(tree.topLevelItem(i).isHidden() for i in range(tree.topLevelItemCount()))
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_sidebar_shows_and_filters_series(setup, monkeypatch):
+    """Seitenleiste: Serie je Ordner (Interpret des Bibliotheksalbums bzw. Serienprofil) und Filter"""
+    from core.library import LibraryAlbum
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        album = LibraryAlbum(path="X:/Musik", title="Lieder", artist="Kinderlieder", tracks=["a.mp3"])
+        monkeypatch.setattr(window, "_espuino_album_for_folder",
+                            lambda folder: album if folder.casefold() == "/musik" else None)
+        window._mediahub_reload()
+        side = window.espuino_sidebar
+        texts = [side.folder_list.item(i).text() for i in range(side.folder_list.count())]
+        assert "Musik   ·   Kinderlieder" in texts and "Hörspiele" in texts
+        assert not side.series_combo.isHidden()
+        side.series_combo.setCurrentIndex(side.series_combo.findData("Kinderlieder"))
+        visible = [side.folder_list.item(i).text() for i in range(side.folder_list.count())
+                   if not side.folder_list.item(i).isHidden()]
+        assert visible == ["Musik   ·   Kinderlieder"]
+        side.series_combo.setCurrentIndex(side.series_combo.findData(""))  # ohne Serie
+        visible = [side.folder_list.item(i).text() for i in range(side.folder_list.count())
+                   if not side.folder_list.item(i).isHidden()]
+        assert visible == ["Hörspiele"]
     finally:
         window.close()
         window.deleteLater()
