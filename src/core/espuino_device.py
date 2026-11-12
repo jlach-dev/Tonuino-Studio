@@ -21,6 +21,7 @@ ein Kartencover gehoert also zur physischen Karte, egal woher sie gelesen wurde.
 Eigene Datei des Forks (siehe core/branding.py).
 """
 
+import codecs
 import json
 import os
 import re
@@ -255,7 +256,7 @@ def parse_backup(text: str) -> List[dict]:
     Gibt Eintraege wie GET /rfid zurueck; Zeilen in anderem Format (etwa
     Funktionskarten) werden uebersprungen."""
     entries = []
-    for line in text.lstrip("\ufeff").splitlines():
+    for line in text.lstrip(codecs.BOM_UTF8.decode("utf-8")).splitlines():
         match = _BACKUP_LINE.match(line.strip("\r"))
         if match:
             card_id, path, _pos, mode, _track = match.groups()
@@ -268,7 +269,7 @@ def read_backup(sd_root: str, state: "DeviceState") -> bool:
     Nur ein Stand der Sicherung: der ESPuino schreibt sie bei jeder Aenderung neu."""
     path = Path(sd_root) / BACKUP_FILE
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
         stamp = path.stat().st_mtime
     except OSError:
         return False
