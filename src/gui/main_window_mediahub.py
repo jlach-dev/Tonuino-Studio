@@ -392,6 +392,12 @@ class MediahubMixin:
             self.view_switch.setCurrentIndex(0)
             self._mediahub_show_card(card_id)
 
+    def _espuino_album_thumb(self, album) -> str:
+        """Vorschaubild eines Bibliotheksalbums ("" ohne Bild oder Bibliothek)"""
+        library = getattr(self.library_view, "library", None)
+        path = library.thumb_path(album) if library is not None else None
+        return str(path) if path else ""
+
     def _espuino_card_info(self, card_id: str):
         """Alles, was Studio zu einer Kartennummer weiss (fuer "Karte auslesen")"""
         from core import card_store
@@ -421,8 +427,7 @@ class MediahubMixin:
             info.album = album.name
             minutes = int(round(album.duration / 60)) if album.duration else 0
             info.album_detail = f"{album.track_count} Titel" + (f", {minutes} min" if minutes else "")
-            thumb = self.library_view.index.thumb_path(album)
-            info.album_cover_path = str(thumb) if thumb else ""
+            info.album_cover_path = self._espuino_album_thumb(album)
         archive = get_archive(self, ask=False)
         if archive is not None:
             card_dir = str(archive.card_dir(card.album_id))
@@ -446,8 +451,7 @@ class MediahubMixin:
             meta.append(f"Album: {album.name}" + (f" – {album.artist}" if album.artist else ""))
             meta.append(f"{album.track_count} Titel" + (f", {minutes} min" if minutes else "")
                         + f" · Bibliothek: {album.path}")
-            thumb = self.library_view.index.thumb_path(album)
-            preview = str(thumb) if thumb else ""
+            preview = self._espuino_album_thumb(album)
         else:
             meta.append("Kein passendes Album in der Bibliothek gefunden.")
         has_cover = self._mediahub_cover_map()

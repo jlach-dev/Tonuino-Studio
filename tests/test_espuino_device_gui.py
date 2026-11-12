@@ -320,3 +320,30 @@ def test_click_on_device_folder_shows_its_cards(setup):
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_card_info_and_folder_page_show_the_library_album(setup, tmp_path, monkeypatch):
+    """Karte mit Album in der Bibliothek: Album und Vorschaubild (frueher AttributeError)"""
+    from PIL import Image
+    from core.library import LibraryAlbum
+    from gui.main_window import MainWindow
+    thumb = tmp_path / "thumb.png"
+    Image.new("RGB", (40, 40), (200, 0, 0)).save(thumb)
+    album = LibraryAlbum(path=str(tmp_path / "Fuchsbande"), title="Die Fuchsbande", tracks=["a.mp3", "b.mp3"],
+                         duration=600.0, thumb="thumb.png")
+    window = MainWindow()
+    try:
+        card = window._mediahub_card(CARD_A)
+        monkeypatch.setattr(card, "library_path", album.path)
+        monkeypatch.setattr(window.library_view.index, "find", lambda path: album if path == album.path else None)
+        monkeypatch.setattr(window.library_view, "library", type("Lib", (), {"thumb_path": lambda self, a: thumb})())
+        info = window._espuino_card_info(CARD_A)
+        assert info.album == "Die Fuchsbande" and info.album_detail == "2 Titel, 10 min"
+        assert info.album_cover_path == str(thumb)
+        window._espuino_show_folder("/Hörspiele/Fuchsbande")
+        assert "Album: Die Fuchsbande" in window.mediahub_page.folder_page.meta_label.text()
+        monkeypatch.setattr(window.library_view, "library", None)  # Bibliothek noch nicht geladen
+        assert window._espuino_card_info(CARD_A).album_cover_path == ""
+    finally:
+        window.close()
+        window.deleteLater()
