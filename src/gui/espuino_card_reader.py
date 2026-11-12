@@ -40,7 +40,7 @@ from core.mediahub_cards import format_card_id, play_mode_label
 from gui import theme
 
 IMAGE_W, IMAGE_H = 300, 189  # Kartenformat quer
-OFFLINE_NOTE = 'ESPuino nicht verbunden: „Vormerken“ merkt sich die Zuordnung, zugewiesen wird nach dem Verbinden mit „Fehlende auf den ESPuino übertragen“.'
+OFFLINE_NOTE = 'ESPuino nicht verbunden: „Vormerken“ merkt sich die Zuordnung, zugewiesen wird nach dem Verbinden: „Vorgemerkte markieren“, dann „Ausgewählte übertragen“.'
 DEFAULT_MODE = 3  # Hoerbuch (merkt sich die Stelle)
 
 

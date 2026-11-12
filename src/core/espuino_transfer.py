@@ -101,6 +101,24 @@ def _local(sd_root: str, sd_path: str) -> Path:
     return Path(sd_root).joinpath(*[p for p in sd_path.split("/") if p])
 
 
+def pending_items(plan: TransferPlan, sd_root: str = "", host: str = "") -> List[TransferItem]:
+    """Dateien, die beim Uebertragen wirklich kopiert wuerden - nach denselben
+    Regeln wie copy_to_sd (SD-Karte im PC: gleicher Name und gleiche Groesse)
+    bzw. upload_to_device (WLAN: gleicher Name). Fuer die Rueckfrage vorher."""
+    if sd_root:
+        return [i for i in plan.items
+                if not (_local(sd_root, i.target).is_file() and _local(sd_root, i.target).stat().st_size == i.size)]
+    existing: dict = {}
+    result = []
+    for item in plan.items:
+        folder, _, name = item.target.rpartition("/")
+        if folder not in existing:
+            existing[folder] = list_folder(host, folder or "/")
+        if name not in existing[folder]:
+            result.append(item)
+    return result
+
+
 def copy_to_sd(plan: TransferPlan, sd_root: str, progress: Optional[Progress] = None,
                cancelled: Callable[[], bool] = lambda: False) -> TransferResult:
     """Auf die SD-Karte im Kartenleser kopieren. Vorhandene Dateien mit gleicher

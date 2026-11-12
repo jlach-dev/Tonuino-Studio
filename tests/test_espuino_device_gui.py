@@ -63,8 +63,9 @@ def test_window_shows_device_and_known_cards(setup):
         assert side.folder_list.drop_enabled
         table = page.cards_table.tree
         assert table.topLevelItemCount() == 2 and page.pages.currentIndex() == 2
-        assert table.headerItem().text(4) == "SD-Karte" and table.headerItem().text(5) == "Bibliothek"
-        assert {table.topLevelItem(i).text(5) for i in range(2)} == {"fehlt"}  # kein Album in der Bibliothek
+        assert table.headerItem().text(5) == "SD-Karte" and table.headerItem().text(6) == "Bibliothek"
+        assert table.headerItem().text(4) == "Vorgemerkt"
+        assert {table.topLevelItem(i).text(6) for i in range(2)} == {"fehlt"}  # kein Album in der Bibliothek
         text = page.device_text.text()
         assert "2 bekannte Karten" in text and "1 Funktionskarte" in text and "1 vom Mediahub verwaltet" in text
         window._mediahub_show_card(CARD_A)
@@ -105,7 +106,7 @@ def test_unreachable_device_keeps_known_cards(setup):
 def test_transfer_known_card_uploads_and_assigns(setup, tmp_path):
     from core.espuino_cards import NOT_ASSIGNED
     from core.library import LibraryAlbum
-    from gui.espuino_device_view import needs_transfer
+    from gui.espuino_device_view import is_reserved, needs_transfer
     from gui.espuino_dialogs import TransferWorker
     from core.espuino_transfer import plan_album
     esp = setup["esp"]
@@ -127,7 +128,8 @@ def test_transfer_known_card_uploads_and_assigns(setup, tmp_path):
         window._mediahub_reload()
         card = window._mediahub_card("777888999000")
         assert card.device_status == NOT_ASSIGNED and card.folder_present is False and needs_transfer(card)
-        assert card.library_path == str(folder) and window.mediahub_page.cards_table.btn_transfer_missing.isEnabled()
+        assert card.library_path == str(folder) and is_reserved(card)
+        assert card.card_id in window.mediahub_page.cards_table._reserved
         worker = TransferWorker([plan_album(tracks, card.sd_path)], "", esp.host,
                                 assignments=[(card.card_id, 5)])
         done = []
@@ -703,11 +705,12 @@ def test_sd_card_in_reader_works_while_espuino_is_off(setup, tmp_path, monkeypat
         window._espuino_known.remember("777888999000", name="Fuchsbande", sd_folder="/Die Fuchsbande", play_mode=5)
         window._espuino_known.save()
         window._mediahub_reload()
-        assert table.btn_transfer_missing.isEnabled()  # Uebertragen geht ohne ESPuino
+        table._check_where(lambda cid: cid == "777888999000")
+        assert table.btn_transfer_selected.isEnabled()  # Uebertragen geht ohne ESPuino
         runs = []
         monkeypatch.setattr(window, "_espuino_run_transfer",
                             lambda plans, local, host, assignments, finished: runs.append((local, assignments)))
-        window._espuino_transfer_missing()
+        table.btn_transfer_selected.click()
         assert runs and runs[0][0] == str(sd) and all(a is None for a in runs[0][1])  # nicht zuweisen
     finally:
         window.close()
@@ -717,7 +720,7 @@ def test_sd_card_in_reader_works_while_espuino_is_off(setup, tmp_path, monkeypat
 
 def test_pre_assign_without_espuino_then_assign_after_connecting(setup, monkeypatch):
     """Ohne ESPuino vormerken (Ordner schon auf der SD-Karte, kein Album in der Bibliothek);
-    nach dem Verbinden weist "Fehlende uebertragen" die Karte zu"""
+    nach dem Verbinden weist "Ausgewaehlte uebertragen" die Karte zu"""
     from PyQt6.QtWidgets import QMessageBox
     from gui.espuino_device_view import needs_transfer
     from gui.main_window import MainWindow
@@ -740,7 +743,7 @@ def test_pre_assign_without_espuino_then_assign_after_connecting(setup, monkeypa
         window._mediahub_reload()
         card = window._mediahub_card("333444555666")
         assert card.folder_present is True and not card.library_path and needs_transfer(card)
-        window._espuino_transfer_missing()
+        window._espuino_transfer_cards([card])
         assert {"id": "333444555666", "fileOrUrl": "/Hörspiele/Neu", "playMode": 3} in esp.posts
         assert window._mediahub_card("333444555666").device_status == "assigned"
     finally:
@@ -763,6 +766,89 @@ def test_status_from_backup_file_while_espuino_is_off(setup):
         assert window._mediahub_card(CARD_A).device_status == ASSIGNED
         assert "backup.txt vom" in window.espuino_sidebar.device_label.text()
         assert "Sicherung backup.txt" in window.mediahub_page.device_text.text()
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_reserved_column_and_mark_button(setup):
+    """Spalte "Vorgemerkt" und Knopf "Vorgemerkte markieren"; kein grosser Knopf mehr"""
+    from PyQt6.QtWidgets import QPushButton
+    from gui.espuino_device_view import COL_RESERVED
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        window._espuino_known.remember("777888999000", name="Fuchsbande", sd_folder="/Die Fuchsbande", play_mode=3)
+        window._espuino_known.save()
+        window._mediahub_reload()
+        table = window.mediahub_page.cards_table
+        tree = table.tree
+        rows = {tree.topLevelItem(i).data(0, 0x0100): tree.topLevelItem(i) for i in range(tree.topLevelItemCount())}
+        assert rows["777888999000"].text(COL_RESERVED) == "✓"
+        assert rows[CARD_A].text(COL_RESERVED) == "–"
+        assert not hasattr(table, "btn_transfer_missing")
+        mark = [b for b in table.findChildren(QPushButton) if b.text() == "Vorgemerkte markieren"]
+        assert mark
+        mark[0].click()
+        assert table.checked_ids() == ["777888999000"]
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_pending_items_counts_only_missing_files(setup, tmp_path):
+    """Vorab pruefen: vorhandene Dateien zaehlen nicht mit (SD im PC: Name und Groesse; WLAN: Name)"""
+    from core.espuino_transfer import pending_items, plan_album
+    src = tmp_path / "src"
+    src.mkdir()
+    tracks = []
+    for name in ("01.mp3", "02.mp3"):
+        (src / name).write_bytes(b"x" * 100)
+        tracks.append(str(src / name))
+    plan = plan_album(tracks, "/Album")
+    sd = tmp_path / "card"
+    (sd / "Album").mkdir(parents=True)
+    (sd / "Album" / "01.mp3").write_bytes(b"x" * 100)  # gleich gross: vorhanden
+    (sd / "Album" / "02.mp3").write_bytes(b"x" * 10)  # angefangen: wird neu kopiert
+    assert [i.target for i in pending_items(plan, str(sd))] == ["/Album/02.mp3"]
+    esp = setup["esp"]
+    esp.files["/Album/01.mp3"] = b"x"
+    assert [i.target for i in pending_items(plan, "", esp.host)] == ["/Album/02.mp3"]
+    esp.files["/Album/02.mp3"] = b"x"
+    assert pending_items(plan, "", esp.host) == []
+
+
+def test_transfer_selected_skips_present_files_and_only_assigns(setup, tmp_path, monkeypatch):
+    """Album liegt schon komplett auf dem ESPuino: nichts uebertragen, nur die vorgemerkte Karte
+    zuweisen; die Rueckfrage nennt das so"""
+    from PyQt6.QtWidgets import QMessageBox
+    from core.library import LibraryAlbum
+    from gui.main_window import MainWindow
+    esp = setup["esp"]
+    folder = tmp_path / "Bibliothek" / "Die Fuchsbande"
+    folder.mkdir(parents=True)
+    tracks = []
+    for name in ("01.mp3", "02.mp3"):
+        (folder / name).write_bytes(b"ID3" + b"\0" * 64)
+        tracks.append(str(folder / name))
+        esp.files["/Die Fuchsbande/" + name] = b"ID3"
+    dev.save_settings(dev.SOURCE_DEVICE, esp.host, "")
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda _p, _t, text, *a, **k: asked.append(text) or QMessageBox.StandardButton.Yes)
+    window = MainWindow()
+    try:
+        window.library_view.index.albums.append(LibraryAlbum(path=str(folder), title="Die Fuchsbande",
+                                                             tracks=tracks, album_id="fuchs"))
+        window._espuino_known.remember("777888999000", name="Fuchsbande", sd_folder="/Die Fuchsbande", play_mode=5)
+        window._espuino_known.save()
+        window._mediahub_reload()
+        runs = []
+        monkeypatch.setattr(window, "_espuino_run_transfer", lambda *a: runs.append(a))
+        window._espuino_transfer_cards([window._mediahub_card("777888999000")])
+        assert runs == []  # nichts zu kopieren
+        assert "1 vorgemerkte Karte" in asked[0] and "Album" not in asked[0].split("\n")[0]
+        assert {"id": "777888999000", "fileOrUrl": "/Die Fuchsbande", "playMode": 5} in esp.posts
     finally:
         window.close()
         window.deleteLater()

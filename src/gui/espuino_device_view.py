@@ -294,8 +294,14 @@ def needs_transfer(card: MediahubCard) -> bool:
         card.folder_present is False or card.device_status in (NOT_ASSIGNED, ASSIGNED_OTHER))
 
 
-COL_CHECK, COL_NAME, COL_NUMBER, COL_ASSIGNED, COL_SD, COL_LIBRARY, COL_COVER = range(7)
-CARD_HEADERS = ["", "Karte", "Nummer", "Zugewiesen", "SD-Karte", "Bibliothek", "Cover"]
+def is_reserved(card: MediahubCard) -> bool:
+    """Vorgemerkt: im Kartenverzeichnis der App mit Ordner, auf diesem ESPuino
+    aber (noch) nicht so zugewiesen - wartet auf „Ausgewaehlte uebertragen“"""
+    return bool(card.sd_path) and card.device_status in (NOT_ASSIGNED, ASSIGNED_OTHER)
+
+
+COL_CHECK, COL_NAME, COL_NUMBER, COL_ASSIGNED, COL_RESERVED, COL_SD, COL_LIBRARY, COL_COVER = range(8)
+CARD_HEADERS = ["", "Karte", "Nummer", "Zugewiesen", "Vorgemerkt", "SD-Karte", "Bibliothek", "Cover"]
 FILTER_MARK = " ▾"  # am Spaltenkopf: hier ist gefiltert
 
 
@@ -304,13 +310,13 @@ class KnownCardsTable(QWidget):
     Auswahl ("Ausgewaehlte uebertragen"); ein Klick auf einen Spaltenkopf sortiert
     und filtert nach den Werten der Spalte."""
     card_selected = pyqtSignal(str)
-    transfer_missing_requested = pyqtSignal()
     transfer_selected_requested = pyqtSignal(list)  # Kartennummern
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._checked = set()  # Kartennummern, bleibt beim Neueinlesen erhalten
         self._missing = set()  # Karten, die sich uebertragen lassen und fehlen
+        self._reserved = set()  # vorgemerkt, auf diesem ESPuino noch nicht zugewiesen
         self._hidden_values = {}  # Spalte -> ausgeblendete Werte
         self._reachable = False
         layout = QVBoxLayout(self)
@@ -339,6 +345,8 @@ class KnownCardsTable(QWidget):
         self.tree.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self.tree, 1)
         self.legend = QLabel("Zugewiesen: ✓ auf diesem ESPuino · – nicht zugewiesen · anders: dort anders belegt. "
+                             "Vorgemerkt: ✓ in der App einem Ordner zugeordnet, auf dem ESPuino noch nicht – "
+                             "wird mit „Ausgewählte übertragen“ zugewiesen. "
                              "SD-Karte: Ordner auf der SD-Karte des ESPuino ✓ oder fehlt. "
                              "Bibliothek: Album in der Bibliothek ✓ oder fehlt (nur dann lässt es sich übertragen). "
                              "Klick auf einen Spaltenkopf: sortieren und filtern.")
@@ -348,31 +356,29 @@ class KnownCardsTable(QWidget):
         select_row = QHBoxLayout()
         for text, slot in (("Alle", lambda: self._check_where(lambda _cid: True)),
                            ("Keine", lambda: self._check_where(lambda _cid: False)),
-                           ("Fehlende markieren", lambda: self._check_where(lambda cid: cid in self._missing))):
+                           ("Fehlende markieren", lambda: self._check_where(lambda cid: cid in self._missing)),
+                           ("Vorgemerkte markieren", lambda: self._check_where(lambda cid: cid in self._reserved))):
             button = QPushButton(text)
             button.setObjectName("ghostButton")
             button.clicked.connect(slot)
             select_row.addWidget(button)
         select_row.addStretch(1)
         self.btn_transfer_selected = QPushButton("Ausgewählte übertragen")
-        self.btn_transfer_selected.setToolTip("Nur die angehakten Karten: Album aus der Bibliothek übertragen "
-                                              "(fehlende Dateien) und auf diesem ESPuino zuweisen")
+        self.btn_transfer_selected.setObjectName("primaryButton")
+        self.btn_transfer_selected.setToolTip("Nur die angehakten Karten: fehlende Dateien des Albums aus der "
+                                              "Bibliothek übertragen und vorgemerkte Karten auf diesem ESPuino "
+                                              "zuweisen. Vorher kommt eine Rückfrage mit der echten Datenmenge.")
         self.btn_transfer_selected.clicked.connect(
             lambda: self.transfer_selected_requested.emit(self.checked_ids()))
         select_row.addWidget(self.btn_transfer_selected)
         layout.addLayout(select_row)
-        self.btn_transfer_missing = QPushButton("Fehlende auf den ESPuino übertragen")
-        self.btn_transfer_missing.setObjectName("primaryButton")
-        self.btn_transfer_missing.setToolTip("Für jede Karte, deren Ordner fehlt oder die auf diesem ESPuino nicht "
-                                             "zugewiesen ist: Album aus der Bibliothek übertragen und zuweisen")
-        self.btn_transfer_missing.clicked.connect(self.transfer_missing_requested)
-        layout.addWidget(self.btn_transfer_missing)
 
     # --- Inhalt -----------------------------------------------------------------------
 
     def set_cards(self, cards: List[MediahubCard], has_cover: Dict[str, bool], reachable: bool):
         self._reachable = reachable
         self._missing = {c.card_id for c in cards if needs_transfer(c)}
+        self._reserved = {c.card_id for c in cards if is_reserved(c)}
         known = {c.card_id for c in cards}
         self._checked &= known
         self.tree.blockSignals(True)
@@ -381,7 +387,8 @@ class KnownCardsTable(QWidget):
             folder = {True: "✓", False: "fehlt", None: "?"}[card.folder_present]
             status = STATUS_TEXT.get(card.device_status, "?")
             library = "✓" if card.library_path else "fehlt"
-            item = QTreeWidgetItem(["", card.label, format_card_id(card.card_id), status, folder, library,
+            reserved = "?" if not card.device_status else ("✓" if is_reserved(card) else "–")
+            item = QTreeWidgetItem(["", card.label, format_card_id(card.card_id), status, reserved, folder, library,
                                     "✓" if has_cover.get(card.card_id) else "–"])
             item.setData(0, FOLDER_ROLE, card.card_id)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -394,7 +401,7 @@ class KnownCardsTable(QWidget):
             item.setToolTip(COL_NAME, "\n".join(tips))
             warn = card.folder_present is False or card.device_status in (NOT_ASSIGNED, ASSIGNED_OTHER)
             if warn:
-                for column in (COL_ASSIGNED, COL_SD):
+                for column in (COL_ASSIGNED, COL_RESERVED, COL_SD):
                     item.setForeground(column, QBrush(QColor(theme.YELLOW)))
             if not card.library_path:
                 item.setForeground(COL_LIBRARY, QBrush(QColor(theme.OVERLAY2)))
@@ -404,8 +411,6 @@ class KnownCardsTable(QWidget):
                 item.setFont(COL_NAME, font)
             self.tree.addTopLevelItem(item)
         self.tree.blockSignals(False)
-        self.btn_transfer_missing.setText(f"Fehlende auf den ESPuino übertragen ({len(self._missing)})")
-        self.btn_transfer_missing.setEnabled(reachable and bool(self._missing))
         self._apply_filter()
         self._update_selected_button()
 

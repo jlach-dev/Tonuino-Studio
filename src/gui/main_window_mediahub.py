@@ -136,7 +136,6 @@ class MediahubMixin:
         self.mediahub_page.folder_page.cover_requested.connect(self._espuino_folder_cover)
         self.mediahub_page.sibling_selected.connect(self._mediahub_show_card)
         self.mediahub_page.assign_folder_requested.connect(self._espuino_assign_folder)
-        self.mediahub_page.cards_table.transfer_missing_requested.connect(self._espuino_transfer_missing)
         self.mediahub_page.cards_table.transfer_selected_requested.connect(
             lambda ids: self._espuino_transfer_cards([c for c in map(self._mediahub_card, ids) if c is not None]))
         self.stack.addWidget(self.mediahub_page)
@@ -654,59 +653,101 @@ class MediahubMixin:
         self._espuino_run_transfer(plans, local, host, None, finished)
 
     def _espuino_transfer_cards(self, cards: list):
-        """Bekannte Karten auf diesen ESPuino: Album aus der Bibliothek in den
-        bekannten Ordner (fehlende Dateien), danach die Karte zuweisen"""
-        from gui.espuino_device_view import can_assign_only, can_transfer
-        if self._espuino_transfer_busy():
+        """Ausgewaehlte Karten auf diesen ESPuino: fehlende Dateien des Albums aus der
+        Bibliothek in den bekannten Ordner, vorgemerkte Karten zuweisen. Vorher wird
+        geprueft, welche Dateien wirklich fehlen - die Rueckfrage nennt die echte Menge."""
+        from core.espuino_cards import ASSIGNED
+        from core.espuino_transfer import pending_items
+        from gui.espuino_device_view import can_transfer
+        if self._espuino_transfer_busy() or not cards:
             return
         state = self._espuino_state
         can_assign = state is not None and state.reachable
-        # Ordner schon auf der SD-Karte, kein Album in der Bibliothek (etwa vorgemerkt): nur zuweisen
-        assign_only = [c for c in cards if can_assign_only(c)] if can_assign else []
-        cards = [c for c in cards if can_transfer(c)]
-        if not cards:
-            if assign_only:
-                names = "\n".join(f"• {c.label}" for c in assign_only[:12])
-                answer = QMessageBox.question(
-                    self, "Auf den ESPuino übertragen", f"{len(assign_only)} Karte{'' if len(assign_only) == 1 else 'n'} "
-                    f"auf diesem ESPuino zuweisen? Die Ordner liegen schon auf seiner SD-Karte.\n\n{names}")
-                if answer == QMessageBox.StandardButton.Yes:
-                    self._espuino_assign_cards(assign_only)
-            return
         _source, host, sd_root = dev.settings()
         local = sd_root if sd_root and os.path.isdir(sd_root) else ""
-        plans, assignments = [], []
-        for card in cards:
-            album = self.library_view.index.find(card.library_path)
-            if album is None or not album.tracks:
-                continue
-            plans.append(plan_album(album.tracks, card.sd_path))
-            assignments.append((card.card_id, int(card.play_mode or 3)))
-        if not plans:
+        title = "Auf den ESPuino übertragen"
+        if not can_assign and not local:
+            QMessageBox.information(self, title, "Der ESPuino ist nicht erreichbar, "
+                                    "und seine SD-Karte steckt nicht im Kartenleser.")
             return
-        if not can_assign:
-            if not local:
-                QMessageBox.information(self, "Auf den ESPuino übertragen", "Der ESPuino ist nicht erreichbar, "
-                                        "und seine SD-Karte steckt nicht im Kartenleser.")
-                return
-            assignments = [None] * len(plans)  # Zuweisen erst, wenn der ESPuino wieder laeuft
-        size = sum(p.total for p in plans)
-        way = "auf die SD-Karte im Kartenleser" if local else "über das WLAN"
-        names = "\n".join(f"• {c.label}" for c in cards[:12]) + ("\n• …" if len(cards) > 12 else "")
-        count = f"{len(plans)} Karte{'' if len(plans) == 1 else 'n'} {way} übertragen ({size / 1e6:.0f} MB, " \
-                "vorhandene Dateien werden übersprungen)"
-        if can_assign:
-            text = f"{count} und auf diesem ESPuino zuweisen?\n\n{names}"
-            if assign_only:
-                text += f"\n\nDazu {len(assign_only)} Karte{'' if len(assign_only) == 1 else 'n'} nur zuweisen " \
-                        "(Ordner schon auf der SD-Karte):\n" + "\n".join(f"• {c.label}" for c in assign_only[:12])
-        else:
-            text = (f"{count}?\n\nZugewiesen wird noch nicht – der ESPuino ist nicht erreichbar. Danach: "
-                    "SD-Karte zurück, ESPuino einschalten, verbinden und „Fehlende übertragen“ (weist dann nur "
-                    f"noch zu).\n\n{names}")
-        answer = QMessageBox.question(self, "Auf den ESPuino übertragen", text)
+        plans, assignments, transfer_cards = [], [], []
+        assign_only, complete, waiting, impossible, errors = [], [], [], [], []
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for card in cards:
+                wants_assign = can_assign and bool(card.sd_path) and card.device_status != ASSIGNED
+                files_complete = card.folder_present is True
+                album = self.library_view.index.find(card.library_path) if can_transfer(card) else None
+                if album is not None and album.tracks:
+                    plan = plan_album(album.tracks, card.sd_path)
+                    try:
+                        plan.items = pending_items(plan, local, "" if local else host)
+                    except dev.DeviceError as exc:
+                        errors.append(f"{card.label}: {exc}")
+                        continue
+                    if plan.items:
+                        plans.append(plan)
+                        assignments.append((card.card_id, int(card.play_mode or 3)) if wants_assign else None)
+                        transfer_cards.append(card)
+                        continue
+                    files_complete = True
+                if not files_complete:
+                    impossible.append(card)
+                elif wants_assign:
+                    assign_only.append(card)
+                elif not can_assign and card.device_status != ASSIGNED:
+                    waiting.append(card)  # Dateien da, zugewiesen wird nach dem Verbinden
+                else:
+                    complete.append(card)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        NL = "\n"
+
+        def plural(n, one, many):
+            return f"{n} {one if n == 1 else many}"
+
+        def names(items):
+            return NL.join(f"   • {c.label}" for c in items[:12]) + (NL + "   • …" if len(items) > 12 else "")
+
+        assign_count = sum(a is not None for a in assignments) + len(assign_only)
+        parts = []
+        if plans:
+            size = sum(p.total for p in plans)
+            files = sum(len(p.items) for p in plans)
+            amount = f"{size / 1e6:.0f} MB" if size >= 1e6 else f"{max(size, 1) / 1e3:.0f} KB"
+            way = "auf die SD-Karte im Kartenleser" if local else "über das WLAN"
+            parts.append(f"{plural(len(plans), 'Album', 'Alben')} {way} übertragen – "
+                         f"{plural(files, 'fehlende Datei', 'fehlende Dateien')}, {amount}:" + NL + names(transfer_cards))
+        if assign_count:
+            reserved = [c for c, a in zip(transfer_cards, assignments) if a is not None] + assign_only
+            parts.append(f"{plural(assign_count, 'vorgemerkte Karte', 'vorgemerkte Karten')} auf diesem "
+                         "ESPuino zuweisen:" + NL + names(reserved))
+        notes = []
+        if not can_assign and plans:
+            notes.append("Zugewiesen wird noch nicht – der ESPuino ist nicht erreichbar. Danach: SD-Karte zurück, "
+                         "ESPuino einschalten, verbinden, „Vorgemerkte markieren“ und „Ausgewählte übertragen“.")
+        if waiting:
+            notes.append(f"{plural(len(waiting), 'Karte ist', 'Karten sind')} komplett auf der SD-Karte und "
+                         "bleiben vorgemerkt, bis der ESPuino verbunden ist.")
+        if complete:
+            notes.append(f"{plural(len(complete), 'Karte ist', 'Karten sind')} schon vollständig und "
+                         "zugewiesen – nichts zu tun.")
+        if impossible:
+            notes.append(f"{plural(len(impossible), 'Karte geht', 'Karten gehen')} nicht: Ordner fehlt auf der "
+                         "SD-Karte, und es gibt kein Album in der Bibliothek." + NL + names(impossible))
+        if errors:
+            notes.append("Nicht geprüft:" + NL + NL.join(errors))
+        if not parts:
+            QMessageBox.information(self, title, (NL * 2).join(notes) or "Nichts zu tun.")
+            return
+        answer = QMessageBox.question(self, title, (NL * 2).join(parts + notes + ["Fortfahren?"]))
         if answer != QMessageBox.StandardButton.Yes:
             return
+        if not plans:
+            self._espuino_assign_cards(assign_only)
+            return
+
         def finished(cancelled):
             if assign_only and not cancelled:
                 self._espuino_assign_cards(assign_only)
@@ -738,11 +779,6 @@ class MediahubMixin:
         card = self._mediahub_card(card_id)
         if card is not None:
             self._espuino_transfer_cards([card])
-
-    def _espuino_transfer_missing(self):
-        from gui.espuino_device_view import needs_transfer
-        data = self._mediahub_data
-        self._espuino_transfer_cards([c for c in (data.cards if data else []) if needs_transfer(c)])
 
     def _espuino_run_transfer(self, plans, local: str, host: str, assignments, finished):
         self._release_files()
