@@ -19,7 +19,7 @@ import os
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QActionGroup
-from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QProgressDialog
+from PyQt6.QtWidgets import QApplication, QCheckBox, QMenu, QMessageBox, QProgressDialog
 
 from core import espuino_cards
 from core import espuino_device as dev
@@ -41,6 +41,11 @@ MODE_MENU_LABELS = {
     MODE_ESPUINO: "ESPuino – Karten vom Gerät oder aus dem Mediahub",
 }
 
+
+def card_assigned_in(state, card_id: str, folders: list, in_folder) -> bool:
+    """Ist die Karte auf dem ESPuino einem der Ordner (oder etwas darin) zugewiesen?"""
+    entry = state.assignments.get(card_id) if state is not None else None
+    return entry is not None and any(in_folder(entry[0], f) for f in folders)
 
 class MediahubMixin:
     """Methoden von MainWindow (siehe Modul-Doku)"""
@@ -118,6 +123,7 @@ class MediahubMixin:
         self.espuino_sidebar.assign_folder_requested.connect(self._espuino_assign_folder)
         self.espuino_sidebar.folder_selected.connect(self._espuino_show_folder)
         self.espuino_sidebar.albums_dropped.connect(self._espuino_transfer)
+        self.espuino_sidebar.delete_folders_requested.connect(self._espuino_delete_folders)
         self.espuino_sidebar.folder_list.album_names = lambda paths: album_folder_names(paths,
                                                                                          self.library_view.index)
         sidebar_layout.insertWidget(sidebar_layout.indexOf(self.folder_list), self.espuino_sidebar, 1)
@@ -131,6 +137,12 @@ class MediahubMixin:
         self.mediahub_page.transfer_requested.connect(self._espuino_transfer_card)
         self.mediahub_page.back_requested.connect(self._espuino_back)
         self.mediahub_page.cards_table.card_selected.connect(self._mediahub_show_card)
+        self.mediahub_page.folder_page.delete_requested.connect(lambda f: self._espuino_delete_folders([f]))
+        self.mediahub_page.folder_page.delete_file_requested.connect(self._espuino_delete_folder_file)
+        self.mediahub_page.delete_folder_requested.connect(lambda f: self._espuino_delete_folders([f]))
+        self.mediahub_page.delete_file_requested.connect(self._espuino_delete_card_file)
+        self.mediahub_page.remove_card_requested.connect(lambda cid: self._espuino_remove_cards([cid]))
+        self.mediahub_page.cards_table.remove_requested.connect(self._espuino_remove_cards)
         self.mediahub_page.folder_page.card_selected.connect(self._mediahub_show_card)
         self.mediahub_page.folder_page.assign_requested.connect(self._espuino_assign_folder)
         self.mediahub_page.folder_page.cover_requested.connect(self._espuino_folder_cover)
@@ -454,6 +466,20 @@ class MediahubMixin:
                 result[folder.casefold()] = series
         return result
 
+    def _mediahub_card_series(self, card) -> str:
+        """Serie einer Karte wie in der Bibliothek: Serienprofil des Albums im Archiv,
+        sonst der Interpret des Bibliotheksalbums"""
+        archive = get_archive(self, ask=False)
+        if archive is not None and card.album_id:
+            record = archive.load_album(card.album_id)
+            profile = archive.series.load(record.series_id) if record is not None and record.series_id else None
+            if profile is not None and profile.name:
+                return profile.name
+        album = self.library_view.index.find(card.library_path) if card.library_path else None
+        if album is None and card.sd_path:
+            album = self._espuino_album_for_folder(card.sd_path)
+        return (album.artist or "").strip() if album is not None else ""
+
     def _espuino_folder_notes(self) -> dict:
         """Ordner (klein) -> Namen der Karten, die darauf zeigen (fuer die Auswahl beim Zuweisen)"""
         notes = {}
@@ -591,16 +617,24 @@ class MediahubMixin:
                         + f" · Bibliothek: {album.path}")
             preview = self._espuino_album_thumb(album)
             files = [os.path.relpath(track, album.path) if os.path.isabs(track) else track for track in album.tracks]
+            try:
+                sd_files = [i.target for i in plan_album(album.tracks, folder).items]
+            except dev.DeviceError:
+                sd_files = []
         else:
             meta.append("Kein passendes Album in der Bibliothek gefunden.")
             _source, _host, sd_root = dev.settings()
             if sd_root and os.path.isdir(sd_root):
                 found, _ok = dev.card_files(sd_root, folder, 3)
                 files = found if _ok else []
+            sd_files = ["/" + f.strip("/") for f in files or []]
         state = self._espuino_state
         reachable = state is not None and state.reachable
         self._espuino_folder = (folder, album, [])
-        self.mediahub_page.show_folder(folder, meta, preview, [], {}, reachable, album is not None, files)
+        self._espuino_folder_files = sd_files
+        can_delete = self._espuino_delete_target() is not None
+        self.mediahub_page.show_folder(folder, meta, preview, [], {}, reachable, album is not None, files,
+                                       can_delete=can_delete)
         if self.view_switch.currentIndex() != 0:
             self.view_switch.setCurrentIndex(0)
 
@@ -618,6 +652,215 @@ class MediahubMixin:
 
     def _espuino_assign_folder(self, folder: str):
         self._espuino_assign(preset_path=folder, album=self._espuino_album_for_folder(folder))
+
+    # --- Loeschen: Ordner und Dateien auf der SD-Karte, Karten ---------------------------
+
+    def _espuino_delete_target(self):
+        """(sd_root, host) zum Loeschen - wie beim Uebertragen die SD-Karte im PC zuerst,
+        sonst das WLAN; None, wenn keins von beiden geht"""
+        _source, host, sd_root = dev.settings()
+        if sd_root and os.path.isdir(sd_root):
+            return sd_root, ""
+        state = self._espuino_state
+        if host and state is not None and state.reachable:
+            return "", host
+        return None
+
+    def _espuino_confirm(self, title: str, text: str, ok_text: str, check_text: str = ""):
+        """Rueckfrage vor dem Loeschen, "Abbrechen" vorgewaehlt. (ja, Haken gesetzt)"""
+        box = QMessageBox(QMessageBox.Icon.Warning, title, text,
+                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, self)
+        box.button(QMessageBox.StandardButton.Yes).setText(ok_text)
+        box.button(QMessageBox.StandardButton.Cancel).setText("Abbrechen")
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        check = None
+        if check_text:
+            check = QCheckBox(check_text)
+            box.setCheckBox(check)
+        answer = box.exec()
+        return answer == QMessageBox.StandardButton.Yes, check is not None and check.isChecked()
+
+    def _espuino_delete_folders(self, folders: list):
+        """Ordner samt Inhalt von der SD-Karte loeschen (Seitenleiste, Ordner- und Kartenseite)"""
+        from core import espuino_transfer as et
+        from gui.espuino_device_view import in_folder
+        title = "Von der SD-Karte löschen"
+        target = self._espuino_delete_target()
+        if target is None:
+            QMessageBox.information(self, title, "Löschen geht nur mit verbundenem ESPuino oder mit seiner "
+                                    "SD-Karte im Kartenleser.")
+            return
+        sd_root, host = target
+        lines, affected = [], []
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for folder in folders:
+                count, size = et.folder_summary(folder, sd_root, host)
+                amount = f"{count} Datei{'' if count == 1 else 'en'}" + (
+                    f", {size / 1e6:.0f} MB" if size is not None else "")
+                lines.append(f"• {folder}  ({amount})")
+                for card in self._espuino_folder_cards(folder):
+                    if card.card_id not in {c.card_id for c in affected}:
+                        affected.append(card)
+        except dev.DeviceError as exc:
+            QMessageBox.warning(self, title, str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        state = self._espuino_state
+        reachable = state is not None and state.reachable
+        assigned = [c for c in affected if reachable and card_assigned_in(state, c.card_id, folders, in_folder)]
+        one = len(folders) == 1
+        text = (f"{'Diesen Ordner' if one else f'Diese {len(folders)} Ordner'} samt Inhalt endgültig "
+                f"{'von der SD-Karte im Kartenleser' if sd_root else 'über das WLAN von der SD-Karte des ESPuino'} "
+                "löschen? Das lässt sich nicht rückgängig machen.\n\n" + "\n".join(lines))
+        if affected:
+            text += (f"\n\n{len(affected)} Karte{' zeigt' if len(affected) == 1 else 'n zeigen'} darauf und "
+                     "spiel" + ("t" if len(affected) == 1 else "en") + " danach nichts mehr:\n"
+                     + "\n".join(f"• {c.label}" for c in affected[:12]))
+        check_text = ""
+        if assigned:
+            check_text = (f"Auch die Zuweisung{'' if len(assigned) == 1 else 'en'} dieser "
+                          f"{len(assigned)} Karte{'' if len(assigned) == 1 else 'n'} auf dem ESPuino entfernen "
+                          "(in der App bleiben sie vorgemerkt)")
+        ok, unassign = self._espuino_confirm(title, text, "Endgültig löschen", check_text)
+        if not ok:
+            return
+        self._release_files()
+        errors, deleted = [], 0
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for folder in folders:
+                try:
+                    et.delete_from_sd(folder, sd_root, host)
+                    deleted += 1
+                except dev.DeviceError as exc:
+                    errors.append(str(exc))
+            if unassign:
+                _source, device_host, _sd = dev.settings()
+                for card in assigned:
+                    try:
+                        dev.unassign_card(device_host, card.card_id)
+                    except dev.DeviceError as exc:
+                        errors.append(f"{card.label}: {exc}")
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._status(f"{deleted} Ordner gelöscht" + (f", {len(assigned)} Zuweisung"
+                                                     f"{'' if len(assigned) == 1 else 'en'} entfernt"
+                                                     if unassign else ""))
+        if errors:
+            QMessageBox.warning(self, title, "\n".join(errors))
+        self._mediahub_reload()
+
+    def _espuino_card_sd_files(self, card) -> list:
+        """Pfade auf der SD-Karte zu den Zeilen der Dateiliste einer Karte"""
+        from gui.espuino_device_view import can_transfer
+        album = self.library_view.index.find(card.library_path) if card.library_path else None
+        if album is not None and album.tracks and can_transfer(card):
+            try:
+                targets = [i.target for i in plan_album(album.tracks, card.sd_path).items]
+            except dev.DeviceError:
+                targets = []
+            if len(targets) == len(card.files):
+                return targets
+        return ["/" + f.strip("/") for f in card.files]
+
+    def _espuino_delete_card_file(self, card_id: str, row: int):
+        card = self._mediahub_card(card_id)
+        paths = self._espuino_card_sd_files(card) if card is not None else []
+        if 0 <= row < len(paths):
+            self._espuino_delete_file(paths[row], lambda: self._mediahub_show_card(card_id))
+
+    def _espuino_delete_folder_file(self, row: int):
+        paths = getattr(self, "_espuino_folder_files", [])
+        folder = getattr(self, "_espuino_folder", ("",))[0]
+        if 0 <= row < len(paths):
+            self._espuino_delete_file(paths[row], lambda: self._espuino_show_folder(folder))
+
+    def _espuino_delete_file(self, sd_path: str, refresh):
+        """Eine Datei von der SD-Karte loeschen; vorher nachsehen, ob es sie dort gibt"""
+        from core import espuino_transfer as et
+        title = "Von der SD-Karte löschen"
+        target = self._espuino_delete_target()
+        if target is None:
+            QMessageBox.information(self, title, "Löschen geht nur mit verbundenem ESPuino oder mit seiner "
+                                    "SD-Karte im Kartenleser.")
+            return
+        sd_root, host = target
+        try:
+            present = et.exists_on_sd(sd_path, sd_root, host)
+        except dev.DeviceError as exc:
+            QMessageBox.warning(self, title, str(exc))
+            return
+        if not present:
+            QMessageBox.information(self, title, f"{sd_path} liegt nicht auf der SD-Karte – nichts zu löschen.")
+            return
+        ok, _ = self._espuino_confirm(title, f"Diese Datei endgültig von der SD-Karte löschen?\n\n{sd_path}\n\n"
+                                      "Das lässt sich nicht rückgängig machen. Mit „Ausgewählte übertragen“ "
+                                      "lässt sie sich aus der Bibliothek wieder ergänzen.", "Endgültig löschen")
+        if not ok:
+            return
+        self._release_files()
+        try:
+            et.delete_from_sd(sd_path, sd_root, host)
+        except dev.DeviceError as exc:
+            QMessageBox.warning(self, title, str(exc))
+            return
+        self._status(f"Gelöscht: {sd_path}")
+        self._mediahub_reload()
+        refresh()
+
+    def _espuino_remove_cards(self, card_ids: list):
+        """Karten entfernen: Zuweisung auf diesem ESPuino loeschen und aus dem
+        Kartenverzeichnis der App nehmen. Ordner, Dateien und Cover bleiben."""
+        title = "Karten entfernen"
+        cards = [c for c in (self._mediahub_card(i) for i in card_ids) if c is not None]
+        if not cards:
+            return
+        state = self._espuino_state
+        reachable = state is not None and state.reachable
+        on_device = [c for c in cards if state is not None and c.card_id in state.assignments]
+        if on_device and not reachable:
+            QMessageBox.information(self, title, "Diese Karten sind auf dem ESPuino zugewiesen (laut backup.txt). "
+                                    "Zum Entfernen erst mit dem ESPuino verbinden – sonst kämen sie beim nächsten "
+                                    "Einlesen zurück:\n" + "\n".join(f"• {c.label}" for c in on_device[:12]))
+            cards = [c for c in cards if c not in on_device]
+            on_device = []
+            if not cards:
+                return
+        n = len(cards)
+        text = (f"{'Diese Karte' if n == 1 else f'Diese {n} Karten'} entfernen?\n\n"
+                + "\n".join(f"• {c.label}  ({mh.format_card_id(c.card_id)})" for c in cards[:12])
+                + ("\n\nAuf diesem ESPuino wird die Zuweisung gelöscht – die Karte spielt dann nichts mehr."
+                   if on_device else "")
+                + "\n\nDie App vergisst Name und Ordner der Karte. Ordner und Dateien auf der SD-Karte "
+                  "und die Kartencover im Archiv bleiben.")
+        ok, _ = self._espuino_confirm(title, text, "Entfernen")
+        if not ok:
+            return
+        _source, host, _sd_root = dev.settings()
+        known = self._espuino_known
+        errors, removed = [], 0
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for card in cards:
+                if card in on_device:
+                    try:
+                        dev.unassign_card(host, card.card_id)
+                    except dev.DeviceError as exc:
+                        errors.append(f"{card.label}: {exc}")
+                        continue  # bliebe auf dem Geraet und kaeme beim Einlesen zurueck
+                known.forget(card.card_id)
+                removed += 1
+            known.save()
+        except OSError as exc:
+            errors.append(f"Kartenverzeichnis nicht gespeichert: {exc}")
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._status(f"{removed} Karte{'' if removed == 1 else 'n'} entfernt")
+        if errors:
+            QMessageBox.warning(self, title, "\n".join(errors))
+        self._mediahub_reload()
 
     # --- Alben auf den ESPuino -----------------------------------------------------
 
@@ -637,20 +880,58 @@ class MediahubMixin:
         albums = [a for a in (self.library_view.index.find(p) for p in paths) if a is not None and a.tracks]
         if not albums:
             return
-        dialog = TransferDialog(albums, sd_root, host, self)
+        existing = {a.path: self._espuino_existing_folders(a) for a in albums}
+        dialog = TransferDialog(albums, sd_root, host, self, existing=existing)
         if not dialog.exec():
             dialog.deleteLater()
             return
-        plans, assign_after, local = dialog.plans, dialog.assign_after, dialog.sd_root
+        plans, assign_after, local, complete = dialog.plans, dialog.assign_after, dialog.sd_root, dialog.complete
         dialog.deleteLater()
+        target = plans[0].folder if plans else (complete[0][1] if complete else "")
+        if complete:
+            self._status("Schon vollständig auf der SD-Karte, nichts übertragen: "
+                         + ", ".join(f"{a.name} ({folder})" for a, folder in complete))
+        if not plans:  # alles schon da: gleich weiter zum Zuweisen
+            if assign_after and target:
+                self._espuino_assign(preset_path=target, album=albums[0])
+            else:
+                QMessageBox.information(self, "Auf den ESPuino übertragen",
+                                        "Schon vollständig auf der SD-Karte – nichts zu übertragen:\n"
+                                        + "\n".join(f"• {a.name} → {folder}" for a, folder in complete))
+            return
 
         def finished(cancelled):
-            if not cancelled and assign_after and len(plans) == 1:
-                self._espuino_assign(preset_path=plans[0].folder, album=albums[0])
+            if not cancelled and assign_after and target:
+                self._espuino_assign(preset_path=target, album=albums[0])
             else:
                 self._mediahub_reload()
 
         self._espuino_run_transfer(plans, local, host, None, finished)
+
+    def _espuino_existing_folders(self, album) -> list:
+        """Ordner auf der SD-Karte des ESPuino, in denen dieses Album schon liegt:
+        gleicher Ordnername wie beim Uebertragen, oder ein Ordner, den die App diesem
+        Album zuordnet (Album-ID oder Name, ueber bekannte Karten auch Unterordner)"""
+        from core.espuino_transfer import safe_name
+        state = self._espuino_state
+        if state is None or state.folders is None:  # Inhalt der SD-Karte unbekannt
+            return []
+        on_card = {f.strip("/").casefold() for f in state.folders}
+
+        def same_album(found) -> bool:
+            return found is not None and os.path.normcase(found.path) == os.path.normcase(album.path)
+
+        name = "/" + safe_name(album.name)
+        result = [f for f in state.folders
+                  if dev.same_folder(f, name) or same_album(self._espuino_album_for_folder(f))]
+        known = getattr(self, "_espuino_known", None)
+        for card in (known.cards.values() if known is not None else []):
+            folder = card.sd_folder
+            if (folder and folder.strip("/").split("/")[0].casefold() in on_card
+                    and not any(dev.same_folder(folder, f) for f in result)
+                    and same_album(espuino_cards.find_library_album(card, self.library_view.index))):
+                result.append(folder)  # auch Unterordner, ueber eine bekannte Karte
+        return result
 
     def _espuino_transfer_cards(self, cards: list):
         """Ausgewaehlte Karten auf diesen ESPuino: fehlende Dateien des Albums aus der
@@ -894,7 +1175,9 @@ class MediahubMixin:
         if card is None:
             return
         folder = mh.build_folder(card, self._mediahub_media_root, get_archive(self, ask=False))
+        self.mediahub_page.can_delete_files = self._espuino_is_device() and self._espuino_delete_target() is not None
         self.mediahub_page.show_card(card, folder, self._espuino_place())
+        self.mediahub_page.set_series(self._mediahub_card_series(card))
         if self._espuino_is_device():  # Karte und Ordner in einer Ansicht
             state = self._espuino_state
             self.mediahub_page.set_folder_cards(self._espuino_folder_cards(card.sd_path), self._mediahub_cover_map(),

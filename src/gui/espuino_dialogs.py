@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 from core.espuino_device import (
     SOURCE_DEVICE, SOURCE_MEDIAHUB, DeviceError, assign_card, fetch_info, firmware_label, normalize_host,
 )
-from core.espuino_transfer import copy_to_sd, plan_album, safe_name, upload_to_device
+from core.espuino_transfer import copy_to_sd, pending_items, plan_album, safe_name, upload_to_device
 from core.mediahub_cards import DB_FILENAME, MediahubError, db_file, load_cards
 from gui import theme
 
@@ -267,18 +267,38 @@ class TransferDialog(QDialog):
 
     WLAN_BYTES_PER_SECOND = 400 * 1024  # grobe Schaetzung fuer den Hinweis
 
-    def __init__(self, albums, sd_root: str, host: str, parent=None):
+    def __init__(self, albums, sd_root: str, host: str, parent=None, existing=None):
         super().__init__(parent)
         self.albums = albums  # LibraryAlbum
         self.sd_root = sd_root if sd_root and os.path.isdir(sd_root) else ""
         self.host = host
+        # Albumpfad -> Ordner, in denen das Album schon auf der SD-Karte liegt
+        self.existing = {k: v for k, v in (existing or {}).items() if v}
         self.setWindowTitle("Auf den ESPuino übertragen")
         self.setMinimumWidth(560)
         layout = QVBoxLayout(self)
+        present = [a for a in albums if a.path in self.existing]
+        if present:
+            if len(albums) == 1:
+                folders = ", ".join(self.existing[albums[0].path])
+                text = (f"⚠ „{albums[0].name}“ liegt schon auf der SD-Karte: {folders}. Übertragen werden nur "
+                        "fehlende Dateien in diesen Ordner. Für eine zweite Kopie einen anderen Zielordner "
+                        "eintragen.")
+            else:
+                text = (f"⚠ {len(present)} von {len(albums)} Alben liegen schon auf der SD-Karte; dort werden nur "
+                        "fehlende Dateien ergänzt:\n" + "\n".join(
+                            f"   • {a.name} → {self.existing[a.path][0]}" for a in present[:12]))
+            self.present_label = QLabel(text)
+            self.present_label.setWordWrap(True)
+            self.present_label.setStyleSheet(f"color: {theme.YELLOW};")
+            layout.addWidget(self.present_label)
+        else:
+            self.present_label = None
         form = QFormLayout()
         self.folder_edit = QLineEdit()
         if len(albums) == 1:
-            self.folder_edit.setText("/" + safe_name(albums[0].name))
+            self.folder_edit.setText(self._folder_for(albums[0]))
+            self.folder_edit.editingFinished.connect(self._update_amount)
             form.addRow("Zielordner:", self.folder_edit)
         else:
             self.folder_edit.hide()
@@ -293,7 +313,9 @@ class TransferDialog(QDialog):
         way_label = QLabel(way)
         way_label.setWordWrap(True)
         form.addRow("Weg:", way_label)
-        form.addRow("Umfang:", QLabel(f"{sum(len(a.tracks) for a in albums)} Dateien, {size / 1e6:.0f} MB"))
+        self.amount_label = QLabel(f"{sum(len(a.tracks) for a in albums)} Dateien, {size / 1e6:.0f} MB")
+        self.amount_label.setWordWrap(True)
+        form.addRow("Umfang:", self.amount_label)
         layout.addLayout(form)
         self.assign_check = QCheckBox("Danach eine Karte für dieses Album zuweisen")
         self.assign_check.setChecked(True)
@@ -309,18 +331,63 @@ class TransferDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.plans = []
+        self.complete = []  # (Album, Ordner), die schon vollstaendig auf der SD-Karte liegen
+        self._update_amount()  # echte Menge, nicht die Groesse des ganzen Albums
 
     @property
     def assign_after(self) -> bool:
         return not self.assign_check.isHidden() and self.assign_check.isChecked()
 
+    def _folder_for(self, album) -> str:
+        """Ordner, in den das Album kommt: ein vorhandener, sonst einer mit dem Albumnamen"""
+        folders = self.existing.get(album.path)
+        return folders[0] if folders else "/" + safe_name(album.name)
+
+    def _make_plans(self):
+        if len(self.albums) == 1:
+            return [plan_album(self.albums[0].tracks, self.folder_edit.text())]
+        return [plan_album(a.tracks, self._folder_for(a)) for a in self.albums]
+
+    def _pending(self, plans):
+        """Je Plan die Dateien, die wirklich fehlen; None, wenn sich das nicht pruefen laesst"""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            return [pending_items(p, self.sd_root, "" if self.sd_root else self.host) for p in plans]
+        except DeviceError:
+            return None
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _update_amount(self):
+        try:
+            plans = self._make_plans()
+        except DeviceError:
+            return
+        pending = self._pending(plans)
+        if pending is None:
+            return
+        files = sum(len(p) for p in pending)
+        size = sum(i.size for p in pending for i in p)
+        present = sum(len(p.items) for p in plans) - files
+        if not files:
+            self.amount_label.setText("Alles schon auf der SD-Karte – nichts zu übertragen.")
+        else:
+            self.amount_label.setText(f"{files} fehlende Datei{'' if files == 1 else 'en'}, {size / 1e6:.0f} MB"
+                                      + (f" ({present} schon vorhanden)" if present else ""))
+
     def try_accept(self):
         try:
-            if len(self.albums) == 1:
-                self.plans = [plan_album(self.albums[0].tracks, self.folder_edit.text())]
-            else:
-                self.plans = [plan_album(a.tracks, "/" + safe_name(a.name)) for a in self.albums]
+            plans = self._make_plans()
         except DeviceError as exc:
             QMessageBox.warning(self, "Auf den ESPuino übertragen", str(exc))
             return
+        pending = self._pending(plans)
+        self.complete = []
+        if pending is not None:  # nur Fehlendes; komplette Alben fallen weg
+            for album, plan, items in zip(self.albums, plans, pending):
+                plan.items = items
+                if not items:
+                    self.complete.append((album, plan.folder))
+            plans = [p for p in plans if p.items]
+        self.plans = plans
         self.accept()

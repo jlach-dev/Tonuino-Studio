@@ -852,3 +852,125 @@ def test_transfer_selected_skips_present_files_and_only_assigns(setup, tmp_path,
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_drop_album_already_on_card_is_recognised(setup, tmp_path, monkeypatch):
+    """Drag & Drop eines Albums, das schon auf der SD-Karte liegt: Hinweis, nichts kopieren,
+    gleich weiter zum Zuweisen - auch unter anderem Ordnernamen (ueber eine bekannte Karte)"""
+    from core.library import LibraryAlbum
+    from gui.espuino_dialogs import TransferDialog
+    from gui.main_window import MainWindow
+    lib = tmp_path / "Bibliothek" / "Kinderlieder"
+    lib.mkdir(parents=True)
+    (lib / "02.mp3").write_bytes(b"ID3" + bytes(32))  # gleich wie /Musik/Lieder/02.mp3
+    album = LibraryAlbum(path=str(lib), title="Kinderlieder", tracks=[str(lib / "02.mp3")], album_id="kl")
+    seen = []
+
+    def run_dialog(dialog):
+        seen.append((dialog.present_label.text() if dialog.present_label else "", dialog.folder_edit.text(),
+                     dialog.amount_label.text()))
+        dialog.try_accept()
+        return 1
+
+    monkeypatch.setattr(TransferDialog, "exec", run_dialog)
+    window = MainWindow()
+    try:
+        window.library_view.index.albums.append(album)
+        window._espuino_known.remember("123123123123", name="Lieder", sd_folder="/Musik/Lieder",
+                                       library_path=str(lib), album_id="kl")
+        window._espuino_known.save()
+        window._mediahub_reload()
+        assert window._espuino_existing_folders(album) == ["/Musik/Lieder"]
+        runs, assigned = [], []
+        monkeypatch.setattr(window, "_espuino_run_transfer", lambda *a: runs.append(a))
+        monkeypatch.setattr(window, "_espuino_assign", lambda **k: assigned.append(k))
+        window._espuino_transfer([str(lib)])
+        warning, folder, amount = seen[0]
+        assert "schon auf der SD-Karte" in warning and folder == "/Musik/Lieder" and "nichts zu übertragen" in amount
+        assert runs == [] and assigned and assigned[0]["preset_path"] == "/Musik/Lieder"
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_delete_folder_over_wlan_and_unassign(setup, monkeypatch):
+    """Ordner ueber das WLAN loeschen (Rueckfrage nennt die Karte), Zuweisung auf Wunsch mit entfernen"""
+    from gui.main_window import MainWindow
+    esp = setup["esp"]
+    dev.save_settings(dev.SOURCE_DEVICE, esp.host, "")  # SD-Karte steckt im ESPuino
+    esp.files["/Hörspiele/Fuchsbande/01.mp3"] = b"x"
+    asked = []
+    window = MainWindow()
+    try:
+        monkeypatch.setattr(window, "_espuino_confirm",
+                            lambda title, text, ok, check="": asked.append((text, check)) or (True, True))
+        window._espuino_delete_folders(["/Hörspiele/Fuchsbande"])
+        text, check = asked[0]
+        assert "/Hörspiele/Fuchsbande" in text and "nichts mehr" in text and "Zuweisung" in check
+        assert "/Hörspiele/Fuchsbande/01.mp3" not in esp.files
+        assert any(d.startswith("/explorer") for d in esp.deletes)
+        assert CARD_A not in esp.assignments  # DELETE /rfid?id=
+        assert window._espuino_known.get(CARD_A) is not None  # in der App bleibt sie vorgemerkt
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_delete_folder_and_file_on_sd_in_pc(setup, monkeypatch):
+    """SD-Karte im PC: direkt dort loeschen; abbrechen loescht nichts; nie die ganze Karte"""
+    import pytest as _pytest
+    from core.espuino_transfer import check_deletable
+    from gui.main_window import MainWindow
+    sd = setup["sd"]
+    with _pytest.raises(dev.DeviceError):
+        check_deletable("/")
+    with _pytest.raises(dev.DeviceError):
+        check_deletable("/Musik/../..")
+    window = MainWindow()
+    try:
+        answers = [(False, False), (True, False)]
+        monkeypatch.setattr(window, "_espuino_confirm", lambda *a, **k: answers.pop(0))
+        window._espuino_delete_folders(["/Musik"])
+        assert (sd / "Musik").is_dir()  # abgebrochen
+        window._espuino_delete_folders(["/Musik"])
+        assert not (sd / "Musik").exists() and (sd / "Hörspiele").is_dir()
+        monkeypatch.setattr(window, "_espuino_confirm", lambda *a, **k: (True, False))
+        window._espuino_delete_file("/Hörspiele/Neu/01.mp3", lambda: None)
+        assert not (sd / "Hörspiele" / "Neu" / "01.mp3").exists()
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_remove_card_unassigns_and_forgets(setup, monkeypatch):
+    """Karte entfernen: Zuweisung auf dem ESPuino weg, aus dem Kartenverzeichnis weg, kommt nicht zurueck"""
+    from gui.main_window import MainWindow
+    esp = setup["esp"]
+    window = MainWindow()
+    try:
+        monkeypatch.setattr(window, "_espuino_confirm", lambda *a, **k: (True, False))
+        window.mediahub_page.cards_table.remove_requested.emit([CARD_A])
+        assert CARD_A not in esp.assignments and window._espuino_known.get(CARD_A) is None
+        assert window._mediahub_card(CARD_A) is None
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_card_page_shows_series(setup, tmp_path):
+    """Kartenseite: Serie wie in der Bibliothek (Interpret des Albums)"""
+    from core.library import LibraryAlbum
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        album = LibraryAlbum(path=str(tmp_path / "Fuchsbande"), title="Fuchsbande", artist="Die Fuchsbande",
+                             tracks=[str(tmp_path / "Fuchsbande" / "01.mp3")], album_id="fb")
+        window.library_view.index.albums.append(album)
+        window._espuino_known.remember(CARD_A, library_path=album.path)
+        window._mediahub_reload()
+        window._mediahub_show_card(CARD_A)
+        label = window.mediahub_page.series_label
+        assert label.text() == "Die Fuchsbande" and not label.isHidden()
+    finally:
+        window.close()
+        window.deleteLater()

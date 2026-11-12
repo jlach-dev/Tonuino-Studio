@@ -26,6 +26,7 @@ class FakeEspuino:
             "400400400400": {"id": "400400400400", "fileOrUrl": "http://hub.invalid", "playMode": 18},
         }
         self.posts = []
+        self.deletes = []  # Pfade aller DELETE-Anfragen
         self.requests = []  # Pfade aller GET-Anfragen
         self.hostname = "ESPuino-Testzimmer"
         self.files = {}  # "/Ordner/Datei" -> Inhalt, ueber POST /explorer hochgeladen
@@ -82,6 +83,23 @@ class FakeEspuino:
                          "lastPlayPos": 0, "trackLastPlayed": 0}
                 fake.assignments[data["id"]] = entry
                 self._send(200, entry)
+
+            def do_DELETE(self):
+                fake.deletes.append(self.path)
+                if self.path.startswith("/explorer"):
+                    target = self._query_path().rstrip("/")
+                    for f in [f for f in fake.files if f == target or f.startswith(target + "/")]:
+                        del fake.files[f]
+                    fake.dirs = {d for d in fake.dirs if d != target and not d.startswith(target + "/")}
+                    self._send(200, {})  # wie der echte ESPuino: immer 200
+                elif self.path.startswith("/rfid?id="):
+                    card_id = self.path.partition("=")[2]
+                    if fake.assignments.pop(card_id, None) is None:
+                        self._send(404, "Tag not exists")
+                    else:
+                        self._send(200, {})
+                else:
+                    self._send(404, {})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.host = f"127.0.0.1:{self.server.server_address[1]}"

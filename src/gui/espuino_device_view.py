@@ -13,7 +13,7 @@ import html
 from typing import Dict, List, Optional
 
 from PyQt6.QtCore import QPoint, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -110,9 +110,11 @@ class EspuinoDeviceSidebar(QWidget):
     albums_dropped = pyqtSignal(list)
     assign_folder_requested = pyqtSignal(str)  # "/Ordner"
     folder_selected = pyqtSignal(str)  # "/Ordner": Infos und Karten zeigen
+    delete_folders_requested = pyqtSignal(list)  # "/Ordner", ...
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.can_delete = False  # ESPuino erreichbar oder seine SD-Karte im PC
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -155,6 +157,10 @@ class EspuinoDeviceSidebar(QWidget):
         self.folder_list.albums_dropped.connect(self.albums_dropped)
         self.folder_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_list.customContextMenuRequested.connect(self._folder_menu)
+        self.folder_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        delete_key = QShortcut(QKeySequence(QKeySequence.StandardKey.Delete), self.folder_list)
+        delete_key.setContext(Qt.ShortcutContext.WidgetShortcut)
+        delete_key.activated.connect(self._delete_selected)
         self.folder_list.itemClicked.connect(lambda item: self.folder_selected.emit(item.data(FOLDER_ROLE)))
         layout.addWidget(self.folder_list, 1)
         self.drop_label = QLabel("Alben aus der Bibliothek hierher ziehen.")
@@ -173,6 +179,7 @@ class EspuinoDeviceSidebar(QWidget):
         configured = bool(host)
         connected = state is not None and state.error != NOT_CONNECTED
         self.btn_assign.setEnabled(state is not None)  # auch ohne ESPuino: auslesen ueber den ACR122U
+        self.can_delete = state is not None and bool(state.reachable or state.folders_from_pc)
         self.btn_reload.setEnabled(configured and connected)
         self.btn_connect.setText("ESPuino wechseln …" if configured and connected else "Verbinden …")
         self.btn_connect.setObjectName("" if connected else "primaryButton")
@@ -259,13 +266,33 @@ class EspuinoDeviceSidebar(QWidget):
                 hidden = True
             item.setHidden(hidden)
 
+    def selected_folders(self) -> List[str]:
+        return [i.data(FOLDER_ROLE) for i in self.folder_list.selectedItems() if not i.isHidden()]
+
+    def _delete_selected(self):
+        folders = self.selected_folders()
+        if folders and self.can_delete:
+            self.delete_folders_requested.emit(folders)
+
     def _folder_menu(self, pos: QPoint):
         item = self.folder_list.itemAt(pos)
-        if item is None or not self.btn_assign.isEnabled():
+        if item is None:
             return
+        if not item.isSelected():
+            self.folder_list.clearSelection()
+            item.setSelected(True)
+        folders = self.selected_folders()
         menu = QMenu(self)
-        action = menu.addAction("Karte zuweisen …")
-        action.triggered.connect(lambda: self.assign_folder_requested.emit(item.data(FOLDER_ROLE)))
+        if len(folders) == 1 and self.btn_assign.isEnabled():
+            action = menu.addAction("Karte zuweisen …")
+            action.triggered.connect(lambda: self.assign_folder_requested.emit(item.data(FOLDER_ROLE)))
+            menu.addSeparator()
+        text = "Ordner löschen …" if len(folders) == 1 else f"{len(folders)} Ordner löschen …"
+        delete = menu.addAction(text + "\tEntf")
+        delete.setEnabled(self.can_delete)
+        if not self.can_delete:
+            delete.setToolTip("Nur mit verbundenem ESPuino oder seiner SD-Karte im PC")
+        delete.triggered.connect(lambda: self.delete_folders_requested.emit(folders))
         menu.exec(self.folder_list.viewport().mapToGlobal(pos))
 
 
@@ -311,6 +338,7 @@ class KnownCardsTable(QWidget):
     und filtert nach den Werten der Spalte."""
     card_selected = pyqtSignal(str)
     transfer_selected_requested = pyqtSignal(list)  # Kartennummern
+    remove_requested = pyqtSignal(list)  # Kartennummern: Zuweisung entfernen und aus der App loeschen
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -343,6 +371,11 @@ class KnownCardsTable(QWidget):
         self.tree.itemActivated.connect(self._open)
         self.tree.itemClicked.connect(self._open)
         self.tree.itemChanged.connect(self._on_item_changed)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._card_menu)
+        delete_key = QShortcut(QKeySequence(QKeySequence.StandardKey.Delete), self.tree)
+        delete_key.setContext(Qt.ShortcutContext.WidgetShortcut)
+        delete_key.activated.connect(lambda: self._remove(self._target_ids(self.tree.currentItem())))
         layout.addWidget(self.tree, 1)
         self.legend = QLabel("Zugewiesen: ✓ auf diesem ESPuino · – nicht zugewiesen · anders: dort anders belegt. "
                              "Vorgemerkt: ✓ in der App einem Ordner zugeordnet, auf dem ESPuino noch nicht – "
@@ -441,6 +474,28 @@ class KnownCardsTable(QWidget):
             (self._checked.add if on else self._checked.discard)(card_id)
         self.tree.blockSignals(False)
         self._update_selected_button()
+
+    def _target_ids(self, item) -> List[str]:
+        """Angehakte Karten, wenn die Zeile dazugehoert, sonst nur diese Zeile"""
+        if item is None:
+            return []
+        card_id = item.data(0, FOLDER_ROLE)
+        checked = self.checked_ids()
+        return checked if card_id in checked else [card_id]
+
+    def _remove(self, ids: List[str]):
+        if ids:
+            self.remove_requested.emit(ids)
+
+    def _card_menu(self, pos: QPoint):
+        ids = self._target_ids(self.tree.itemAt(pos))
+        if not ids:
+            return
+        menu = QMenu(self)
+        text = "Karte entfernen …" if len(ids) == 1 else f"{len(ids)} Karten entfernen …"
+        action = menu.addAction(text + "\tEntf")
+        action.triggered.connect(lambda: self._remove(ids))
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def checked_ids(self) -> List[str]:
         return [self.tree.topLevelItem(row).data(0, FOLDER_ROLE) for row in range(self.tree.topLevelItemCount())
@@ -568,12 +623,37 @@ class FolderCardsTree(QTreeWidget):
         self.setFixedHeight(self.header().sizeHint().height() + rows * max(24, self.sizeHintForRow(0)) + 6)
 
 
+def add_file_delete_menu(file_list: QListWidget, enabled, signal):
+    """Rechtsklick bzw. Entf in einer Dateiliste: "Von der SD-Karte loeschen" -> signal(Zeile)"""
+    def request():
+        row = file_list.currentRow()
+        if enabled() and row >= 0:
+            signal.emit(row)
+
+    def menu(pos):
+        item = file_list.itemAt(pos)
+        if item is None or not enabled():
+            return
+        file_list.setCurrentItem(item)
+        popup = QMenu(file_list)
+        popup.addAction("Von der SD-Karte löschen …\tEntf").triggered.connect(request)
+        popup.exec(file_list.viewport().mapToGlobal(pos))
+
+    file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    file_list.customContextMenuRequested.connect(menu)
+    key = QShortcut(QKeySequence(QKeySequence.StandardKey.Delete), file_list)
+    key.setContext(Qt.ShortcutContext.WidgetShortcut)
+    key.activated.connect(request)
+
+
 class FolderPage(QWidget):
     """Ein Ordner auf der SD-Karte des ESPuino: Album und alle Karten, die darauf zeigen"""
     back_requested = pyqtSignal()
     card_selected = pyqtSignal(str)
     assign_requested = pyqtSignal(str)  # "/Ordner"
     cover_requested = pyqtSignal(str)  # "/Ordner": Cover-Manager fuer das Album bzw. die Karte
+    delete_requested = pyqtSignal(str)  # "/Ordner" loeschen
+    delete_file_requested = pyqtSignal(int)  # Zeile der Dateiliste
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -622,6 +702,11 @@ class FolderPage(QWidget):
         self.btn_cover.setToolTip("Kartencover für das Album dieses Ordners suchen, per KI erzeugen und gestalten")
         self.btn_cover.clicked.connect(lambda: self.cover_requested.emit(self.folder))
         actions.addWidget(self.btn_cover)
+        self.btn_delete = QPushButton("Ordner löschen …")
+        self.btn_delete.setObjectName("ghostButton")
+        self.btn_delete.setToolTip("Ordner samt Inhalt von der SD-Karte des ESPuino löschen (mit Rückfrage)")
+        self.btn_delete.clicked.connect(lambda: self.delete_requested.emit(self.folder))
+        actions.addWidget(self.btn_delete)
         actions.addStretch(1)
         info.addLayout(actions)
         head_layout.addLayout(info, 1)
@@ -640,13 +725,17 @@ class FolderPage(QWidget):
         layout.addWidget(files_title)
         self.file_list = QListWidget()
         self.file_list.setObjectName("trackList")
+        self.can_delete_files = False
+        add_file_delete_menu(self.file_list, lambda: self.can_delete_files, self.delete_file_requested)
         layout.addWidget(self.file_list, 1)
 
     def show_folder(self, folder: str, meta: List[str], preview_path: str, cards: List[MediahubCard],
                     has_cover: Dict[str, bool], can_assign: bool, can_cover: bool = False,
-                    files: Optional[List[str]] = None):
+                    files: Optional[List[str]] = None, can_delete: bool = False):
         """cards: bekannte Karten, die auf diesen Ordner zeigen (hier oder laut Verzeichnis)"""
         self.folder = folder
+        self.btn_delete.setEnabled(can_delete)
+        self.can_delete_files = can_delete and bool(files)
         self.title_label.setText(folder.strip("/").rpartition("/")[2] or folder)
         self.path_label.setText(f"Ordner auf der SD-Karte: {folder}")
         self.meta_label.setText("<br>".join(html.escape(line) for line in meta))

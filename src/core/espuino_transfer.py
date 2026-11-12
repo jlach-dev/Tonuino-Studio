@@ -260,3 +260,93 @@ def upload_to_device(plan: TransferPlan, host: str, progress: Optional[Progress]
     if progress:
         progress(result.bytes, total, "")
     return result
+
+
+# --- Loeschen -----------------------------------------------------------------------
+
+PROTECTED = {"system volume information"}  # nie loeschen
+
+
+def check_deletable(sd_path: str) -> str:
+    """Pfad pruefen und vereinheitlichen; nie die ganze Karte, nie '..'"""
+    parts = [p for p in sd_path.replace("\\", "/").split("/") if p]
+    if not parts:
+        raise DeviceError("Die ganze SD-Karte lässt sich hier nicht löschen.")
+    if any(p in (".", "..") for p in parts) or parts[0].casefold() in PROTECTED:
+        raise DeviceError(f"„{sd_path}“ lässt sich nicht löschen.")
+    return "/" + "/".join(parts)
+
+
+def list_entries(host: str, sd_path: str) -> dict:
+    """Name -> ist Ordner, fuer einen Ordner der SD-Karte des ESPuino (leer, wenn es ihn nicht gibt)"""
+    url = f"http://{normalize_host(host)}/explorer?path={urllib.parse.quote(sd_path)}"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as response:
+            entries = json.loads(response.read().decode("utf-8-sig"))
+    except urllib.error.HTTPError:
+        return {}
+    except (urllib.error.URLError, OSError) as exc:
+        raise DeviceError(f"ESPuino unter {normalize_host(host)} nicht erreichbar "
+                          f"({getattr(exc, 'reason', exc)}).") from None
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(entries, list):
+        return {}
+    return {str(e["name"]): bool(e.get("dir")) for e in entries if isinstance(e, dict) and e.get("name")}
+
+
+def exists_on_sd(sd_path: str, sd_root: str = "", host: str = "") -> bool:
+    sd_path = check_deletable(sd_path)
+    if sd_root:
+        return _local(sd_root, sd_path).exists()
+    parent, _, name = sd_path.rpartition("/")
+    return name.casefold() in {n.casefold() for n in list_entries(host, parent or "/")}
+
+
+def folder_summary(sd_path: str, sd_root: str = "", host: str = "") -> tuple:
+    """(Dateien, Bytes) in einem Ordner samt Unterordnern; Bytes None, wenn unbekannt (WLAN)"""
+    sd_path = check_deletable(sd_path)
+    if sd_root:
+        local = _local(sd_root, sd_path)
+        if local.is_file():
+            return 1, local.stat().st_size
+        files = [p for p in local.rglob("*") if p.is_file()] if local.is_dir() else []
+        return len(files), sum(p.stat().st_size for p in files)
+    count, todo = 0, [sd_path]
+    while todo and count < 5000:
+        folder = todo.pop()
+        for name, is_dir in list_entries(host, folder).items():
+            if is_dir:
+                todo.append(f"{folder}/{name}")
+            else:
+                count += 1
+    return count, None
+
+
+def delete_from_sd(sd_path: str, sd_root: str = "", host: str = "") -> None:
+    """Datei oder Ordner (mit Inhalt) von der SD-Karte loeschen: direkt auf der Karte
+    im PC oder ueber das WLAN (DELETE /explorer). Der ESPuino meldet immer Erfolg,
+    deshalb wird danach nachgesehen, ob der Eintrag wirklich weg ist."""
+    sd_path = check_deletable(sd_path)
+    if sd_root:
+        local = _local(sd_root, sd_path)
+        try:
+            if local.is_dir():
+                shutil.rmtree(local)
+            elif local.exists():
+                local.unlink()
+        except OSError as exc:
+            raise DeviceError(f"Löschen von „{sd_path}“ fehlgeschlagen: {exc}") from None
+        return
+    host = normalize_host(host)
+    url = f"http://{host}/explorer?path={urllib.parse.quote(sd_path)}"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="DELETE"), timeout=120) as response:
+            response.read()
+    except urllib.error.HTTPError as exc:
+        raise DeviceError(f"Der ESPuino hat das Löschen von „{sd_path}“ abgelehnt ({exc.code}).") from None
+    except (urllib.error.URLError, OSError) as exc:
+        raise DeviceError(f"ESPuino unter {host} nicht erreichbar ({getattr(exc, 'reason', exc)}).") from None
+    if exists_on_sd(sd_path, host=host):
+        raise DeviceError(f"„{sd_path}“ ist nach dem Löschen noch auf der SD-Karte. "
+                          "Vielleicht spielt der ESPuino gerade daraus?")

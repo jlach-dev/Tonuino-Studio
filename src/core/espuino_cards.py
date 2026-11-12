@@ -75,6 +75,10 @@ class KnownCards:
         self.cards[card_id] = card
         return card
 
+    def forget(self, card_id: str) -> bool:
+        """Karte aus dem Verzeichnis entfernen; False, wenn sie nicht drin war"""
+        return self.cards.pop(str(card_id), None) is not None
+
     def merge_assignment(self, card_id: str, sd_folder: str, play_mode: int) -> bool:
         """Zuweisung vom Geraet uebernehmen, wenn die Karte noch unbekannt ist.
         Bekannte Karten bleiben, wie sie sind (der Geraetestand kann veraltet sein).

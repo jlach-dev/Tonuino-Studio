@@ -150,6 +150,28 @@ def assign_card(host: str, card_id: str, file_or_url: str, play_mode: int) -> di
     return result
 
 
+def unassign_card(host: str, card_id: str) -> bool:
+    """Zuweisung einer Karte auf dem ESPuino entfernen (DELETE /rfid?id=).
+    False, wenn er die Karte gar nicht kannte. Seine backup.txt schreibt er dabei
+    nicht neu - das tut er erst bei der naechsten Zuweisung."""
+    card_id = str(card_id).strip()
+    if not card_id.isdigit():
+        raise DeviceError(f"Ungültige Kartennummer: {card_id!r}")
+    request = urllib.request.Request(_url(host, "/rfid?id=" + card_id), method="DELETE")
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return False
+        detail = exc.read().decode("utf-8", "replace").strip()[:200]
+        raise DeviceError(f"Der ESPuino meldet einen Fehler ({exc.code}): {detail or exc.reason}") from None
+    except (urllib.error.URLError, OSError) as exc:
+        raise DeviceError(f"ESPuino unter {normalize_host(host)} nicht erreichbar "
+                          f"({getattr(exc, 'reason', exc)}).") from None
+    return True
+
+
 def sd_path_from_local(sd_root: str, local_path: str) -> str:
     """Ordner oder Datei auf dem PC -> Pfad auf der SD-Karte ('/Ordner/...')"""
     root = Path(sd_root).resolve()

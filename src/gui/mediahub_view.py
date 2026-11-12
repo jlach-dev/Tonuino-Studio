@@ -9,7 +9,7 @@ Eigene Datei des Forks (siehe core/branding.py).
 
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPixmap
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QStackedWidget, QVBoxLayout,
@@ -22,6 +22,10 @@ from gui.common import heading_font
 
 PREVIEW_HEIGHT = 240
 CARD_ROLE = Qt.ItemDataRole.UserRole
+
+
+class _RowSignal(QObject):
+    row = pyqtSignal(int)
 
 
 class MediahubSidebar(QWidget):
@@ -132,6 +136,9 @@ class MediahubPage(QWidget):
     back_requested = pyqtSignal()  # von der Karte zurueck zur Kartentabelle (ESPuino direkt)
     sibling_selected = pyqtSignal(str)  # andere Karte desselben Ordners (ESPuino direkt)
     assign_folder_requested = pyqtSignal(str)  # weitere Karte fuer den Ordner der Karte
+    delete_file_requested = pyqtSignal(str, int)  # card_id, Zeile der Dateiliste (ESPuino direkt)
+    remove_card_requested = pyqtSignal(str)  # card_id: Zuweisung entfernen, aus der App loeschen
+    delete_folder_requested = pyqtSignal(str)  # "/Ordner" der Karte loeschen
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -243,6 +250,10 @@ class MediahubPage(QWidget):
         self.title_label.setObjectName("folderTitle")
         self.title_label.setWordWrap(True)
         info.addWidget(self.title_label)
+        self.series_label = QLabel()  # Serie wie in der Bibliothek (Serienprofil, sonst Interpret)
+        self.series_label.setObjectName("folderSubtitle")
+        self.series_label.hide()
+        info.addWidget(self.series_label)
         self.id_label = QLabel()
         self.id_label.setObjectName("folderSubtitle")
         self.id_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -270,6 +281,20 @@ class MediahubPage(QWidget):
         self.btn_transfer.clicked.connect(lambda: self.card and self.transfer_requested.emit(self.card.card_id))
         self.btn_transfer.hide()
         actions.addWidget(self.btn_transfer)
+        self.btn_remove_card = QPushButton("Karte entfernen …")
+        self.btn_remove_card.setObjectName("ghostButton")
+        self.btn_remove_card.setToolTip("Zuweisung auf diesem ESPuino entfernen und die Karte aus der Liste "
+                                        "der App löschen (mit Rückfrage)")
+        self.btn_remove_card.clicked.connect(lambda: self.card and self.remove_card_requested.emit(self.card.card_id))
+        self.btn_remove_card.hide()
+        actions.addWidget(self.btn_remove_card)
+        self.btn_delete_folder = QPushButton("Ordner löschen …")
+        self.btn_delete_folder.setObjectName("ghostButton")
+        self.btn_delete_folder.setToolTip("Den Ordner dieser Karte samt Inhalt von der SD-Karte löschen")
+        self.btn_delete_folder.clicked.connect(
+            lambda: self.card and self.card.sd_path and self.delete_folder_requested.emit(self.card.sd_path))
+        self.btn_delete_folder.hide()
+        actions.addWidget(self.btn_delete_folder)
         actions.addStretch(1)
         info.addLayout(actions)
         head_layout.addLayout(info, 1)
@@ -303,6 +328,13 @@ class MediahubPage(QWidget):
         layout.addWidget(files_title)
         self.file_list = QListWidget()
         self.file_list.setObjectName("trackList")
+        self.can_delete_files = False  # setzt das Hauptfenster (ESPuino direkt)
+        from gui.espuino_device_view import add_file_delete_menu
+        self._delete_file_row = _RowSignal(self)
+        self._delete_file_row.row.connect(
+            lambda row: self.card and self.delete_file_requested.emit(self.card.card_id, row))
+        add_file_delete_menu(self.file_list, lambda: self.device_mode and self.can_delete_files,
+                             self._delete_file_row.row)
         layout.addWidget(self.file_list, 1)
         return page
 
@@ -316,6 +348,10 @@ class MediahubPage(QWidget):
         self.siblings_tree.set_cards(card.sd_path, cards, has_cover, current=card.card_id)
         self.btn_assign_more.setEnabled(can_assign)
         self.siblings_box.show()
+
+    def set_series(self, series: str):
+        self.series_label.setText(series)
+        self.series_label.setVisible(bool(series))
 
     def show_folder(self, *args, **kwargs):
         self.card = None
@@ -361,6 +397,9 @@ class MediahubPage(QWidget):
         self.btn_back.setVisible(self.device_mode)
         self.status_label.setVisible(self.device_mode)
         self.btn_transfer.setVisible(self.device_mode)
+        self.btn_remove_card.setVisible(self.device_mode)
+        self.btn_delete_folder.setVisible(self.device_mode)
+        self.btn_delete_folder.setEnabled(self.can_delete_files and card.folder_present is True)
         if self.device_mode:
             self._show_device_status(card)
 
