@@ -90,6 +90,7 @@ class RfidStatus:
     programmed: bool = False  # Karte enthaelt eine Tonuino-Konfiguration
     card_data: Optional[TonuinoCardData] = None  # deren Inhalt (None, wenn nicht programmiert)
     error: str = ""
+    uid: str = ""  # UID der aufliegenden Karte (hex), leer ohne Karte
 
 
 class CardType(Enum):
@@ -311,10 +312,12 @@ class RFIDReader:
             try:
                 if not self.is_card_present():
                     return status
-                if not self.get_card_uid():
+                uid = self.get_card_uid()
+                if not uid:
                     status.card = "warning"
                     return status
                 status.card = "ok"
+                status.uid = uid
                 # Ein einzelner Lesefehler (Karte wird gerade bewegt) soll nicht
                 # sofort als "nicht programmiert" angezeigt werden - einmal wiederholen
                 card_data = self.read_tonuino_card()

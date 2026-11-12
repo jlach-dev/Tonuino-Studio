@@ -163,7 +163,7 @@ class EspuinoDeviceSidebar(QWidget):
         configured = bool(host)
         connected = state is not None and state.error != NOT_CONNECTED
         self.btn_assign.setEnabled(configured and state is not None and state.reachable)
-        self.btn_read.setEnabled(self.btn_assign.isEnabled())
+        self.btn_read.setEnabled(state is not None)  # auch ohne ESPuino: ueber den ACR122U
         self.btn_reload.setEnabled(configured and connected)
         self.btn_connect.setText("ESPuino wechseln …" if configured and connected else "Verbinden …")
         self.btn_connect.setObjectName("" if connected else "primaryButton")
@@ -339,6 +339,7 @@ class FolderPage(QWidget):
     back_requested = pyqtSignal()
     card_selected = pyqtSignal(str)
     assign_requested = pyqtSignal(str)  # "/Ordner"
+    cover_requested = pyqtSignal(str)  # "/Ordner": Cover-Manager fuer das Album bzw. die Karte
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -383,6 +384,10 @@ class FolderPage(QWidget):
         self.btn_assign.setToolTip("Eine weitere Karte auf den ESPuino legen und diesem Ordner zuweisen")
         self.btn_assign.clicked.connect(lambda: self.assign_requested.emit(self.folder))
         actions.addWidget(self.btn_assign)
+        self.btn_cover = QPushButton("Cover-Manager …")
+        self.btn_cover.setToolTip("Kartencover für das Album dieses Ordners suchen, per KI erzeugen und gestalten")
+        self.btn_cover.clicked.connect(lambda: self.cover_requested.emit(self.folder))
+        actions.addWidget(self.btn_cover)
         actions.addStretch(1)
         info.addLayout(actions)
         head_layout.addLayout(info, 1)
@@ -406,7 +411,7 @@ class FolderPage(QWidget):
         layout.addWidget(self.empty_label)
 
     def show_folder(self, folder: str, meta: List[str], preview_path: str, cards: List[MediahubCard],
-                    has_cover: Dict[str, bool], can_assign: bool):
+                    has_cover: Dict[str, bool], can_assign: bool, can_cover: bool = False):
         """cards: bekannte Karten, die auf diesen Ordner zeigen (hier oder laut Verzeichnis)"""
         self.folder = folder
         self.title_label.setText(folder.strip("/").rpartition("/")[2] or folder)
@@ -423,6 +428,9 @@ class FolderPage(QWidget):
             self.preview.setPixmap(pixmap.scaled(self.preview.size(), Qt.AspectRatioMode.KeepAspectRatio,
                                                  Qt.TransformationMode.SmoothTransformation))
         self.btn_assign.setEnabled(can_assign)
+        self.btn_cover.setEnabled(can_cover)
+        self.btn_cover.setToolTip("" if can_cover else "Weder ein Album in der Bibliothek noch eine Karte mit "
+                                  "Dateien gefunden")
         self.tree.clear()
         for card in cards:
             if card.device_target:  # Zuweisung auf dem verbundenen ESPuino

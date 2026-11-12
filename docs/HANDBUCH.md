@@ -656,14 +656,14 @@ Die Dateien müssen dafür schon auf der SD-Karte des ESPuino liegen, siehe den 
 
 ### Karte auslesen (ESPuino direkt)
 
-**Karte auslesen …** in der Seitenleiste öffnet ein Fenster, das so lange am ESPuino mithört, bis du es schließt. Halte eine Karte an den ESPuino, und das Fenster zeigt:
+**Karte auslesen …** in der Seitenleiste öffnet ein Fenster, das so lange liest, bis du es schließt. Halte eine Karte an den ESPuino oder leg sie auf den USB-Leser **ACR122U**, und das Fenster zeigt:
 
 - Kartennummer und Namen;
 - wohin sie auf diesem ESPuino zeigt und den Abspielmodus;
 - das Album aus der Bibliothek mit Titelzahl und Dauer;
 - Kartencover vorn und hinten und das Album-Cover.
 
-Das hilft vor allem beim Bekleben vieler Karten, damit jedes Cover auf der richtigen Karte landet. Eine unbekannte Karte zeigt die App gelb; mit **Diese Karte zuweisen …** belegst du sie gleich. **In der Kartenliste zeigen** öffnet die Karte im Reiter **ESPuino-Karten**. Das Fenster liest nur und ändert nichts. Der ESPuino spielt die Karte dabei allerdings wie gewohnt ab. Der Knopf geht nur, solange ein ESPuino verbunden ist.
+Das hilft vor allem beim Bekleben vieler Karten, damit jedes Cover auf der richtigen Karte landet. Eine unbekannte Karte zeigt die App gelb; mit **Diese Karte zuweisen …** belegst du sie gleich. **In der Kartenliste zeigen** öffnet die Karte im Reiter **ESPuino-Karten**. Das Fenster liest nur und ändert nichts. Der ESPuino spielt eine aufgelegte Karte wie gewohnt ab; das lässt sich von außen nicht verhindern. Der ACR122U spielt nichts ab und geht auch ohne verbundenen ESPuino. Die App rechnet seine Kartennummer (UID) so um, wie der ESPuino es tut: die ersten vier Bytes, je dreistellig, etwa `5C 42 91 02` → `092 066 145 002`. Ist unter **RFID-Leser** der TonUINO gewählt, fragt die App den ACR122U nicht ab; das Fenster sagt dann Bescheid.
 
 ### Alben auf den ESPuino übertragen
 
@@ -680,7 +680,7 @@ Ist **Danach eine Karte für dieses Album zuweisen** angehakt, öffnet sich ansc
 
 ### ESPuino direkt: Seitenleiste, bekannte Karten und Status
 
-Die **Seitenleiste** zeigt den ESPuino: Adresse, Firmware, Größe und freien Platz der SD-Karte, darunter die Ordner auf seiner SD-Karte (**Auf dem ESPuino**). Ordner, auf die keine Karte zeigt, sind grau. Ein Klick auf einen Ordner zeigt im Hauptbereich das passende Album aus der Bibliothek und alle Karten, die auf diesen Ordner (oder einen Unterordner) zeigen, jeweils mit Status auf diesem ESPuino und Cover. Ein Klick auf eine Karte öffnet sie; **Karte zuweisen …** belegt eine weitere Karte mit demselben Ordner. Mehrere Karten für dasselbe Album sind kein Problem, jede spielt es. Rechtsklick auf einen Ordner → **Karte zuweisen …** mit diesem Ordner. **Neu einlesen** liest alles erneut.
+Die **Seitenleiste** zeigt den ESPuino: Adresse, Firmware, Größe und freien Platz der SD-Karte, darunter die Ordner auf seiner SD-Karte (**Auf dem ESPuino**). Ordner, auf die keine Karte zeigt, sind grau. Ein Klick auf einen Ordner zeigt im Hauptbereich das passende Album aus der Bibliothek und alle Karten, die auf diesen Ordner (oder einen Unterordner) zeigen, jeweils mit Status auf diesem ESPuino und Cover. Ein Klick auf eine Karte öffnet sie; **Karte zuweisen …** belegt eine weitere Karte mit demselben Ordner, **Cover-Manager …** gestaltet das Kartencover für das Album des Ordners. Mehrere Karten für dasselbe Album sind kein Problem, jede spielt es. Rechtsklick auf einen Ordner → **Karte zuweisen …** mit diesem Ordner. **Neu einlesen** liest alles erneut.
 
 Der Reiter **ESPuino-Karten** zeigt die **bekannten Karten**. Die App merkt sich selbst, wofür jede Karte steht (Ordner, Abspielmodus und das Album in der Bibliothek), in `espuino/cards.json` im Datenordner. Denn die Zuweisungen speichert der ESPuino in seinem eigenen Speicher, die Dateien liegen auf der SD-Karte: Nach einem Wechsel der SD-Karte zeigen seine Karten ins Leere, und ein zweiter ESPuino kennt die Karten gar nicht. Zuweisungen, die die App noch nicht kennt, übernimmt sie beim Einlesen.
 

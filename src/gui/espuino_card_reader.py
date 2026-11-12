@@ -1,11 +1,13 @@
 """
-Karte auslesen: Studio hoert am Websocket des ESPuino mit, solange das Fenster
-offen ist. Jede aufgelegte Karte zeigt Nummer, Namen, Zuweisung auf diesem
+Karte auslesen: Studio hoert am Websocket des ESPuino mit und fragt den
+USB-Leser ACR122U ab, solange das Fenster offen ist. Jede aufgelegte Karte zeigt Nummer, Namen, Zuweisung auf diesem
 ESPuino, Album und die Kartencover vorn und hinten - praktisch beim Bekleben
 vieler Karten, damit kein Cover auf der falschen Karte landet.
 
-Liest nur; geschrieben wird nichts. Der ESPuino spielt die Karte dabei wie
-gewohnt ab (das laesst sich von aussen nicht verhindern).
+Liest nur; geschrieben wird nichts. Der ESPuino spielt eine aufgelegte Karte
+wie gewohnt ab (das laesst sich von aussen nicht verhindern); am ACR122U spielt
+nichts. Dessen UID rechnet core.espuino_device.card_id_from_uid in die
+Kartennummer des ESPuino um.
 
 Eigene Datei des Forks (siehe core/branding.py).
 """
@@ -22,7 +24,7 @@ from PyQt6.QtWidgets import (
     QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from core.espuino_device import DeviceError, ws_url
+from core.espuino_device import DeviceError, card_id_from_uid, ws_url
 from core.mediahub_cards import format_card_id
 from gui import theme
 
@@ -84,17 +86,24 @@ class CardReaderDialog(QDialog):
         self.lookup = lookup
         self.info: Optional[CardInfo] = None
         self.count = 0
+        self._reader_uid = ""  # Karte, die gerade auf dem ACR122U liegt
+        self._reader_state = None
         self.setWindowTitle("Karte auslesen")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         layout = QVBoxLayout(self)
-        self.status_label = QLabel("Verbinde mit dem ESPuino …")
+        self.status_label = QLabel("Verbinde mit dem ESPuino …" if host else
+                                   "ESPuino: nicht verbunden – Karten nur über den ACR122U.")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
+        self.reader_label = QLabel("ACR122U: wird gesucht …")
+        self.reader_label.setWordWrap(True)
+        self.reader_label.setStyleSheet(f"color: {theme.OVERLAY2};")
+        layout.addWidget(self.reader_label)
         self.number_label = QLabel()
         self.number_label.setStyleSheet("font-size: 20pt; font-weight: bold;")
         self.number_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.number_label)
-        self.name_label = QLabel("Karte an den ESPuino halten.")
+        self.name_label = QLabel("Karte an den ESPuino oder auf den ACR122U legen.")
         self.name_label.setWordWrap(True)
         self.name_label.setStyleSheet("font-size: 14pt;")
         layout.addWidget(self.name_label)
@@ -141,7 +150,7 @@ class CardReaderDialog(QDialog):
         self.socket.disconnected.connect(self._on_disconnected)
         self.socket.textMessageReceived.connect(self.on_message)
         self.finished.connect(lambda _result: self.socket.close())
-        if listen:
+        if listen and host:
             try:
                 self.socket.open(QUrl(ws_url(host)))
             except DeviceError as exc:
@@ -157,8 +166,8 @@ class CardReaderDialog(QDialog):
         self.btn_assign.setEnabled(False)
 
     def _on_connected(self):
-        self.status_label.setText("Bereit: Karte an den ESPuino halten. Das Fenster liest weiter, bis du es "
-                                  "schließt. (Der ESPuino spielt die Karte dabei ab.)")
+        self.status_label.setText("ESPuino: bereit. Das Fenster liest weiter, bis du es schließt. "
+                                  "(Der ESPuino spielt eine Karte dabei ab, der ACR122U nicht.)")
         self.status_label.setStyleSheet(f"color: {theme.GREEN};")
 
     def _on_disconnected(self):
@@ -175,12 +184,43 @@ class CardReaderDialog(QDialog):
             return
         card_id = str(message.get("rfidId") or "").strip() if isinstance(message, dict) else ""
         if card_id.isdigit():
-            self.show_info(self.lookup(card_id))
+            self.show_info(self.lookup(card_id), "am ESPuino")
 
-    def show_info(self, info: CardInfo):
+    def on_reader_status(self, status):
+        """Status des ACR122U (core.rfid.RfidStatus, alle 500 ms vom RfidPoller).
+        Eine Karte wird gezeigt, sobald sie neu aufliegt, nicht bei jedem Abfragen."""
+        state = (status.reader, bool(status.uid), status.error)
+        if state != self._reader_state:
+            self._reader_state = state
+            if status.reader == "ok":
+                text, color = "ACR122U: bereit – Karte auflegen.", theme.GREEN
+            elif status.reader == "error":
+                text, color = ("ACR122U: nicht nutzbar" + (f" ({status.error})" if status.error else "")
+                               + "."), theme.YELLOW
+            else:
+                text, color = "ACR122U: nicht angeschlossen.", theme.OVERLAY2
+            self.reader_label.setText(text)
+            self.reader_label.setStyleSheet(f"color: {color};")
+        uid = status.uid if status.reader == "ok" else ""
+        if uid == self._reader_uid:
+            return
+        self._reader_uid = uid
+        card_id = card_id_from_uid(uid) if uid else ""
+        if card_id:
+            self.show_info(self.lookup(card_id), "am ACR122U")
+
+    def reader_paused(self, reason: str):
+        """Der Leser wird gerade nicht abgefragt (z. B. Leser-Modus TonUINO)"""
+        self._reader_state = None
+        self.reader_label.setText(f"ACR122U: {reason}")
+        self.reader_label.setStyleSheet(f"color: {theme.OVERLAY2};")
+
+    def show_info(self, info: CardInfo, source: str = ""):
         self.info = info
         self.count += 1
-        self.number_label.setText(f"Karte {format_card_id(info.card_id)}")
+        self.number_label.setText(f"Karte {format_card_id(info.card_id)}"
+                                  + (f"  <span style='font-size:10pt; font-weight:normal'>{source}</span>"
+                                     if source else ""))
         if info.known:
             self.name_label.setText(info.name)
             self.name_label.setStyleSheet("font-size: 14pt;")

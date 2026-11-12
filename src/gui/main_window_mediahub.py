@@ -126,6 +126,7 @@ class MediahubMixin:
         self.mediahub_page.cards_table.card_selected.connect(self._mediahub_show_card)
         self.mediahub_page.folder_page.card_selected.connect(self._mediahub_show_card)
         self.mediahub_page.folder_page.assign_requested.connect(self._espuino_assign_folder)
+        self.mediahub_page.folder_page.cover_requested.connect(self._espuino_folder_cover)
         self.mediahub_page.cards_table.transfer_missing_requested.connect(self._espuino_transfer_missing)
         self.stack.addWidget(self.mediahub_page)
         self._sd_page = self.mediahub_page
@@ -378,9 +379,18 @@ class MediahubMixin:
             reader.raise_()
             reader.activateWindow()
             return
-        if not self._espuino_is_device() or not self._espuino_host:
+        if not self._espuino_is_device():
             return
-        reader = CardReaderDialog(self._espuino_host, self._espuino_card_info, self)
+        state = self._espuino_state
+        host = self._espuino_host if state is not None and state.reachable else ""
+        reader = CardReaderDialog(host, self._espuino_card_info, self)
+        panel = getattr(self, "rfid_panel", None)  # fragt den ACR122U ab, auch wenn er ausgeblendet ist
+        poller = getattr(panel, "_rfid_poller", None)
+        if poller is not None:
+            if poller.paused:
+                reader.reader_paused("wird nicht abgefragt, weil als RFID-Leser der TonUINO gewählt ist "
+                                     "(im TonUINO-Modus unter RFID-Leser umstellen).")
+            poller.status_changed.connect(reader.on_reader_status)  # loest Qt beim Schliessen selbst
         reader.show_card_requested.connect(self._espuino_reader_show_card)
         reader.assign_requested.connect(lambda card_id: self._espuino_assign(preset_card=card_id))
         reader.destroyed.connect(lambda *_: setattr(self, "_espuino_reader", None))
@@ -466,9 +476,23 @@ class MediahubMixin:
         reachable = state is not None and state.reachable
         if len(cards) > 1:
             meta.append(f"{len(cards)} Karten zeigen auf diesen Ordner – jede spielt dasselbe Album.")
-        self.mediahub_page.show_folder(folder, meta, preview, cards, has_cover, reachable)
+        self._espuino_folder = (folder, album, [c.card_id for c in cards])
+        can_cover = album is not None or any(c.local_tracks for c in cards)
+        self.mediahub_page.show_folder(folder, meta, preview, cards, has_cover, reachable, can_cover)
         if self.view_switch.currentIndex() != 0:
             self.view_switch.setCurrentIndex(0)
+
+    def _espuino_folder_cover(self, folder: str):
+        """Cover-Manager aus der Ordnerseite: fuer das Bibliotheksalbum, sonst fuer die erste Karte"""
+        shown, album, card_ids = getattr(self, "_espuino_folder", ("", None, []))
+        if shown != folder:
+            return
+        if album is not None:
+            self._library_cover(album, focus=CoverManagerDialog.FOCUS_CARD)
+            self._mediahub_reload()
+        elif card_ids:
+            self._mediahub_open_cover(card_ids[0])
+        self._espuino_show_folder(folder)  # neues Kartencover gleich zeigen
 
     def _espuino_assign_folder(self, folder: str):
         self._espuino_assign(preset_path=folder, album=self._espuino_album_for_folder(folder))

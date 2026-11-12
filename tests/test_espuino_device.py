@@ -174,3 +174,10 @@ def test_sd_path_from_local(sd):
 def test_unreachable_device():
     with pytest.raises(dev.DeviceError, match="nicht erreichbar"):
         dev.fetch_assignments("127.0.0.1:9")
+
+
+def test_card_id_from_uid_matches_the_espuino():
+    assert dev.card_id_from_uid("5C429102") == "092066145002"
+    assert dev.card_id_from_uid("04A1B2C3D4E5F6") == "004161178195"  # 7-Byte-UID: die ersten vier Bytes
+    assert dev.card_id_from_uid("5c:42:91:02") == "092066145002"
+    assert dev.card_id_from_uid("0102") == "" and dev.card_id_from_uid("xyz") == ""

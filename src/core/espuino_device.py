@@ -72,6 +72,17 @@ def normalize_host(text: str) -> str:
     return host
 
 
+def card_id_from_uid(uid_hex: str) -> str:
+    """Kartennummer, wie der ESPuino sie bildet, aus der UID einer Karte (hex, etwa
+    vom ACR122U): die ersten vier Bytes je dreistellig dezimal, "5C429102" ->
+    "092066145002" (Firmware: RfidMfrc522.cpp, cardIdSize 4). "" bei kuerzerer UID."""
+    try:
+        data = bytes.fromhex(uid_hex.replace(" ", "").replace(":", ""))
+    except ValueError:
+        return ""
+    return "".join(f"{b:03d}" for b in data[:4]) if len(data) >= 4 else ""
+
+
 def _url(host: str, path: str) -> str:
     return f"http://{normalize_host(host)}{path}"
 

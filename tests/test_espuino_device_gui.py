@@ -347,3 +347,50 @@ def test_card_info_and_folder_page_show_the_library_album(setup, tmp_path, monke
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_read_cards_with_acr122u_without_playing_on_the_espuino(setup):
+    """Karte auf dem ACR122U: gleiche Anzeige, die UID wird zur ESPuino-Nummer"""
+    from core.rfid import RfidStatus
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        window._espuino_read_cards()
+        reader = window._espuino_reader
+        poller = window.rfid_panel._rfid_poller
+        poller.status_changed.emit(RfidStatus(reader="ok"))
+        assert "bereit" in reader.reader_label.text() and reader.count == 0
+        on_card = RfidStatus(reader="ok", card="ok", uid="01020304")  # = 001 002 003 004 (CARD_A)
+        poller.status_changed.emit(on_card)
+        assert reader.info.card_id == CARD_A and reader.info.known and "am ACR122U" in reader.number_label.text()
+        poller.status_changed.emit(on_card)  # liegt weiter auf: nicht erneut melden
+        assert reader.count == 1
+        poller.status_changed.emit(RfidStatus(reader="ok"))  # abgenommen und wieder aufgelegt
+        poller.status_changed.emit(on_card)
+        assert reader.count == 2
+        poller.status_changed.emit(RfidStatus(reader="neutral"))
+        assert "nicht angeschlossen" in reader.reader_label.text()
+        reader.close()
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_folder_page_opens_the_cover_manager_of_the_album(setup, monkeypatch, tmp_path):
+    from core.library import LibraryAlbum
+    from gui.main_window import MainWindow
+    album = LibraryAlbum(path=str(tmp_path / "Fuchsbande"), title="Die Fuchsbande", tracks=["a.mp3"])
+    window = MainWindow()
+    try:
+        opened = []
+        monkeypatch.setattr(window, "_espuino_album_for_folder", lambda folder: album)
+        monkeypatch.setattr(window, "_library_cover", lambda a, focus=None: opened.append((a, focus)))
+        window._espuino_show_folder("/Musik")
+        folder_page = window.mediahub_page.folder_page
+        assert folder_page.btn_cover.isEnabled()
+        folder_page.btn_cover.click()
+        assert opened and opened[0][0] is album
+        assert window.mediahub_page.pages.currentWidget() is folder_page  # bleibt auf der Ordnerseite
+    finally:
+        window.close()
+        window.deleteLater()
