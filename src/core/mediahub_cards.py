@@ -85,6 +85,12 @@ class MediahubCard:
     source_esp: str = ""  # Geraet der Zuweisung, die gilt (die neueste)
     conflict: bool = False  # auf den Geraeten unterschiedlicher Inhalt
     sd_path: str = ""  # nur bei Karten direkt vom ESPuino: Ziel auf seiner SD-Karte ("/Ordner")
+    # Nur bei Karten direkt vom ESPuino (core/espuino_device.build_cards):
+    local_tracks: List[str] = field(default_factory=list)  # Dateien auf dem PC (Bibliothek bzw. SD im Kartenleser)
+    library_path: str = ""  # Album der Bibliothek, falls gefunden
+    device_status: str = ""  # core/espuino_cards: ASSIGNED, ASSIGNED_OTHER, NOT_ASSIGNED; "" = unbekannt
+    device_target: str = ""  # Ordner, auf den die Karte auf dem Geraet zeigt
+    folder_present: Optional[bool] = None  # Ordner auf der SD-Karte des Geraets; None = unbekannt
 
     @property
     def album_id(self) -> str:
@@ -248,7 +254,11 @@ def build_folder(card: MediahubCard, media_root: str, archive) -> MediahubFolder
     vorhandenen Dateien (fuer Ordner-Bilder bei der Cover-Suche), die
     Kartendateien liegen in archive.card_dir(album_id)."""
     from core.card_store import card_paths
-    paths, missing = _resolve(card, media_root)
+    if card.local_tracks:
+        paths = [p for p in card.local_tracks if os.path.isfile(p)]
+        missing = [os.path.basename(p) for p in card.local_tracks if not os.path.isfile(p)]
+    else:
+        paths, missing = _resolve(card, media_root)
     if paths:
         common = os.path.commonpath(paths)
         folder_path = common if os.path.isdir(common) else os.path.dirname(common)

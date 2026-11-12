@@ -15,18 +15,22 @@ der Mixin steht in der Klassenliste vorn, damit seine Ueberschreibungen gelten.
 """
 
 import logging
+import os
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import QMenu, QMessageBox, QProgressDialog
 
+from core import espuino_cards
 from core import espuino_device as dev
+from core.espuino_transfer import plan_album
 from core import mediahub_cards as mh
 from core.app_mode import MODE_ESPUINO, MODE_TONUINO, MODES, current_mode, display_name, set_mode
 from core.card_store import card_paths
 from gui.about_dialog import show_about
 from gui.cover_manager_dialog import CoverManagerDialog, get_archive
 from gui.espuino_dialogs import AssignCardDialog, EspuinoSetupDialog, TransferDialog, TransferWorker
+from gui.espuino_device_view import EspuinoDeviceSidebar, album_folder_names
 from gui.mediahub_view import MediahubPage, MediahubSidebar
 from gui.print_sheet_dialog import PrintSheetDialog
 
@@ -53,6 +57,8 @@ class MediahubMixin:
         self._mediahub_media_root = ""
         self._espuino_source = dev.SOURCE_DEVICE
         self._espuino_host = ""
+        self._espuino_known = None
+        self._espuino_state = None
         self._add_mode_menu()
         if not self._is_espuino():
             return
@@ -91,12 +97,25 @@ class MediahubMixin:
         self.mediahub_sidebar.card_selected.connect(self._mediahub_on_card_clicked)
         sidebar_layout = self.folder_list.parentWidget().layout()
         sidebar_layout.insertWidget(sidebar_layout.indexOf(self.folder_list), self.mediahub_sidebar, 1)
+        self.espuino_sidebar = EspuinoDeviceSidebar()
+        self.espuino_sidebar.setup_requested.connect(self._mediahub_setup)
+        self.espuino_sidebar.reload_requested.connect(self._mediahub_reload)
+        self.espuino_sidebar.assign_requested.connect(self._espuino_assign)
+        self.espuino_sidebar.assign_folder_requested.connect(self._espuino_assign_folder)
+        self.espuino_sidebar.albums_dropped.connect(self._espuino_transfer)
+        self.espuino_sidebar.folder_list.album_names = lambda paths: album_folder_names(paths,
+                                                                                         self.library_view.index)
+        sidebar_layout.insertWidget(sidebar_layout.indexOf(self.folder_list), self.espuino_sidebar, 1)
 
         self.mediahub_page = MediahubPage()
         self.mediahub_page.setup_requested.connect(self._mediahub_setup)
         self.mediahub_page.cover_requested.connect(self._mediahub_open_cover)
         self.mediahub_page.batch_requested.connect(self._mediahub_generate_missing)
         self.mediahub_page.print_requested.connect(self._mediahub_print_sheet)
+        self.mediahub_page.transfer_requested.connect(self._espuino_transfer_card)
+        self.mediahub_page.back_requested.connect(self._espuino_back)
+        self.mediahub_page.cards_table.card_selected.connect(self._mediahub_show_card)
+        self.mediahub_page.cards_table.transfer_missing_requested.connect(self._espuino_transfer_missing)
         self.stack.addWidget(self.mediahub_page)
         self._sd_page = self.mediahub_page
         self.view_switch.setTabToolTip(0, "Karten des ESPuino: Kartencover gestalten und drucken")
@@ -189,29 +208,28 @@ class MediahubMixin:
         device = source == dev.SOURCE_DEVICE
         self.view_switch.setTabText(0, "ESPuino-Karten" if device else "Mediahub-Karten")
         page.overview_title.setText("ESPuino-Karten" if device else "Mediahub-Karten")
+        page.device_mode = device
+        sidebar.setVisible(not device)
+        self.espuino_sidebar.setVisible(device)
         if device:
-            configured, root = bool(host), sd_root
-            sidebar.btn_assign.setVisible(True)
-            sidebar.btn_assign.setEnabled(configured)
-            not_configured = ("Noch nicht eingerichtet: die Adresse des ESPuino im WLAN und seine SD-Karte "
-                              "im Kartenleser wählen. Studio liest dann seine Karten und kann neue zuweisen.")
-        else:
-            db_path, root = mh.settings_paths()
-            configured = bool(db_path)
-            sidebar.btn_assign.setVisible(False)
-            not_configured = ("Noch nicht eingerichtet: die db.json des ESPuino-Mediahub und die Mediathek "
-                              "wählen. Studio liest die Karten nur, am Mediahub ändert sich nichts.")
+            self._espuino_reload_device(host, sd_root)
+            return
+        db_path, root = mh.settings_paths()
+        configured = bool(db_path)
+        sidebar.btn_assign.setVisible(False)
         sidebar.btn_reload.setEnabled(configured)
         self._mediahub_media_root = root
         if not configured:
             self._mediahub_data = None
             sidebar.set_cards([], {})
-            page.show_overview(not_configured, configured=False)
+            page.show_overview("Noch nicht eingerichtet: die db.json des ESPuino-Mediahub und die Mediathek "
+                               "wählen. Studio liest die Karten nur, am Mediahub ändert sich nichts.",
+                               configured=False)
             return
         try:
-            data = dev.load_cards(host, root) if device else mh.load_cards(db_path)
-        except (mh.MediahubError, dev.DeviceError) as exc:
-            log.warning("ESPuino-Karten: %s", exc)
+            data = mh.load_cards(db_path)
+        except mh.MediahubError as exc:
+            log.warning("Mediahub-Karten: %s", exc)
             self._mediahub_data = None
             sidebar.set_cards([], {})
             page.show_overview(str(exc), configured=False)
@@ -228,28 +246,90 @@ class MediahubMixin:
             self._mediahub_show_card(selected)
         else:
             self._mediahub_show_overview(has_cover)
-        self._status(f"{len(data.cards)} Karten " + ("vom ESPuino" if device else "aus dem Mediahub") + " eingelesen")
+        self._status(f"{len(data.cards)} Karten aus dem Mediahub eingelesen")
 
-    def _espuino_assign(self, preset_card: str = "", preset_path: str = ""):
+    # --- ESPuino direkt: bekannte Karten und Geraet ---------------------------------
+
+    def _espuino_data_dir(self) -> str:
+        archive = get_archive(self, ask=False)
+        return str(archive.root) if archive is not None else ""
+
+    def _espuino_reload_device(self, host: str, sd_root: str):
+        page = self.mediahub_page
+        self._mediahub_media_root = sd_root
+        if not host:
+            self._mediahub_data = None
+            self._espuino_state = None
+            self.espuino_sidebar.set_state("", None, {})
+            page.show_overview("Noch nicht eingerichtet: die Adresse des ESPuino im WLAN wählen, dazu am besten "
+                               "seine SD-Karte im Kartenleser. Studio liest dann seine Karten und kann neue "
+                               "zuweisen.", configured=False)
+            return
+        state = dev.fetch_state(host, sd_root)
+        known = espuino_cards.load(self._espuino_data_dir())
+        data, changed = dev.build_cards(known, state, self.library_view.index, sd_root)
+        if changed:
+            try:
+                known.save()
+            except OSError as exc:
+                log.warning("Kartenverzeichnis nicht gespeichert: %s", exc)
+        self._espuino_known, self._espuino_state, self._mediahub_data = known, state, data
+        folder_cards = {}
+        for card_id, (target, _mode) in state.assignments.items():
+            card = known.get(card_id)
+            folder_cards.setdefault(target.strip("/").casefold(), []).append(card.label if card else card_id)
+        self.espuino_sidebar.set_state(host, state, folder_cards)
+        has_cover = self._mediahub_cover_map()
+        page.cards_table.set_cards(data.cards, has_cover, state.reachable)
+        if page.card is not None and mh.card_by_id(data, page.card.card_id) is not None:
+            self._mediahub_show_card(page.card.card_id)
+        else:
+            self._mediahub_show_overview(has_cover)
+        self._status(f"{len(data.cards)} bekannte Karten" + ("" if state.reachable else " – ESPuino nicht erreichbar"))
+
+    def _espuino_back(self):
+        self.mediahub_page.card = None
+        self._mediahub_show_overview(self._mediahub_cover_map())
+
+    def _espuino_album_for_folder(self, sd_folder: str):
+        return espuino_cards.find_library_album(espuino_cards.KnownCard("", sd_folder=sd_folder),
+                                                self.library_view.index)
+
+    def _espuino_assign(self, preset_card: str = "", preset_path: str = "", album=None):
         if not self._espuino_is_device() or not self._espuino_host:
             return
         _source, host, sd_root = dev.settings()
-        known = {c.card_id: c.label for c in (self._mediahub_data.cards if self._mediahub_data else [])}
-        dialog = AssignCardDialog(host, sd_root, known, self)
+        known = getattr(self, "_espuino_known", None) or espuino_cards.load(self._espuino_data_dir())
+        labels = {cid: card.label for cid, card in known.cards.items()}
+        dialog = AssignCardDialog(host, sd_root, labels, self)
         if preset_card:
             dialog.card_edit.setText(preset_card)
         if preset_path:
             dialog.path_edit.setText(preset_path)
         accepted = dialog.exec()
         entry = dialog.result_entry
+        play_mode = dialog.play_mode
         dialog.deleteLater()
         if not accepted or not entry:
             return
-        card_id = str(entry.get("id"))
-        self._status(f"Karte {mh.format_card_id(card_id)} zugewiesen: {entry.get('fileOrUrl')}")
+        card_id, folder = str(entry.get("id")), str(entry.get("fileOrUrl") or "")
+        if album is None:
+            album = self._espuino_album_for_folder(folder)
+        known.remember(card_id, name=album.name if album is not None else folder.strip("/").rpartition("/")[2],
+                       sd_folder=folder, play_mode=play_mode,
+                       library_path=album.path if album is not None else "",
+                       album_id=album.album_id if album is not None else "")
+        try:
+            known.save()
+        except OSError as exc:
+            log.warning("Kartenverzeichnis nicht gespeichert: %s", exc)
+        self._status(f"Karte {mh.format_card_id(card_id)} zugewiesen: {folder}")
         self._mediahub_reload()
         if mh.card_by_id(self._mediahub_data, card_id) is not None:
-            self.mediahub_sidebar.select(card_id)
+            self._mediahub_on_card_clicked(card_id)
+
+    def _espuino_assign_folder(self, folder: str):
+        self._espuino_assign(preset_path=folder, album=self._espuino_album_for_folder(folder))
 
     # --- Alben auf den ESPuino -----------------------------------------------------
 
@@ -257,8 +337,13 @@ class MediahubMixin:
         source, host, sd_root = dev.settings()
         return source == dev.SOURCE_DEVICE and bool(host or sd_root)
 
+    def _espuino_transfer_busy(self) -> bool:
+        worker = getattr(self, "_espuino_transfer_worker", None)
+        return worker is not None and worker.isRunning()
+
     def _espuino_transfer(self, paths: list):
-        if getattr(self, "_espuino_transfer_worker", None) is not None and self._espuino_transfer_worker.isRunning():
+        """Alben aus der Bibliothek (Kachelmenue oder Drag & Drop in die Seitenleiste)"""
+        if self._espuino_transfer_busy():
             return
         _source, host, sd_root = dev.settings()
         albums = [a for a in (self.library_view.index.find(p) for p in paths) if a is not None and a.tracks]
@@ -268,9 +353,59 @@ class MediahubMixin:
         if not dialog.exec():
             dialog.deleteLater()
             return
-        plans, assign_after = dialog.plans, dialog.assign_after
-        local = dialog.sd_root
+        plans, assign_after, local = dialog.plans, dialog.assign_after, dialog.sd_root
         dialog.deleteLater()
+
+        def finished(cancelled):
+            if not cancelled and assign_after and len(plans) == 1:
+                self._espuino_assign(preset_path=plans[0].folder, album=albums[0])
+            else:
+                self._mediahub_reload()
+
+        self._espuino_run_transfer(plans, local, host, None, finished)
+
+    def _espuino_transfer_cards(self, cards: list):
+        """Bekannte Karten auf diesen ESPuino: Album aus der Bibliothek in den
+        bekannten Ordner (fehlende Dateien), danach die Karte zuweisen"""
+        from gui.espuino_device_view import can_transfer
+        if self._espuino_transfer_busy():
+            return
+        cards = [c for c in cards if can_transfer(c)]
+        if not cards:
+            return
+        _source, host, sd_root = dev.settings()
+        local = sd_root if sd_root and os.path.isdir(sd_root) else ""
+        plans, assignments = [], []
+        for card in cards:
+            album = self.library_view.index.find(card.library_path)
+            if album is None or not album.tracks:
+                continue
+            plans.append(plan_album(album.tracks, card.sd_path))
+            assignments.append((card.card_id, int(card.play_mode or 3)))
+        if not plans:
+            return
+        size = sum(p.total for p in plans)
+        way = "auf die SD-Karte im Kartenleser" if local else "über das WLAN"
+        names = "\n".join(f"• {c.label}" for c in cards[:12]) + ("\n• …" if len(cards) > 12 else "")
+        answer = QMessageBox.question(
+            self, "Auf den ESPuino übertragen",
+            f"{len(plans)} Karte{'' if len(plans) == 1 else 'n'} {way} übertragen ({size / 1e6:.0f} MB, "
+            f"vorhandene Dateien werden übersprungen) und auf diesem ESPuino zuweisen?\n\n{names}")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._espuino_run_transfer(plans, local, host, assignments, lambda _cancelled: self._mediahub_reload())
+
+    def _espuino_transfer_card(self, card_id: str):
+        card = self._mediahub_card(card_id)
+        if card is not None:
+            self._espuino_transfer_cards([card])
+
+    def _espuino_transfer_missing(self):
+        from gui.espuino_device_view import needs_transfer
+        data = self._mediahub_data
+        self._espuino_transfer_cards([c for c in (data.cards if data else []) if needs_transfer(c)])
+
+    def _espuino_run_transfer(self, plans, local: str, host: str, assignments, finished):
         self._release_files()
         progress = QProgressDialog("Übertrage …", "Abbrechen", 0, 1000, self)
         progress.setWindowTitle("Auf den ESPuino übertragen")
@@ -278,9 +413,10 @@ class MediahubMixin:
         progress.setMinimumDuration(0)
         progress.setAutoClose(False)
         progress.setAutoReset(False)
-        worker = TransferWorker(plans, local, host, self)
+        worker = TransferWorker(plans, local, host, self, assignments=assignments)
         self._espuino_transfer_worker = worker
         progress.canceled.connect(worker.cancel)
+        assigned = []
 
         def on_progress(done, total, text):
             progress.setValue(int(done * 1000 / total) if total else 0)
@@ -289,24 +425,22 @@ class MediahubMixin:
         def on_failed(message):
             progress.close()
             QMessageBox.warning(self, "Auf den ESPuino übertragen", message)
+            self._mediahub_reload()
 
         def on_done(copied, skipped, cancelled):
             progress.close()
             text = f"{copied} Datei{'' if copied == 1 else 'en'} übertragen"
             if skipped:
                 text += f", {skipped} schon vorhanden"
-            if cancelled:
-                self._status(text + " – abgebrochen")
-                return
-            self._status(text)
-            if assign_after and len(plans) == 1:
-                self._espuino_assign(preset_path=plans[0].folder)
-            elif self._is_espuino() and self._espuino_is_device():
-                self._mediahub_reload()
+            if assigned:
+                text += f", {len(assigned)} Karte{'' if len(assigned) == 1 else 'n'} zugewiesen"
+            self._status(text + (" – abgebrochen" if cancelled else ""))
+            finished(cancelled)
 
         worker.progress.connect(on_progress)
         worker.failed.connect(on_failed)
         worker.done.connect(on_done)
+        worker.assigned.connect(lambda card_id, _folder, _mode: assigned.append(card_id))
         worker.start()
 
     def _mediahub_cover_map(self) -> dict:
@@ -318,6 +452,9 @@ class MediahubMixin:
 
     def _mediahub_show_overview(self, has_cover: dict):
         data = self._mediahub_data
+        if self._espuino_is_device() and data is not None:
+            self._espuino_show_overview(has_cover)
+            return
         total = len(data.cards)
         without = sum(1 for c in data.cards if not has_cover.get(c.card_id))
         origin = "vom ESPuino" if self._espuino_is_device() else "aus dem Mediahub"
@@ -342,8 +479,33 @@ class MediahubMixin:
         self.mediahub_page.show_overview("\n".join(lines), configured=True, can_batch=without > 0,
                                          can_print=total > without)
 
+    def _espuino_show_overview(self, has_cover: dict):
+        from gui.espuino_device_view import needs_transfer
+        data, state = self._mediahub_data, self._espuino_state
+        total = len(data.cards)
+        without = sum(1 for c in data.cards if not has_cover.get(c.card_id))
+        missing = sum(1 for c in data.cards if needs_transfer(c))
+        lines = [f"{total} bekannte Karte{'' if total == 1 else 'n'}, davon {without} ohne Kartencover."]
+        if state is not None and not state.reachable:
+            lines.append(f"Der ESPuino ist nicht erreichbar – Status unbekannt ({state.error})")
+        elif missing:
+            lines.append(f"{missing} Karte{'' if missing == 1 else 'n'} lassen sich auf diesen ESPuino übertragen "
+                         "(Ordner fehlt oder nicht zugewiesen).")
+        skipped = []
+        if data.skipped_function:
+            skipped.append(f"{data.skipped_function} Funktionskarte{'' if data.skipped_function == 1 else 'n'}")
+        if data.skipped_webradio:
+            skipped.append(f"{data.skipped_webradio} Webradio-Karte{'' if data.skipped_webradio == 1 else 'n'}")
+        if data.skipped_mediahub:
+            skipped.append(f"{data.skipped_mediahub} vom Mediahub verwaltet")
+        if skipped:
+            lines.append("Auf dem ESPuino außerdem: " + ", ".join(skipped) + ".")
+        self.mediahub_page.show_device_overview(" ".join(lines), can_batch=without > 0, can_print=total > without)
+
     def _mediahub_card(self, card_id: str = ""):
-        card_id = card_id or self.mediahub_sidebar.current_card_id()
+        page = self.mediahub_page
+        card_id = card_id or (page.card.card_id if page.card is not None else "") \
+            or self.mediahub_sidebar.current_card_id()
         return mh.card_by_id(self._mediahub_data, card_id)
 
     def _mediahub_show_card(self, card_id: str):

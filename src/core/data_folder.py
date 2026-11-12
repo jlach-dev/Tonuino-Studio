@@ -14,7 +14,7 @@ from typing import Callable, List, Optional, Tuple
 
 from core.fileutil import replace_with_retry
 
-DATA_ENTRIES = ("albums", "series", "tools", "library_thumbs", "library_index.json")
+DATA_ENTRIES = ("albums", "series", "tools", "library_thumbs", "library_index.json", "espuino")
 STAGING_NAME = ".tmp_datenordner"
 # Legt Windows oder Google Drive selbst an, gehoert nicht zu den Daten
 SKIP_FILES = {"desktop.ini"}

@@ -3,6 +3,7 @@
 
 import json
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -25,6 +26,8 @@ class FakeEspuino:
             "400400400400": {"id": "400400400400", "fileOrUrl": "http://hub.invalid", "playMode": 18},
         }
         self.posts = []
+        self.files = {}  # "/Ordner/Datei" -> Inhalt, ueber POST /explorer hochgeladen
+        self.dirs = {"/Hörspiele"}  # Ordner auf der SD-Karte
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -39,16 +42,31 @@ class FakeEspuino:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _query_path(self):
+                return urllib.parse.unquote(urllib.parse.urlparse(self.path).query.partition("path=")[2])
+
             def do_GET(self):
                 if self.path == "/info":
-                    self._send(200, {"software": {"version": "Software-revision: 20261008-DEV", "branch": "dev"}})
+                    self._send(200, {"software": {"version": "Software-revision: 20261008-DEV", "branch": "dev"},
+                                     "sdcard": {"totalBytes": "32000000000", "freeBytes": "31000000000"}})
                 elif self.path == "/rfid":
                     self._send(200, list(fake.assignments.values()))
+                elif self.path.startswith("/explorer"):
+                    folder = self._query_path().rstrip("/")
+                    entries = [{"name": d.rpartition("/")[2], "dir": True} for d in sorted(fake.all_dirs())
+                               if d.rpartition("/")[0] == folder]
+                    entries += [{"name": f.rpartition("/")[2]} for f in fake.files if f.rpartition("/")[0] == folder]
+                    self._send(200, entries)
                 else:
                     self._send(404, {})
 
             def do_POST(self):
-                data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                raw = self.rfile.read(int(self.headers["Content-Length"]))
+                if self.path.startswith("/explorer"):
+                    fake.files[self._query_path()] = raw
+                    self._send(200, {})
+                    return
+                data = json.loads(raw)
                 fake.posts.append(data)
                 if self.path != "/rfid" or not data.get("id"):
                     self.send_response(500)
@@ -62,6 +80,14 @@ class FakeEspuino:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.host = f"127.0.0.1:{self.server.server_address[1]}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def all_dirs(self):
+        result = set(self.dirs)
+        for path in list(self.dirs) + list(self.files):
+            parts = path.split("/")[1:-1] if path in self.files else path.split("/")[1:]
+            for i in range(1, len(parts) + 1):
+                result.add("/" + "/".join(parts[:i]))
+        return result
 
     def close(self):
         self.server.shutdown()

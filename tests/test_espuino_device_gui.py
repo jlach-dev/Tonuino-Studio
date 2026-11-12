@@ -37,7 +37,7 @@ def setup(tmp_path, app):
     settings.setValue(SETTINGS_APP_MODE, MODE_ESPUINO)
     settings.setValue("library/data_dir", str(tmp_path / "studio-data"))
     dev.save_settings(dev.SOURCE_DEVICE, fake.host, str(sd))
-    yield {"esp": fake, "sd": sd}
+    yield {"esp": fake, "sd": sd, "data": tmp_path / "studio-data"}
     settings.clear()
     fake.close()
 
@@ -50,35 +50,104 @@ def test_source_defaults(app):
     QSettings().clear()
 
 
-def test_window_shows_cards_from_device(setup):
+def test_window_shows_device_and_known_cards(setup):
+    from core.espuino_cards import ASSIGNED
     from gui.main_window import MainWindow
     window = MainWindow()
     try:
         assert window.view_switch.tabText(0) == "ESPuino-Karten"
-        sidebar, page = window.mediahub_sidebar, window.mediahub_page
-        assert not sidebar.btn_assign.isHidden() and sidebar.btn_assign.isEnabled()
-        assert sidebar.card_list.count() == 2
-        text = page.overview_text.text()
-        assert "2 Karten vom ESPuino" in text and "1 Funktionskarte" in text and "1 vom Mediahub verwaltet" in text
-        sidebar.select(CARD_A)
-        assert page.card.card_id == CARD_A
+        side, page = window.espuino_sidebar, window.mediahub_page
+        assert window.mediahub_sidebar.isHidden() and not side.isHidden()
+        assert side.btn_assign.isEnabled() and "31,0 GB frei" in side.device_label.text()
+        assert [side.folder_list.item(i).text() for i in range(side.folder_list.count())] == ["Hörspiele", "Musik"]  # SD im Kartenleser
+        assert side.folder_list.drop_enabled
+        table = page.cards_table.tree
+        assert table.topLevelItemCount() == 2 and page.pages.currentIndex() == 2
+        text = page.device_text.text()
+        assert "2 bekannte Karten" in text and "1 Funktionskarte" in text and "1 vom Mediahub verwaltet" in text
+        window._mediahub_show_card(CARD_A)
+        assert page.card.card_id == CARD_A and page.card.device_status == ASSIGNED
         assert "SD-Karte: /Hörspiele/Fuchsbande" in page.meta_label.text()
-        assert page.file_list.count() == 2 and page.btn_cover.isEnabled()
+        assert page.file_list.count() == 2 and page.btn_cover.isEnabled()  # Dateien von der SD im Kartenleser
+        assert not page.btn_back.isHidden() and not page.btn_transfer.isHidden()
+        assert not page.btn_transfer.isEnabled()  # nicht in der Bibliothek
+        page.btn_back.click()
+        assert page.pages.currentIndex() == 2
+        # das Verzeichnis wurde im Datenordner gespeichert
+        assert (setup["data"] / "espuino" / "cards.json").is_file()
     finally:
         window.close()
         window.deleteLater()
 
 
-def test_unreachable_device_shows_message(setup):
+def test_unreachable_device_keeps_known_cards(setup):
     from gui.main_window import MainWindow
+    window = MainWindow()  # einmal erreichbar: Karten werden bekannt
+    window.close()
+    window.deleteLater()
     dev.save_settings(dev.SOURCE_DEVICE, "127.0.0.1:9", str(setup["sd"]))
     window = MainWindow()
     try:
-        assert window.mediahub_sidebar.card_list.count() == 0
-        assert "nicht erreichbar" in window.mediahub_page.overview_text.text()
+        assert window.mediahub_page.cards_table.tree.topLevelItemCount() == 2
+        assert "nicht erreichbar" in window.mediahub_page.device_text.text()
+        assert "nicht erreichbar" in window.espuino_sidebar.device_label.text()
+        assert not window.espuino_sidebar.btn_assign.isEnabled()
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_transfer_known_card_uploads_and_assigns(setup, tmp_path):
+    from core.espuino_cards import NOT_ASSIGNED
+    from core.library import LibraryAlbum
+    from gui.espuino_device_view import needs_transfer
+    from gui.espuino_dialogs import TransferWorker
+    from core.espuino_transfer import plan_album
+    esp = setup["esp"]
+    folder = tmp_path / "Bibliothek" / "Die Fuchsbande"
+    folder.mkdir(parents=True)
+    tracks = []
+    for name in ("01.mp3", "02.mp3"):
+        (folder / name).write_bytes(b"ID3" + b"\0" * 64)
+        tracks.append(str(folder / name))
+    dev.save_settings(dev.SOURCE_DEVICE, esp.host, "")  # SD-Karte steckt im ESPuino
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        window.library_view.index.albums.append(LibraryAlbum(path=str(folder), title="Die Fuchsbande",
+                                                             tracks=tracks, album_id="fuchs"))
+        known = window._espuino_known
+        known.remember("777888999000", name="Fuchsbande", sd_folder="/Die Fuchsbande", play_mode=5)
+        known.save()
+        window._mediahub_reload()
+        card = window._mediahub_card("777888999000")
+        assert card.device_status == NOT_ASSIGNED and card.folder_present is False and needs_transfer(card)
+        assert card.library_path == str(folder) and window.mediahub_page.cards_table.btn_transfer_missing.isEnabled()
+        worker = TransferWorker([plan_album(tracks, card.sd_path)], "", esp.host,
+                                assignments=[(card.card_id, 5)])
+        done = []
+        worker.done.connect(lambda *a: done.append(a))
+        worker.run()
+        assert done == [(2, 0, False)] and "/Die Fuchsbande/02.mp3" in esp.files
+        assert esp.assignments["777888999000"]["fileOrUrl"] == "/Die Fuchsbande"
+        window._mediahub_reload()
+        card = window._mediahub_card("777888999000")
+        assert card.folder_present is True and not needs_transfer(card)
+        assert window._espuino_known.get("777888999000").album_id == "fuchs"
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_device_folder_list_drop_rules(setup):
+    from gui.espuino_device_view import DeviceFolderList
+    widget = DeviceFolderList()
+    widget.drop_enabled = True
+    widget.album_names = lambda paths: ["Hörspiele"]
+    widget.addItem("Hörspiele")
+    widget.item(0).setData(0x0100, "/Hörspiele")
+    assert widget.album_names(["x"]) == ["Hörspiele"]
+    widget.deleteLater()
 
 
 def test_assign_dialog_takes_card_from_websocket_and_saves(setup):

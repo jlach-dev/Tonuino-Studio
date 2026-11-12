@@ -378,16 +378,20 @@ class AssignCardDialog(QDialog):
 
 
 class TransferWorker(QThread):
-    """Kopiert bzw. laedt die Plaene nacheinander hoch (core/espuino_transfer.py)"""
+    """Kopiert bzw. laedt die Plaene nacheinander hoch (core/espuino_transfer.py).
+    assignments: je Plan None oder (Kartennummer, Abspielmodus); die Karte wird
+    erst zugewiesen, wenn alle Dateien ihres Plans auf der SD-Karte sind."""
     progress = pyqtSignal(int, int, str)  # Bytes fertig, Bytes gesamt, Text
     failed = pyqtSignal(str)
     done = pyqtSignal(int, int, bool)  # kopiert, uebersprungen, abgebrochen
+    assigned = pyqtSignal(str, str, int)  # Kartennummer, Ordner, Abspielmodus
 
-    def __init__(self, plans, sd_root: str, host: str, parent=None):
+    def __init__(self, plans, sd_root: str, host: str, parent=None, assignments=None):
         super().__init__(parent)
         self.plans = plans
         self.sd_root = sd_root
         self.host = host
+        self.assignments = assignments or [None] * len(plans)
         self._cancel = False
 
     def cancel(self):
@@ -398,7 +402,7 @@ class TransferWorker(QThread):
         offset = 0
         copied = skipped = 0
         try:
-            for plan in self.plans:
+            for plan, assignment in zip(self.plans, self.assignments):
                 def report(done, _total, name, offset=offset, folder=plan.folder):
                     self.progress.emit(offset + done, total, f"{folder}/{name}" if name else folder)
                 if self.sd_root:
@@ -411,6 +415,10 @@ class TransferWorker(QThread):
                 if result.cancelled:
                     self.done.emit(copied, skipped, True)
                     return
+                if assignment is not None:
+                    card_id, play_mode = assignment
+                    assign_card(self.host, card_id, plan.folder, play_mode)
+                    self.assigned.emit(card_id, plan.folder, play_mode)
         except DeviceError as exc:
             self.failed.emit(str(exc))
             return

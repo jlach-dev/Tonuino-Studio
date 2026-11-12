@@ -635,7 +635,7 @@ Die Dateien müssen dafür schon auf der SD-Karte des ESPuino liegen, siehe den 
 
 ### Alben auf den ESPuino übertragen
 
-In der [Bibliothek](#6-bibliothek) gibt es im Rechtsklick-Menü einer Kachel **Auf den ESPuino übertragen** (bei mehreren markierten Kacheln für alle). Das Album kommt als Ordner mit seinem Namen auf die SD-Karte, etwa `/Conni geht verloren`. Die Dateinamen bleiben; nur wenn sie alphabetisch nicht in der richtigen Reihenfolge stehen, bekommen sie eine Nummer davor. Anders als beim TonUINO gibt es keine Ordnernummern und keine Umbenennung in `001.mp3`.
+Zieh ein Album aus der [Bibliothek](#6-bibliothek) in die Seitenleiste auf die Liste **Auf dem ESPuino**, auf eine freie Stelle. Alternativ gibt es im Rechtsklick-Menü einer Kachel **Auf den ESPuino übertragen** (bei mehreren markierten Kacheln für alle). Ziehst du ein Album auf einen Ordner mit seinem Namen, ergänzt die App dort nur fehlende Dateien; andere Ordner nehmen nichts an. Das Album kommt als Ordner mit seinem Namen auf die SD-Karte, etwa `/Conni geht verloren`. Die Dateinamen bleiben; nur wenn sie alphabetisch nicht in der richtigen Reihenfolge stehen, bekommen sie eine Nummer davor. Anders als beim TonUINO gibt es keine Ordnernummern und keine Umbenennung in `001.mp3`.
 
 Der Weg hängt davon ab, ob die SD-Karte gerade im PC steckt:
 
@@ -646,13 +646,29 @@ Den Zielordner kannst du vorher ändern, etwa `/Hörspiele/Conni geht verloren`.
 
 Ist **Danach eine Karte für dieses Album zuweisen** angehakt, öffnet sich anschließend [Karte zuweisen](#karte-zuweisen-espuino-direkt) mit dem neuen Ordner. Dann nur noch die Karte auflegen.
 
-### Kartenliste und Kartenseite
+### ESPuino direkt: Seitenleiste, bekannte Karten und Status
 
-Links stehen alle zugewiesenen Karten mit Dateien. Karten ohne Kartencover sind grau und kursiv. **Karten filtern …** sucht im Namen und in der Kartennummer. Webradio-Karten, Karten ohne Dateien, noch nicht zugewiesene Karten und Funktionskarten (etwa für Lautstärke oder Pause) fehlen in der Liste; die Übersicht nennt ihre Zahl. Direkt vom ESPuino heißt eine Karte wie ihr Ordner auf der SD-Karte.
+Die **Seitenleiste** zeigt den ESPuino: Adresse, Firmware, Größe und freien Platz der SD-Karte, darunter die Ordner auf seiner SD-Karte (**Auf dem ESPuino**). Ordner, auf die keine Karte zeigt, sind grau. Rechtsklick auf einen Ordner → **Karte zuweisen …** mit diesem Ordner. **Neu einlesen** liest alles erneut.
+
+Der Reiter **ESPuino-Karten** zeigt die **bekannten Karten**. Die App merkt sich selbst, wofür jede Karte steht (Ordner, Abspielmodus und das Album in der Bibliothek), in `espuino/cards.json` im Datenordner. Denn die Zuweisungen speichert der ESPuino in seinem eigenen Speicher, die Dateien liegen auf der SD-Karte: Nach einem Wechsel der SD-Karte zeigen seine Karten ins Leere, und ein zweiter ESPuino kennt die Karten gar nicht. Zuweisungen, die die App noch nicht kennt, übernimmt sie beim Einlesen.
+
+Die Spalten der Tabelle:
+
+- **Zugewiesen:** ✓ auf diesem ESPuino so zugewiesen, – nicht zugewiesen, **anders** dort anders belegt, ? ESPuino nicht erreichbar.
+- **Ordner:** ✓ auf seiner SD-Karte vorhanden, **fehlt**, ? unbekannt.
+- **Cover:** ✓ Kartencover vorhanden.
+
+Ein Klick öffnet die Kartenseite, **← Alle Karten** führt zurück. **Auf diesen ESPuino übertragen** bringt das Album aus der Bibliothek in den Ordner der Karte (nur fehlende Dateien) und weist die Karte auf diesem ESPuino zu. **Fehlende auf den ESPuino übertragen** macht das für alle Karten, deren Ordner fehlt oder die nicht zugewiesen sind, nach einer Rückfrage. Dafür muss das Hörspiel in der Bibliothek liegen; die App findet es über die Album-ID, den Ordner oder einen passenden Albumnamen.
+
+Ist eine Karte auf dem ESPuino neu belegt (etwa über seine Weboberfläche) und gibt es den neuen Ordner, übernimmt die App die neue Belegung.
+
+### Kartenliste und Kartenseite (Mediahub)
+
+Links stehen alle zugewiesenen Karten mit Dateien. Karten ohne Kartencover sind grau und kursiv. **Karten filtern …** sucht im Namen und in der Kartennummer. Webradio-Karten, Karten ohne Dateien und noch nicht zugewiesene Karten fehlen in der Liste; die Übersicht nennt ihre Zahl.
 
 Ist dieselbe Karte auf mehreren ESPuinos zugewiesen, erscheint sie nur einmal. Ist sie dort unterschiedlich belegt, gilt die neueste Zuweisung, und die Kartenseite weist darauf hin.
 
-Die Kartenseite zeigt das Kartencover, den Namen, die Kartennummer, die ESPuinos, den Abspielmodus und die Dateien, direkt vom ESPuino auch den Ordner auf seiner SD-Karte. Fehlt eine Datei auf der SD-Karte bzw. in der Mediathek, steht **(fehlt)** dahinter.
+Die Kartenseite zeigt das Kartencover, den Namen, die Kartennummer, die ESPuinos, den Abspielmodus und die Dateien. Fehlt eine Datei in der Mediathek, steht **(fehlt)** dahinter.
 
 ### Kartencover und Druck
 
@@ -741,6 +757,7 @@ Der Ort wird beim ersten Bedarf abgefragt. Vorschlag ist `Tonuino/Bibliothek-Dat
 | `albums/<Album-ID>/covers/` | die Bilder des Archivs |
 | `albums/<Album-ID>/card/` | Kartencover, das aus der Bibliothek heraus gestaltet wurde |
 | `albums/mediahub<Kartennummer>/card/` | Kartencover einer ESPuino-Karte (direkt oder aus dem Mediahub) |
+| `espuino/cards.json` | bekannte ESPuino-Karten: Ordner, Abspielmodus, Album der Bibliothek |
 | `series/<Serien-ID>/series.json` | Serienprofile |
 | `library_index.json`, `library_thumbs/` | Übersicht und Vorschaubilder der Bibliothek |
 | `tools/` | heruntergeladenes `fpcalc` |
