@@ -393,6 +393,8 @@ class CoverManagerDialog(QDialog):
         self._extend_source: Optional[SideSource] = None
         self._extend_masking: Optional[ExtendMasking] = None
         self._mask_shapes: list = []  # bleiben nach einer erneuten Ablehnung stehen
+        self._back_mask_shapes: list = []  # abgedeckte Stellen der Vorderseite fuer die KI-Rueckseite
+        self._back_front: Optional[SideSource] = None
         self._extend_doubtful = False
 
         # Kartendateien: auf der SD-Karte im Ordner, aus der Bibliothek heraus im Archiv
@@ -2663,16 +2665,24 @@ class CoverManagerDialog(QDialog):
             return
         if self._defer_for_research(self._generate_ai_back):
             return
+        if self._back_front is None or self._back_front.candidate is not front.candidate:
+            self._back_mask_shapes = []  # andere Vorderseite: alte Formen passen nicht mehr
+        self._start_back(front)
+
+    def _start_back(self, front: SideSource, masking: Optional[ExtendMasking] = None):
         request = GenerationRequest(
             info=self.info, brief=self.brief, brief_text=self.research_edit.toPlainText(),
             style=self._effective_style(), orientation=self.orientation_combo.currentData(),
             **self._series_request_fields())
-        self.status_label.setText("KI-Rückseite wird erzeugt (passend zur Vorderseite) …")
+        self.status_label.setText("KI-Rückseite wird erzeugt (passend zur Vorderseite"
+                                  + (", abgedeckt" if masking else "") + ") …")
         self._back_front = front
         self._back_worker = CoverBackGenerateWorker(self.client, image_model(), request, _pil_bytes(front.image()),
-                                                    self.back_wish_edit.text(), self.back_tracklist_check.isChecked())
+                                                    self.back_wish_edit.text(), self.back_tracklist_check.isChecked(),
+                                                    masking)
         self._back_worker.done.connect(self._on_back_generated)
         self._back_worker.failed.connect(self._on_back_failed)
+        self._back_worker.refused.connect(self._on_back_refused)
         self._back_worker.finished.connect(self._update_buttons)
         self.activity.track(self._back_worker, "KI-Rückseite wird erzeugt")
         self._back_worker.start()
@@ -2680,6 +2690,30 @@ class CoverManagerDialog(QDialog):
 
     def _on_back_failed(self, message: str):
         QMessageBox.warning(self, "KI-Rückseite nicht erzeugt", message)
+
+    def _on_back_refused(self, message: str):
+        """Abgelehnt: anbieten, Gesichter und Schrift auf der Vorderseite abzudecken. Neuer Versuch nur nach Klick."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("KI-Rückseite nicht erzeugt")
+        box.setText(message)
+        btn_mask = box.addButton("Vorderseite abdecken und erneut versuchen …", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Schließen", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() == btn_mask:
+            self._open_back_mask_dialog()
+
+    @guarded_slot("Vorderseite abdecken")
+    def _open_back_mask_dialog(self):
+        front = self._back_front
+        image = front.image() if front is not None else None
+        if image is None or not self._ki_ready():
+            return
+        dialog = CoverMaskDialog(image, self._back_mask_shapes, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        self._back_mask_shapes = dialog.shapes()
+        if accepted:
+            self._start_back(front, ExtendMasking(tuple(self._back_mask_shapes), dialog.effect()))
 
     def _on_back_generated(self, image: Image.Image):
         """Neues Bild unter "Neu"; zugewiesen wird es mit "Als Rueckseite"."""
@@ -2691,10 +2725,21 @@ class CoverManagerDialog(QDialog):
                               meta=meta)
         candidate._image = image
         self._add_candidate(candidate, select=True)
-        self.side_bar.setCurrentIndex(0)
+        # Im Reiter "Karte" (dort sitzt der Knopf) zeigt die Vorschau sonst weiter die Vorderseite
+        self.side_bar.setCurrentIndex(1 if self._card_tab_active() else 0)
         self._update_side_controls()
         self._render_preview()
         self._flash("KI-Rückseite erzeugt – neues Bild unter „Neu“. Mit „Als Rückseite“ zuweisen.")
+
+    def _pending_back(self) -> Optional[Candidate]:
+        """Eine gerade erzeugte, angeklickte KI-Rueckseite, die noch nicht als Rueckseite gesetzt ist"""
+        candidate = self.selected
+        if (candidate is None or candidate.section != SECTION_NEW or candidate.meta.get("kind") != "ai_back"
+                or candidate.has_back):
+            return None
+        if self.back_source is not None and self.back_source.candidate is candidate:
+            return None
+        return candidate
 
     def _back_meta(self, meta: card_store.CardMeta, extended: bool) -> card_store.CardMeta:
         meta.back_mode = self.back_mode_combo.currentData()
@@ -2811,7 +2856,10 @@ class CoverManagerDialog(QDialog):
             self._preview_shows_card = self.tabs.currentIndex() == 1
             if self.side_bar.currentIndex() == 1:
                 if self._preview_shows_card:
-                    source = self._back_source_image(self.selected)
+                    pending = self._pending_back()
+                    source = pending.image() if pending is not None else self._back_source_image(self.selected)
+                    if pending is not None:
+                        self.preview_title.setText("Karte bearbeiten · neue Rückseite (noch nicht zugewiesen)")
                     if source is None:
                         self.preview.clear()
                         self.preview.setText("Keine Rückseite – Bild anklicken und „Als Rückseite“ oder unter "

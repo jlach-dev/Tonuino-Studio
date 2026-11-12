@@ -102,6 +102,13 @@ class AiSettingsDialog(QDialog):
             self.image_size_combo.addItem(label, size)
         self.image_size_combo.setCurrentIndex(self.image_size_combo.findData(ai_settings.get_image_size()))
         form.addRow("Bildgröße:", self.image_size_combo)
+        self.extend_prompt_combo = QComboBox()
+        for key, label in ai_settings.EXTEND_PROMPTS.items():
+            self.extend_prompt_combo.addItem(label, key)
+        self.extend_prompt_combo.setCurrentIndex(self.extend_prompt_combo.findData(ai_settings.get_extend_prompt()))
+        self.extend_prompt_combo.setToolTip("Fassung des Prompts für „Rand per KI“. Die bisherige bleibt als "
+                                            "Ausweichmöglichkeit, falls die aktuelle schlechter abschneidet.")
+        form.addRow("Rand-Prompt:", self.extend_prompt_combo)
         self.text_model_edit = QLineEdit(text_model())
         form.addRow("Recherche-Modell:", self.text_model_edit)
         layout.addLayout(form)
@@ -215,6 +222,7 @@ class AiSettingsDialog(QDialog):
         settings = QSettings()
         settings.setValue(ai_settings.SETTINGS_FPCALC, self.fpcalc_edit.text().strip())
         settings.setValue(ai_settings.SETTINGS_IMAGE_SIZE, self.image_size_combo.currentData())
+        settings.setValue(ai_settings.SETTINGS_EXTEND_PROMPT, self.extend_prompt_combo.currentData())
         settings.setValue(ai_settings.SETTINGS_IMAGE_MODEL,
                           self.image_model_edit.text().strip() or ai_settings.DEFAULT_IMAGE_MODEL)
         settings.setValue(ai_settings.SETTINGS_TEXT_MODEL,

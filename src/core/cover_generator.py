@@ -15,7 +15,7 @@ from typing import List, Optional
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps, ImageStat
 
-from core.ai_settings import get_image_size
+from core.ai_settings import EXTEND_PROMPT_CLASSIC, get_extend_prompt, get_image_size
 from core.card_layout import CardSpec, ORIENTATION_PORTRAIT, ambient_blur
 from core.cover_research import CoverBrief, FolderInfo
 from core.image_masking import EFFECT_FILL, apply_masks, shape_mask
@@ -174,9 +174,11 @@ REFUSAL_HELP = {
         ["Nimm „Rand per Blur (ohne KI)“ und weise das Ergebnis mit „Als Vorderseite“ zu.",
          "Oder erzeuge unter „Eigener Wunsch“ ein eigenes Motiv, ohne dieses Bild als Vorlage."]),
     CONTEXT_BACK: (
-        ["Die Vorderseite wird als Vorlage mitgeschickt und zeigt vermutlich geschützte Figuren oder Logos.",
+        ["Die Vorderseite wird als Vorlage mitgeschickt und zeigt vermutlich geschützte Figuren, Logos, "
+         "Gesichter oder Schriftzüge.",
          "Der KI-Wunsch nennt bekannte Figuren oder Marken."],
-        ["Wähle für die Rückseite „Ambient Blur der Vorderseite (ohne KI)“.",
+        ["Decke Gesichter und Schrift auf der Vorderseite ab und versuche es erneut (Knopf unten).",
+         "Wähle für die Rückseite „Ambient Blur der Vorderseite (ohne KI)“.",
          "Oder nimm eine selbst erzeugte Vorderseite, und beschreibe unter „KI-Wunsch“ eine Szene ohne bekannte Namen."]),
     CONTEXT_SHEET: (
         ["Die Anker-Bilder sind bekannte Cover oder zeigen geschützte Figuren.",
@@ -266,6 +268,15 @@ def generate_art(source: str, req: GenerationRequest, client=None, model: str = 
     return generate_ai_art(client, model, req)
 
 
+# Bisherige Fassung, bis 12.11.2026 Standard; waehlbar unter KI & Online-Dienste → Rand-Prompt
+EXTEND_PROMPT_V1 = (
+    "Extend (outpaint) the attached image to a {shape} format. Keep the original image completely unchanged "
+    "and centered at its full size; only continue the background, colors and textures naturally beyond its "
+    "edges so the result is one seamless picture. Do not add new text, letters, logos, characters or objects. "
+    "If you cannot create this image, return no image and instead state the specific reason in one short "
+    "German sentence."
+)
+
 EXTEND_PROMPT = (
     "Extend (outpaint) the attached image to a {shape} format. Keep the original image completely unchanged "
     "and centered at its full size; only continue the background, colors and textures naturally beyond its "
@@ -277,11 +288,17 @@ EXTEND_PROMPT = (
 )
 
 
+def extend_prompt(portrait: bool) -> str:
+    """Prompt fuer "Rand per KI" in der eingestellten Fassung"""
+    template = EXTEND_PROMPT_V1 if get_extend_prompt() == EXTEND_PROMPT_CLASSIC else EXTEND_PROMPT
+    return template.format(shape="tall portrait 2:3" if portrait else "wide landscape 3:2")
+
+
 def extend_to_card(client, model: str, image_bytes: bytes, orientation: str, image_size: str = "") -> Image.Image:
     """Original-Cover/-Rueckseite per Bildmodell auf das Kartenformat erweitern
     (statt zu beschneiden oder Ambient Blur). Ein API-Aufruf, ohne Recherche."""
     portrait = orientation == ORIENTATION_PORTRAIT
-    prompt = EXTEND_PROMPT.format(shape="tall portrait 2:3" if portrait else "wide landscape 3:2")
+    prompt = extend_prompt(portrait)
     return request_image(
         client, CONTEXT_EXTEND,
         model=model,
@@ -452,7 +469,7 @@ def extend_masked(client, model: str, image_bytes: bytes, orientation: str, mask
     buffer = io.BytesIO()
     apply_masks(original, list(masking.shapes), masking.effect).save(buffer, "PNG")
     portrait = orientation == ORIENTATION_PORTRAIT
-    prompt = EXTEND_PROMPT.format(shape="tall portrait 2:3" if portrait else "wide landscape 3:2")
+    prompt = extend_prompt(portrait)
     generated = request_image(
         client, CONTEXT_EXTEND,
         model=model,
@@ -525,10 +542,25 @@ def build_back_prompt(req: GenerationRequest, wish: str = "", with_tracklist: bo
     return "\n\n".join(lines)
 
 
+BACK_MASKED_NOTE = ("Blurred or flat patches in the attached front side are placeholders: ignore them, do not "
+                    "reproduce them, and draw the characters with their usual faces.")
+
+
 def generate_back_art(client, model: str, req: GenerationRequest, front_bytes: bytes, wish: str = "",
-                      with_tracklist: bool = True, image_size: str = "") -> Image.Image:
-    """Rueckseiten-Motiv vom Bildmodell, mit der Vorderseite als Referenzbild"""
+                      with_tracklist: bool = True, image_size: str = "",
+                      masking: Optional[ExtendMasking] = None) -> Image.Image:
+    """Rueckseiten-Motiv vom Bildmodell, mit der Vorderseite als Referenzbild. Mit masking geht die
+    Vorderseite abgedeckt an Google (Gesichter, Schrift); die Rueckseite ist ein neues Bild, zurueckgeholt
+    wird nichts."""
     prompt = build_back_prompt(req, wish, with_tracklist)
+    if masking is not None and masking.shapes:
+        with Image.open(io.BytesIO(front_bytes)) as img:
+            img.load()
+            front = img.convert("RGB")
+        buffer = io.BytesIO()
+        apply_masks(front, list(masking.shapes), masking.effect).save(buffer, "PNG")
+        front_bytes = buffer.getvalue()
+        prompt += "\n\n" + BACK_MASKED_NOTE
     # Vorderseite zuerst, danach die Anker der Serie (zusammen hoechstens MAX_REFERENCE_IMAGES)
     images = [front_bytes] + [a for a in req.anchors() if a != front_bytes][:MAX_REFERENCE_IMAGES - 1]
     return request_image(

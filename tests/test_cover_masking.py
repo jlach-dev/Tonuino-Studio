@@ -734,3 +734,141 @@ def test_mask_dialog_draw_move_delete_undo(qt_app):
     dialog.undo()
     assert len(dialog.shapes()) == 1
     dialog.close()
+
+
+# --- KI-Rueckseite: Vorschau, Ablehnung, Abdecken; Rand-Prompt als Backup ---------------------
+
+def test_back_generation_sends_masked_front(qt_app):
+    from core.cover_generator import BACK_MASKED_NOTE, GenerationRequest, generate_back_art
+    from core.cover_research import CoverBrief, FolderInfo
+    request = GenerationRequest(info=FolderInfo(album="Eule"), brief=CoverBrief())
+    front = checker((400, 400))
+    buffer = io.BytesIO()
+    front.save(buffer, "PNG")
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(output_image=SimpleNamespace(data=png_bytes((400, 600))), output_text="")
+
+    client = SimpleNamespace(interactions=SimpleNamespace(create=create))
+    masking = ExtendMasking((MaskShape(SHAPE_RECT, 0.25, 0.25, 0.5, 0.5),), EFFECT_FILL)
+    generate_back_art(client, "m", request, buffer.getvalue(), masking=masking)
+    generate_back_art(client, "m", request, buffer.getvalue())
+    sent = Image.open(io.BytesIO(base64.b64decode(calls[0]["input"][1]["data"]))).convert("RGB")
+    assert sent.crop((120, 120, 280, 280)).getcolors(maxcolors=4) is not None  # Flaeche statt Schachbrett
+    assert sent.getpixel((10, 10)) == front.getpixel((10, 10))
+    assert BACK_MASKED_NOTE in calls[0]["input"][0]["text"]
+    assert BACK_MASKED_NOTE not in calls[1]["input"][0]["text"]
+    assert calls[1]["input"][1]["data"] == base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def test_back_worker_reports_refusal_separately(qt_app, monkeypatch):
+    from core import cover_generator
+    from gui.workers import CoverBackGenerateWorker
+
+    def refuse(*args, **kwargs):
+        raise ImageRefused("back")
+
+    monkeypatch.setattr(cover_generator, "generate_back_art", refuse)
+    worker = CoverBackGenerateWorker(None, "m", None, png_bytes(), "", True)
+    seen = []
+    worker.refused.connect(lambda text: seen.append(("refused", text)))
+    worker.failed.connect(lambda text: seen.append(("failed", text)))
+    worker.run()
+    assert [kind for kind, _ in seen] == ["refused"] and "Decke Gesichter und Schrift" in seen[0][1]
+
+
+def test_back_refusal_offers_masking_the_front(manager, monkeypatch):
+    cm, dialog = manager
+    picture = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes((600, 400)), KIND_ONLINE)
+    dialog._add_candidate(picture, select=True)
+    dialog.btn_card_cover.click()
+    started = []
+
+    class Signal:
+        def connect(self, slot):
+            pass
+
+    class Worker:
+        done = failed = refused = finished = Signal()
+
+        def __init__(self, *args):
+            started.append(args)
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+
+    shape = MaskShape(SHAPE_RECT, 0.1, 0.1, 0.2, 0.2)
+
+    class FakeMask:
+        def __init__(self, image, shapes, parent):
+            assert image.size == (600, 400)  # die Vorderseite wird abgedeckt
+
+        def exec(self):
+            return cm.QDialog.DialogCode.Accepted
+
+        def shapes(self):
+            return [shape]
+
+        def effect(self):
+            return EFFECT_FILL
+
+    class FakeBox:
+        Icon, ButtonRole = cm.QMessageBox.Icon, cm.QMessageBox.ButtonRole
+
+        def __init__(self, parent):
+            self.buttons = []
+
+        def __getattr__(self, name):
+            return lambda *args: None
+
+        def addButton(self, text, role):
+            self.buttons.append(text)
+            return text
+
+        def exec(self):
+            return 0
+
+        def clickedButton(self):
+            return self.buttons[0]
+
+    monkeypatch.setattr(cm, "CoverBackGenerateWorker", Worker)
+    monkeypatch.setattr(cm, "CoverMaskDialog", FakeMask)
+    monkeypatch.setattr(cm, "QMessageBox", FakeBox)
+    dialog._ai_research_done = True  # sonst laeuft zuerst die Recherche
+    dialog._generate_ai_back()
+    assert started[0][6] is None  # der erste Versuch geht ohne Abdeckung
+    dialog._on_back_refused("abgelehnt")
+    assert started[1][6].shapes == (shape,) and dialog._back_mask_shapes == [shape]
+
+
+def test_new_ai_back_is_shown_in_card_tab(manager):
+    cm, dialog = manager
+    picture = cm.Candidate(cm.SECTION_ONLINE, "Deezer", png_bytes((600, 400), (0, 0, 200)), KIND_ONLINE)
+    dialog._add_candidate(picture, select=True)
+    dialog.btn_card_cover.click()
+    dialog.tabs.setCurrentIndex(1)  # dort sitzt der Knopf "KI-Rückseite erzeugen"
+    dialog._back_front = dialog.front_source
+    dialog._on_back_generated(Image.new("RGB", (600, 400), (200, 0, 0)))
+    assert dialog.side_bar.currentIndex() == 1
+    image = dialog.preview.pixmap().toImage()
+    assert image.pixelColor(image.width() // 2, image.height() // 2).getRgb()[:3] == (200, 0, 0)
+    assert "noch nicht zugewiesen" in dialog.preview_title.text()
+    dialog.btn_back_cover.click()
+    assert dialog.back_source.candidate is dialog.selected and dialog._pending_back() is None
+
+
+def test_classic_extend_prompt_stays_available(qt_app):
+    from PyQt6.QtCore import QSettings
+    from core import ai_settings
+    from core.cover_generator import EXTEND_PROMPT_V1, extend_prompt
+    assert "panel" in extend_prompt(False)
+    QSettings().setValue(ai_settings.SETTINGS_EXTEND_PROMPT, ai_settings.EXTEND_PROMPT_CLASSIC)
+    assert extend_prompt(False) == EXTEND_PROMPT_V1.format(shape="wide landscape 3:2")
+    assert "Keep the original image completely unchanged" in extend_prompt(True)
+    QSettings().setValue(ai_settings.SETTINGS_EXTEND_PROMPT, "unbekannt")
+    assert "panel" in extend_prompt(True)

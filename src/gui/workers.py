@@ -693,12 +693,16 @@ class CoverExtendWorker(QThread):
 
 
 class CoverBackGenerateWorker(QThread):
-    """Erzeugt ein Rueckseiten-Motiv passend zur Vorderseite (Bildmodell)"""
+    """Erzeugt ein Rueckseiten-Motiv passend zur Vorderseite (Bildmodell); mit masking geht die
+    Vorderseite abgedeckt an Google"""
     done = pyqtSignal(object)  # PIL.Image
     failed = pyqtSignal(str)
+    refused = pyqtSignal(str)  # von Google abgelehnt: hier hilft das Abdecken der Vorderseite
 
-    def __init__(self, client, image_model: str, request, front_bytes: bytes, wish: str, with_tracklist: bool):
+    def __init__(self, client, image_model: str, request, front_bytes: bytes, wish: str, with_tracklist: bool,
+                 masking=None):
         super().__init__()
+        self.masking = masking
         self.client = client
         self.image_model = image_model
         self.request = request
@@ -707,10 +711,13 @@ class CoverBackGenerateWorker(QThread):
         self.with_tracklist = with_tracklist
 
     def run(self):
-        from core.cover_generator import generate_back_art
+        from core.cover_generator import ImageRefused, generate_back_art
         try:
             self.done.emit(generate_back_art(self.client, self.image_model, self.request, self.front_bytes,
-                                             self.wish, self.with_tracklist))
+                                             self.wish, self.with_tracklist, masking=self.masking))
+        except ImageRefused as e:
+            log.info("KI-Rueckseite abgelehnt")
+            self.refused.emit(str(e))
         except Exception as e:
             log.exception("KI-Rueckseite fehlgeschlagen")
             self.failed.emit(str(e))

@@ -20,6 +20,13 @@ def get_image_size() -> str:
     value = QSettings().value(SETTINGS_IMAGE_SIZE, DEFAULT_IMAGE_SIZE, type=str)
     return value if value in IMAGE_SIZES else DEFAULT_IMAGE_SIZE
 
+
+def get_extend_prompt() -> str:
+    """Gewaehlte Fassung des Prompts fuer "Rand per KI"; unbekannte Werte fallen auf den Standard zurueck"""
+    from PyQt6.QtCore import QSettings
+    value = QSettings().value(SETTINGS_EXTEND_PROMPT, DEFAULT_EXTEND_PROMPT, type=str)
+    return value if value in EXTEND_PROMPTS else DEFAULT_EXTEND_PROMPT
+
 KEYRING_SERVICE = "Tonuino-Manager"
 KEYRING_USER = "gemini_api_key"
 ENV_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
@@ -37,6 +44,16 @@ IMAGE_SIZES = {
     "2K": "2K: rund 2530 px, deutlich größere Dateien",
 }
 SETTINGS_IMAGE_SIZE = "covers/image_size"
+
+# Prompt fuer "Rand per KI": die aktuelle Fassung verbietet einen eingesetzten Kasten, die bisherige
+# (bis 12.11.2026, in 27 Testbildern bewaehrt) bleibt als Ausweichmoeglichkeit waehlbar
+EXTEND_PROMPT_SEAMLESS, EXTEND_PROMPT_CLASSIC = "seamless", "classic"
+DEFAULT_EXTEND_PROMPT = EXTEND_PROMPT_SEAMLESS
+EXTEND_PROMPTS = {
+    EXTEND_PROMPT_SEAMLESS: "Aktuell: ohne eingesetzten Kasten",
+    EXTEND_PROMPT_CLASSIC: "Bisher (bis 12.11.2026)",
+}
+SETTINGS_EXTEND_PROMPT = "covers/extend_prompt"
 SETTINGS_IMAGE_MODEL = "covers/image_model"
 SETTINGS_TEXT_MODEL = "covers/text_model"
 SETTINGS_ORIENTATION = "covers/default_orientation"

@@ -472,7 +472,7 @@ Eine gewählte Bild-Rückseite bleibt gemerkt, während du Blur oder Verlauf aus
 - **Aus Datei …** nimmt ein Bild vom PC als Rückseite und speichert sofort, sobald die Karte eine Vorderseite hat.
 - Der Knopf **Keine Rückseite** entfernt die Rückseite, gespeichert wird kurz danach automatisch.
 - **Trackliste auf Bild (Überschrift + Titel per Code)** setzt eine Überschrift und die Trackliste auf das Motiv. Dazu erscheinen **Überschrift:**, **Trackliste:** (eine Zeile je Track) und **Trackliste aus Tags**. Sie sind bearbeitbar.
-- **KI-Rückseite erzeugen (1 Bildaufruf)** malt ein passendes Gegenstück zur Vorderseite. Dafür muss schon eine Vorderseite zugewiesen sein. Das Ergebnis liegt unter **Neu**; weise es mit **Als Rückseite** zu.
+- **KI-Rückseite erzeugen (1 Bildaufruf)** malt ein passendes Gegenstück zur Vorderseite. Dafür muss schon eine Vorderseite zugewiesen sein. Das Ergebnis liegt unter **Neu**, die Vorschau zeigt es gleich als Rückseite (**noch nicht zugewiesen**); weise es mit **Als Rückseite** zu. Lehnt Google ab, bietet die Meldung **Vorderseite abdecken und erneut versuchen …**: Im selben Fenster wie beim Rand deckst du Gesichter und Schrift auf der Vorderseite ab, und Google bekommt sie nur so. Die Formen bleiben für den nächsten Versuch stehen. Jeder Versuch ist ein eigener Bildaufruf, und das Abdecken garantiert keine Annahme.
 - **KI-Wunsch:** optional, zum Beispiel eine bestimmte Szene. Leer bleibt die Wahl der KI überlassen. **Idee vorschlagen** lässt das Textmodell drei Szenen zur Auswahl vorschlagen.
 
 ---
@@ -707,7 +707,7 @@ Eingabe im Menü **Kartencover** → **KI & Online-Dienste (Gemini, Spotify) …
 
 Ohne Spotify-Zugang ist die Quelle **Spotify** ausgegraut. Ohne Gemini-Key funktionieren Suche, Zuweisen, Blur, Verlauf und Druck weiterhin.
 
-**Bildmodell:** und **Recherche-Modell:** sind vorbelegt und müssen nur geändert werden, wenn Google neue Bezeichnungen einführt. **Bildgröße:** steht auf **1K**, das reicht für den Druck. **2K** liefert deutlich größere Dateien. Du findest sie auch unter **Einstellungen** → **KI-Bildgröße**.
+**Bildmodell:** und **Recherche-Modell:** sind vorbelegt und müssen nur geändert werden, wenn Google neue Bezeichnungen einführt. **Bildgröße:** steht auf **1K**, das reicht für den Druck. **2K** liefert deutlich größere Dateien. Du findest sie auch unter **Einstellungen** → **KI-Bildgröße**. **Rand-Prompt:** wählt die Anweisung für **Rand per KI**. Die aktuelle verbietet ausdrücklich, das Motiv als Kasten einzusetzen; **Bisher** ist die frühere Fassung, als Ausweichmöglichkeit.
 
 ### AcoustID und fpcalc
 
