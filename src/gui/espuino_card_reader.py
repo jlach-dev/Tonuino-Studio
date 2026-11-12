@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 
 from PyQt6.QtCore import QUrl, Qt, pyqtSignal
+from PyQt6.QtWidgets import QCompleter
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWebSockets import QWebSocket
 from PyQt6.QtWidgets import (
@@ -34,6 +35,7 @@ from PyQt6.QtWidgets import (
 from core.espuino_device import (
     ASSIGNABLE_MODES, FILE_MODES, DeviceError, assign_card, card_id_from_uid, sd_path_from_local, ws_url,
 )
+from core.espuino_transfer import safe_name
 from core.mediahub_cards import format_card_id, play_mode_label
 from gui import theme
 
@@ -95,6 +97,8 @@ class CardReaderDialog(QDialog):
     """Nicht modal: bleibt offen, waehrend man Karten auflegt und zuweist"""
     show_card_requested = pyqtSignal(str)  # in der Kartenliste zeigen
     assigned = pyqtSignal(str, str, int, object)  # Karte, Ordner, Abspielmodus, vorgegebenes Album oder None
+    # Album fehlt auf dem ESPuino: erst uebertragen, dann zuweisen (Karte, Album, Ordner, Abspielmodus)
+    transfer_requested = pyqtSignal(str, object, str, int)
 
     def __init__(self, host: str, lookup: Callable[[str], CardInfo], parent=None, listen: bool = True,
                  folders: Iterable[str] = (), sd_root: str = ""):
@@ -110,6 +114,8 @@ class CardReaderDialog(QDialog):
         self._reader_state = None
         self._preset_folder = ""
         self._preset_album = None
+        self._device_folders = set()  # Ordner auf dem ESPuino (klein), fuer "fehlt dort"
+        self._album = None  # aus der Bibliothek gewaehlt (core.library.LibraryAlbum)
         self.setWindowTitle("Karten auslesen und zuweisen")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         layout = QVBoxLayout(self)
@@ -192,6 +198,18 @@ class CardReaderDialog(QDialog):
             self.mode_combo.addItem(play_mode_label(str(mode)), mode)
         self.mode_combo.currentIndexChanged.connect(self._update_path_hint)
         form.addRow("Abspielmodus:", self.mode_combo)
+        self.album_combo = QComboBox()
+        self.album_combo.setEditable(True)
+        self.album_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.album_combo.lineEdit().setPlaceholderText("Album aus der Bibliothek suchen …")
+        completer = QCompleter(self.album_combo.model(), self.album_combo)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.album_combo.setCompleter(completer)
+        self.album_combo.activated.connect(self._album_chosen)
+        completer.activated[str].connect(lambda text: self._album_chosen(self.album_combo.findText(text)))
+        self.album_combo.setToolTip("Album wählen: Fehlt es auf dem ESPuino, überträgt „Zuweisen“ es zuerst")
+        form.addRow("Aus der Bibliothek:", self.album_combo)
         self.path_combo = QComboBox()
         self.path_combo.setEditable(True)
         self.path_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -229,6 +247,57 @@ class CardReaderDialog(QDialog):
         box.setEnabled(bool(self.host))
         self.assign_note.setText("" if self.host else "Zum Zuweisen mit dem ESPuino verbinden.")
         return box
+
+    def set_albums(self, albums: Iterable):
+        """Alben der Bibliothek zur Auswahl (Objekte mit name, path, tracks)"""
+        self.album_combo.blockSignals(True)
+        self.album_combo.clear()
+        for album in sorted(albums, key=lambda a: a.name.casefold()):
+            self.album_combo.addItem(album.name, album)
+        self.album_combo.setCurrentIndex(-1)
+        self.album_combo.setEditText("")
+        self.album_combo.blockSignals(False)
+
+    def _album_chosen(self, index: int):
+        album = self.album_combo.itemData(index) if index >= 0 else None
+        if album is None:
+            return
+        self._album = album
+        self._set_path(self.album_folder(album))
+
+    @staticmethod
+    def album_folder(album) -> str:
+        """Ordner, in den die App ein Album auf dem ESPuino legt"""
+        return "/" + safe_name(album.name)
+
+    def _album_for_path(self, path: str):
+        """Das gewaehlte Bibliotheksalbum, wenn der Ordner dazu passt"""
+        album = self._album
+        if album is not None and self.album_folder(album).casefold() == path.casefold():
+            return album
+        return None
+
+    def on_device(self, folder: str) -> bool:
+        return folder.strip("/").casefold() in self._device_folders
+
+    def set_device(self, host: str, folders: Iterable[str], device_folders: Iterable[str] = ()):
+        """Nach jedem Einlesen: Verbindung und Ordner uebernehmen (das Fenster kann
+        offen gewesen sein, bevor der ESPuino verbunden war)"""
+        was_connected = bool(self.host)
+        self.host = host
+        self._device_folders = {f.strip("/").casefold() for f in device_folders}
+        self.set_folders(folders)
+        self.assign_box.setEnabled(bool(host))
+        if not host:
+            self.assign_note.setText("Zum Zuweisen mit dem ESPuino verbinden.")
+        elif not was_connected:
+            self.assign_note.setText("")
+            self.status_label.setText("Verbinde mit dem ESPuino …")
+            try:
+                self.socket.open(QUrl(ws_url(host)))
+            except DeviceError as exc:
+                self.status_label.setText(str(exc))
+        self._update_path_hint()
 
     def set_folders(self, folders: Iterable[str]):
         current = self.path_combo.currentText()
@@ -269,7 +338,11 @@ class CardReaderDialog(QDialog):
                                                       else "Ordner auf dem ESPuino wählen oder eintragen")
         hint = ""
         path = self.sd_path
-        if path and self.sd_root:
+        album = self._album_for_path(path)
+        if album is not None and self.host and not self.on_device(path):
+            hint = (f"Fehlt auf dem ESPuino – „Zuweisen“ überträgt das Album zuerst "
+                    f"({len(album.tracks)} Titel) und weist die Karte danach zu.")
+        elif path and self.sd_root:
             local = self._local(path)
             if single and not os.path.isfile(local):
                 hint = "Diese Datei gibt es auf der SD-Karte im Kartenleser nicht."
@@ -320,6 +393,11 @@ class CardReaderDialog(QDialog):
         if not path:
             QMessageBox.information(self, "Karte zuweisen", "Bitte einen Ordner (oder eine Datei) wählen.")
             return False
+        album = self._album_for_path(path)
+        if album is not None and not self.on_device(path):
+            self.assign_note.setText(f"Übertrage „{album.name}“ …")
+            self.transfer_requested.emit(card_id, album, path, mode)  # Hauptfenster: uebertragen, dann zuweisen
+            return True
         before = self.lookup(card_id)
         if before.assignment and before.assignment.strip("/").casefold() != path.strip("/").casefold():
             answer = QMessageBox.question(
@@ -335,15 +413,19 @@ class CardReaderDialog(QDialog):
             QMessageBox.warning(self, "Karte zuweisen", str(exc))
             return False
         QApplication.restoreOverrideCursor()
-        album = self._preset_album if self._preset_folder and \
-            self._preset_folder.strip("/").casefold() == path.strip("/").casefold() else None
+        album = album or (self._preset_album if self._preset_folder and
+                          self._preset_folder.strip("/").casefold() == path.strip("/").casefold() else None)
         self.assigned.emit(card_id, path, mode, album)  # Hauptfenster merkt die Karte und liest neu ein
+        self.assignment_done(card_id, path)
+        return True
+
+    def assignment_done(self, card_id: str, path: str):
+        """Nach dem Zuweisen (auch nach dem Uebertragen): Karte neu zeigen"""
         self.show_info(self.lookup(card_id))
         self.assign_note.setText(f"Karte {format_card_id(card_id)} zugewiesen: {path}")
         self.assign_note.setStyleSheet(f"color: {theme.GREEN};")
         if self._preset_folder:
             self._set_path(self._preset_folder)  # gleich die naechste Karte fuer diesen Ordner
-        return True
 
     # --- Lesen ------------------------------------------------------------------------
 

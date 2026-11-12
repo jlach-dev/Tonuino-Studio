@@ -658,10 +658,11 @@ Darunter, unter **Auf diesem ESPuino zuweisen**, belegst du die Karte gleich:
 
 1. **Karte:** steht nach dem Auflegen da; du kannst die Nummer auch eintippen.
 2. **Abspielmodus:** etwa **Hörbuch (merkt sich die Stelle)** oder **Alle Titel des Ordners (sortiert)**.
-3. **Ordner/Datei:** aus der Liste der Ordner auf dem ESPuino wählen oder eintragen, etwa `/Hörspiele/Folge 1`. **Wählen …** geht zusätzlich, wenn seine SD-Karte im Kartenleser steckt.
-4. **Zuweisen** speichert die Zuweisung im ESPuino, so wie es seine Weboberfläche tut. Bei einer schon belegten Karte heißt der Knopf **Neu zuweisen**. Zeigt sie bisher auf einen anderen Ordner, fragt die App vorher nach.
+3. **Aus der Bibliothek:** ein Album suchen und wählen (Tippen filtert die Liste). Die App trägt den Ordner ein, in den sie das Album auf den ESPuino legt, etwa `/Die Fuchsbande`. Fehlt es dort, steht das darunter, und **Zuweisen** überträgt es zuerst (nur fehlende Dateien, über das WLAN oder auf die SD-Karte im Kartenleser) und weist die Karte danach zu.
+4. **Ordner/Datei:** stattdessen direkt aus der Liste der Ordner auf dem ESPuino wählen oder eintragen, etwa `/Hörspiele/Folge 1`. **Wählen …** geht zusätzlich, wenn seine SD-Karte im Kartenleser steckt.
+5. **Zuweisen** speichert die Zuweisung im ESPuino, so wie es seine Weboberfläche tut. Bei einer schon belegten Karte heißt der Knopf **Neu zuweisen**. Zeigt sie bisher auf einen anderen Ordner, fragt die App vorher nach.
 
-Eine bekannte Karte bringt ihren Ordner und Modus schon mit. Öffnest du das Fenster über einen Ordner, etwa per Rechtsklick → **Karte zuweisen …**, über die Ordnerseite oder mit **Weitere Karte zuweisen …**, bleibt dieser Ordner für jede weitere aufgelegte Karte stehen. So belegst du schnell ein zweites Kartenset. Zuweisen geht nur, solange der ESPuino verbunden ist; auslesen über den ACR122U auch ohne ihn.
+Eine bekannte Karte bringt ihren Ordner und Modus schon mit. Öffnest du das Fenster über einen Ordner, etwa per Rechtsklick → **Karte zuweisen …**, über die Ordnerseite oder mit **Weitere Karte zuweisen …**, bleibt dieser Ordner für jede weitere aufgelegte Karte stehen. So belegst du schnell ein zweites Kartenset. Zuweisen geht nur, solange der ESPuino verbunden ist; auslesen über den ACR122U auch ohne ihn. Ein Fenster, das schon vor dem Verbinden offen war, übernimmt Verbindung und Ordner nach dem nächsten Einlesen.
 
 Die Dateien müssen dafür schon auf der SD-Karte des ESPuino liegen, siehe den nächsten Abschnitt.
 

@@ -458,3 +458,65 @@ def test_acr122u_is_off_by_default_in_espuino_mode(setup):
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_assign_album_from_library_transfers_it_first(setup, tmp_path):
+    """Album aus der Bibliothek waehlen, das auf dem ESPuino fehlt: Zuweisen ueberträgt erst, weist dann zu"""
+    import time
+    from core.library import LibraryAlbum
+    from gui.main_window import MainWindow
+    esp = setup["esp"]
+    folder = tmp_path / "Bibliothek" / "Die Fuchsbande"
+    folder.mkdir(parents=True)
+    tracks = []
+    for name in ("01.mp3", "02.mp3"):
+        (folder / name).write_bytes(b"ID3" + b"\0" * 64)
+        tracks.append(str(folder / name))
+    dev.save_settings(dev.SOURCE_DEVICE, esp.host, "")  # SD-Karte steckt im ESPuino
+    window = MainWindow()
+    try:
+        album = LibraryAlbum(path=str(folder), title="Die Fuchsbande", tracks=tracks, album_id="fuchs")
+        window.library_view.index.albums.append(album)
+        reader = window._espuino_read_cards()
+        assert reader.album_combo.count() == 1
+        reader.on_message('{"rfidId":"444555666777"}')
+        reader._album_chosen(0)
+        assert reader.sd_path == "/Die Fuchsbande" and "überträgt das Album zuerst" in reader.path_hint.text()
+        assert reader.try_assign()
+        deadline = time.monotonic() + 10
+        while "444555666777" not in esp.assignments and time.monotonic() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.02)
+        worker = window._espuino_transfer_worker
+        if worker is not None:
+            worker.wait(5000)
+        QApplication.processEvents()
+        assert "/Die Fuchsbande/02.mp3" in esp.files
+        assert esp.assignments["444555666777"]["fileOrUrl"] == "/Die Fuchsbande"
+        known = window._espuino_known.get("444555666777")
+        assert known is not None and known.album_id == "fuchs"
+        assert reader.info.assignment == "/Die Fuchsbande"
+        reader.close()
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_open_window_follows_the_connection(setup):
+    """Fenster offen, bevor der ESPuino verbunden war: nach dem Einlesen Ordner und Zuweisen da"""
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        window._espuino_connected = False
+        window._mediahub_reload()
+        reader = window._espuino_read_cards()
+        assert not reader.assign_box.isEnabled()
+        window._espuino_connected = True
+        window._mediahub_reload()
+        assert reader.assign_box.isEnabled() and reader.host
+        choices = [reader.path_combo.itemText(i) for i in range(reader.path_combo.count())]
+        assert "/Hörspiele" in choices
+        reader.close()
+    finally:
+        window.close()
+        window.deleteLater()

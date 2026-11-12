@@ -356,7 +356,11 @@ class MediahubMixin:
             self._mediahub_show_card(page.card.card_id)
         else:
             self._mediahub_show_overview(has_cover)
-        offline = "" if state.reachable else " – ohne ESPuino" if not self._espuino_connected else             " – ESPuino nicht erreichbar"
+        reader = getattr(self, "_espuino_reader", None)
+        if reader is not None:
+            reader.set_device(host if state.reachable else "", self._espuino_folder_choices(), state.folders or [])
+        offline = "" if state.reachable else (" – ohne ESPuino" if not self._espuino_connected
+                                              else " – ESPuino nicht erreichbar")
         self._status(f"{len(data.cards)} bekannte Karten" + offline)
 
     def _espuino_back(self):
@@ -388,9 +392,34 @@ class MediahubMixin:
             log.warning("Kartenverzeichnis nicht gespeichert: %s", exc)
         self._status(f"Karte {mh.format_card_id(card_id)} zugewiesen: {folder}")
         self._mediahub_reload()
+    def _espuino_library_albums(self) -> list:
+        """Alben der Bibliothek, die sich auf den ESPuino bringen lassen"""
+        from core.library import in_system_folder
+        index = self.library_view.index
+        return [a for a in (index.albums if index is not None else [])
+                if a.tracks and not a.offline and not in_system_folder(a.path)]
+
+    def _espuino_transfer_and_assign(self, card_id: str, album, folder: str, play_mode: int):
+        """Aus "Karten auslesen und zuweisen": Album fehlt auf dem ESPuino - erst
+        uebertragen (fehlende Dateien), dann die Karte zuweisen"""
         reader = getattr(self, "_espuino_reader", None)
-        if reader is not None:
-            reader.set_folders(self._espuino_folder_choices())
+        if self._espuino_transfer_busy() or not album.tracks:
+            return
+        _source, host, sd_root = dev.settings()
+        local = sd_root if sd_root and os.path.isdir(sd_root) else ""
+
+        def finished(cancelled):
+            if cancelled:
+                self._mediahub_reload()
+                if reader is not None:
+                    reader.assign_note.setText("Übertragen abgebrochen – Karte nicht zugewiesen.")
+                return
+            self._espuino_on_assigned(card_id, folder, play_mode, album)
+            if getattr(self, "_espuino_reader", None) is reader and reader is not None:
+                reader.assignment_done(card_id, folder)
+
+        self._espuino_run_transfer([plan_album(album.tracks, folder)], local, host, [(card_id, play_mode)],
+                                   finished)
 
     def _espuino_folder_choices(self) -> list:
         """Ordner fuer die Auswahlliste beim Zuweisen: auf dem ESPuino und die der bekannten Karten"""
@@ -425,6 +454,10 @@ class MediahubMixin:
             poller.status_changed.connect(reader.on_reader_status)  # loest Qt beim Schliessen selbst
         reader.show_card_requested.connect(self._espuino_reader_show_card)
         reader.assigned.connect(self._espuino_on_assigned)
+        reader.transfer_requested.connect(self._espuino_transfer_and_assign)
+        reader.set_albums(self._espuino_library_albums())
+        reader.set_device(host, self._espuino_folder_choices(),
+                          (state.folders or []) if state is not None else [])
         reader.destroyed.connect(lambda *_: setattr(self, "_espuino_reader", None))
         self._espuino_reader = reader
         reader.show()
