@@ -13,13 +13,13 @@ import html
 from typing import Dict, List, Optional
 
 from PyQt6.QtCore import QPoint, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtGui import QBrush, QColor, QPixmap
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton,
+    QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from core.espuino_device import NOT_CONNECTED
+from core.espuino_device import NOT_CONNECTED, same_folder
 from core.espuino_cards import ASSIGNED, ASSIGNED_OTHER, NOT_ASSIGNED
 from core.espuino_transfer import safe_name
 from core.mediahub_cards import MediahubCard, format_card_id
@@ -27,6 +27,7 @@ from gui import theme
 from gui.library_dnd import DropHighlight, drop_payload_from_mime
 
 FOLDER_ROLE = Qt.ItemDataRole.UserRole
+FOLDER_PREVIEW = 200
 
 
 def _gb(value: int) -> str:
@@ -108,6 +109,7 @@ class EspuinoDeviceSidebar(QWidget):
     reload_requested = pyqtSignal()
     albums_dropped = pyqtSignal(list)
     assign_folder_requested = pyqtSignal(str)  # "/Ordner"
+    folder_selected = pyqtSignal(str)  # "/Ordner": Infos und Karten zeigen
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -147,6 +149,7 @@ class EspuinoDeviceSidebar(QWidget):
         self.folder_list.albums_dropped.connect(self.albums_dropped)
         self.folder_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_list.customContextMenuRequested.connect(self._folder_menu)
+        self.folder_list.itemClicked.connect(lambda item: self.folder_selected.emit(item.data(FOLDER_ROLE)))
         layout.addWidget(self.folder_list, 1)
         self.drop_label = QLabel("Alben aus der Bibliothek hierher ziehen.")
         self.drop_label.setWordWrap(True)
@@ -323,3 +326,122 @@ def album_folder_names(paths: List[str], index) -> List[str]:
         if album is not None:
             names.append(safe_name(album.name))
     return names
+
+
+def in_folder(path: str, folder: str) -> bool:
+    """path ist der Ordner selbst oder liegt darin ("/A/B" in "/A")"""
+    path, folder = path.strip("/").casefold(), folder.strip("/").casefold()
+    return bool(path) and (path == folder or path.startswith(folder + "/"))
+
+
+class FolderPage(QWidget):
+    """Ein Ordner auf der SD-Karte des ESPuino: Album und alle Karten, die darauf zeigen"""
+    back_requested = pyqtSignal()
+    card_selected = pyqtSignal(str)
+    assign_requested = pyqtSignal(str)  # "/Ordner"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.folder = ""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        back = QPushButton("← Alle Karten")
+        back.setObjectName("ghostButton")
+        back.clicked.connect(self.back_requested)
+        back_row = QHBoxLayout()
+        back_row.addWidget(back)
+        back_row.addStretch(1)
+        layout.addLayout(back_row)
+        head = QFrame()
+        head.setObjectName("heroCard")
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(20, 16, 20, 16)
+        head_layout.setSpacing(20)
+        self.preview = QLabel()
+        self.preview.setFixedSize(FOLDER_PREVIEW, FOLDER_PREVIEW)
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        head_layout.addWidget(self.preview)
+        info = QVBoxLayout()
+        info.setSpacing(4)
+        self.title_label = QLabel()
+        self.title_label.setObjectName("folderTitle")
+        self.title_label.setWordWrap(True)
+        info.addWidget(self.title_label)
+        self.path_label = QLabel()
+        self.path_label.setObjectName("folderSubtitle")
+        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        info.addWidget(self.path_label)
+        self.meta_label = QLabel()
+        self.meta_label.setObjectName("folderMeta")
+        self.meta_label.setWordWrap(True)
+        info.addWidget(self.meta_label)
+        info.addStretch(1)
+        actions = QHBoxLayout()
+        self.btn_assign = QPushButton("Karte zuweisen …")
+        self.btn_assign.setObjectName("primaryButton")
+        self.btn_assign.setToolTip("Eine weitere Karte auf den ESPuino legen und diesem Ordner zuweisen")
+        self.btn_assign.clicked.connect(lambda: self.assign_requested.emit(self.folder))
+        actions.addWidget(self.btn_assign)
+        actions.addStretch(1)
+        info.addLayout(actions)
+        head_layout.addLayout(info, 1)
+        layout.addWidget(head)
+        self.cards_title = QLabel("Karten für diesen Ordner")
+        self.cards_title.setObjectName("sectionTitle")
+        layout.addWidget(self.cards_title)
+        self.tree = QTreeWidget()
+        self.tree.setObjectName("trackList")
+        self.tree.setRootIsDecorated(False)
+        self.tree.setHeaderLabels(["Karte", "Nummer", "Auf diesem ESPuino", "Cover"])
+        header = self.tree.header()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in range(1, 4):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.itemClicked.connect(lambda item, _col: self.card_selected.emit(item.data(0, FOLDER_ROLE)))
+        self.tree.itemActivated.connect(lambda item, _col: self.card_selected.emit(item.data(0, FOLDER_ROLE)))
+        layout.addWidget(self.tree, 1)
+        self.empty_label = QLabel("Noch keine Karte zeigt auf diesen Ordner.")
+        self.empty_label.setStyleSheet(f"color: {theme.OVERLAY2};")
+        layout.addWidget(self.empty_label)
+
+    def show_folder(self, folder: str, meta: List[str], preview_path: str, cards: List[MediahubCard],
+                    has_cover: Dict[str, bool], can_assign: bool):
+        """cards: bekannte Karten, die auf diesen Ordner zeigen (hier oder laut Verzeichnis)"""
+        self.folder = folder
+        self.title_label.setText(folder.strip("/").rpartition("/")[2] or folder)
+        self.path_label.setText(f"Ordner auf der SD-Karte: {folder}")
+        self.meta_label.setText("<br>".join(html.escape(line) for line in meta))
+        pixmap = QPixmap(preview_path) if preview_path else QPixmap()
+        if pixmap.isNull():
+            self.preview.setPixmap(QPixmap())
+            self.preview.setText("kein Bild")
+            self.preview.setStyleSheet(f"color: {theme.OVERLAY2}; border: 1px dashed {theme.OVERLAY2};"
+                                       "border-radius: 8px;")
+        else:
+            self.preview.setStyleSheet("")
+            self.preview.setPixmap(pixmap.scaled(self.preview.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                                 Qt.TransformationMode.SmoothTransformation))
+        self.btn_assign.setEnabled(can_assign)
+        self.tree.clear()
+        for card in cards:
+            if card.device_target:  # Zuweisung auf dem verbundenen ESPuino
+                if same_folder(card.device_target, folder):
+                    here = "zugewiesen"
+                elif in_folder(card.device_target, folder):
+                    here = "zugewiesen: " + card.device_target
+                else:
+                    here = f"zeigt auf {card.device_target}"
+            elif card.device_status == NOT_ASSIGNED:
+                here = "nicht zugewiesen"
+            else:
+                here = "?"  # nicht verbunden
+            item = QTreeWidgetItem([card.label, format_card_id(card.card_id), here,
+                                    "✓" if has_cover.get(card.card_id) else "–"])
+            item.setData(0, FOLDER_ROLE, card.card_id)
+            if not here.startswith("zugewiesen"):
+                item.setForeground(2, QBrush(QColor(theme.YELLOW)))
+            self.tree.addTopLevelItem(item)
+        count = len(cards)
+        self.cards_title.setText(f"Karten für diesen Ordner ({count})")
+        self.empty_label.setVisible(count == 0)

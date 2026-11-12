@@ -140,6 +140,10 @@ class MediahubPage(QWidget):
         self.pages.addWidget(self._build_overview())
         self.pages.addWidget(self._build_card())
         self.pages.addWidget(self._build_device_overview())
+        from gui.espuino_device_view import FolderPage
+        self.folder_page = FolderPage()  # Ordner auf der SD-Karte des ESPuino (Index 3)
+        self.folder_page.back_requested.connect(self.back_requested)
+        self.pages.addWidget(self.folder_page)
         self.device_mode = False
 
     def _build_overview(self) -> QWidget:
@@ -270,6 +274,11 @@ class MediahubPage(QWidget):
         self.file_list.setObjectName("trackList")
         layout.addWidget(self.file_list, 1)
         return page
+
+    def show_folder(self, *args, **kwargs):
+        self.card = None
+        self.folder_page.show_folder(*args, **kwargs)
+        self.pages.setCurrentWidget(self.folder_page)
 
     def show_overview(self, text: str, configured: bool, can_batch: bool = False, can_print: bool = False):
         self.card = None

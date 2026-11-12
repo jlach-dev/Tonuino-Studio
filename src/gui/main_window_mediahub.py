@@ -110,6 +110,7 @@ class MediahubMixin:
         self.espuino_sidebar.assign_requested.connect(self._espuino_assign)
         self.espuino_sidebar.read_requested.connect(self._espuino_read_cards)
         self.espuino_sidebar.assign_folder_requested.connect(self._espuino_assign_folder)
+        self.espuino_sidebar.folder_selected.connect(self._espuino_show_folder)
         self.espuino_sidebar.albums_dropped.connect(self._espuino_transfer)
         self.espuino_sidebar.folder_list.album_names = lambda paths: album_folder_names(paths,
                                                                                          self.library_view.index)
@@ -123,6 +124,8 @@ class MediahubMixin:
         self.mediahub_page.transfer_requested.connect(self._espuino_transfer_card)
         self.mediahub_page.back_requested.connect(self._espuino_back)
         self.mediahub_page.cards_table.card_selected.connect(self._mediahub_show_card)
+        self.mediahub_page.folder_page.card_selected.connect(self._mediahub_show_card)
+        self.mediahub_page.folder_page.assign_requested.connect(self._espuino_assign_folder)
         self.mediahub_page.cards_table.transfer_missing_requested.connect(self._espuino_transfer_missing)
         self.stack.addWidget(self.mediahub_page)
         self._sd_page = self.mediahub_page
@@ -427,6 +430,41 @@ class MediahubMixin:
             info.front_path = str(front) if front.is_file() else ""
             info.back_path = str(back) if back.is_file() else ""
         return info
+
+    def _espuino_show_folder(self, folder: str):
+        """Ordner der SD-Karte: Album aus der Bibliothek und alle Karten, die darauf zeigen"""
+        data = self._mediahub_data
+        if not folder or data is None:
+            return
+        from gui.espuino_device_view import in_folder
+        cards = [c for c in data.cards if in_folder(c.sd_path, folder) or in_folder(c.device_target, folder)]
+        meta = []
+        album = next((self.library_view.index.find(c.library_path) for c in cards if c.library_path), None)             or self._espuino_album_for_folder(folder)
+        preview = ""
+        if album is not None:
+            minutes = int(round(album.duration / 60)) if album.duration else 0
+            meta.append(f"Album: {album.name}" + (f" – {album.artist}" if album.artist else ""))
+            meta.append(f"{album.track_count} Titel" + (f", {minutes} min" if minutes else "")
+                        + f" · Bibliothek: {album.path}")
+            thumb = self.library_view.index.thumb_path(album)
+            preview = str(thumb) if thumb else ""
+        else:
+            meta.append("Kein passendes Album in der Bibliothek gefunden.")
+        has_cover = self._mediahub_cover_map()
+        archive = get_archive(self, ask=False)
+        if archive is not None:  # lieber das Kartencover zeigen als das Album-Cover
+            for card in cards:
+                front = card_paths(str(archive.card_dir(card.album_id)))[0]
+                if front.is_file():
+                    preview = str(front)
+                    break
+        state = self._espuino_state
+        reachable = state is not None and state.reachable
+        if len(cards) > 1:
+            meta.append(f"{len(cards)} Karten zeigen auf diesen Ordner – jede spielt dasselbe Album.")
+        self.mediahub_page.show_folder(folder, meta, preview, cards, has_cover, reachable)
+        if self.view_switch.currentIndex() != 0:
+            self.view_switch.setCurrentIndex(0)
 
     def _espuino_assign_folder(self, folder: str):
         self._espuino_assign(preset_path=folder, album=self._espuino_album_for_folder(folder))

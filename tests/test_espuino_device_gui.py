@@ -292,3 +292,31 @@ def test_read_cards_window_shows_each_card(setup):
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_click_on_device_folder_shows_its_cards(setup):
+    """Klick auf einen Ordner der Seitenleiste: Infos und alle Karten, die darauf zeigen"""
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        side, page = window.espuino_sidebar, window.mediahub_page
+        item = next(side.folder_list.item(i) for i in range(side.folder_list.count())
+                    if side.folder_list.item(i).text() == "Hörspiele")
+        side.folder_list.itemClicked.emit(item)
+        folder_page = page.folder_page
+        assert page.pages.currentWidget() is folder_page and folder_page.folder == "/Hörspiele"
+        assert folder_page.tree.topLevelItemCount() == 1 and folder_page.empty_label.isHidden()
+        row = folder_page.tree.topLevelItem(0)
+        assert row.data(0, 0x0100) == CARD_A and row.text(2) == "zugewiesen: /Hörspiele/Fuchsbande"
+        assert "Kein passendes Album" in folder_page.meta_label.text() and folder_page.btn_assign.isEnabled()
+        folder_page.tree.itemClicked.emit(row, 0)  # Karte oeffnen
+        assert page.card is not None and page.card.card_id == CARD_A
+        musik = next(side.folder_list.item(i) for i in range(side.folder_list.count())
+                     if side.folder_list.item(i).text() == "Musik")
+        side.folder_list.itemClicked.emit(musik)
+        assert folder_page.tree.topLevelItemCount() == 1  # Karte B zeigt auf eine Datei darin
+        folder_page.back_requested.emit()
+        assert page.pages.currentIndex() == 2
+    finally:
+        window.close()
+        window.deleteLater()

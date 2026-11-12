@@ -680,7 +680,7 @@ Ist **Danach eine Karte für dieses Album zuweisen** angehakt, öffnet sich ansc
 
 ### ESPuino direkt: Seitenleiste, bekannte Karten und Status
 
-Die **Seitenleiste** zeigt den ESPuino: Adresse, Firmware, Größe und freien Platz der SD-Karte, darunter die Ordner auf seiner SD-Karte (**Auf dem ESPuino**). Ordner, auf die keine Karte zeigt, sind grau. Rechtsklick auf einen Ordner → **Karte zuweisen …** mit diesem Ordner. **Neu einlesen** liest alles erneut.
+Die **Seitenleiste** zeigt den ESPuino: Adresse, Firmware, Größe und freien Platz der SD-Karte, darunter die Ordner auf seiner SD-Karte (**Auf dem ESPuino**). Ordner, auf die keine Karte zeigt, sind grau. Ein Klick auf einen Ordner zeigt im Hauptbereich das passende Album aus der Bibliothek und alle Karten, die auf diesen Ordner (oder einen Unterordner) zeigen, jeweils mit Status auf diesem ESPuino und Cover. Ein Klick auf eine Karte öffnet sie; **Karte zuweisen …** belegt eine weitere Karte mit demselben Ordner. Mehrere Karten für dasselbe Album sind kein Problem, jede spielt es. Rechtsklick auf einen Ordner → **Karte zuweisen …** mit diesem Ordner. **Neu einlesen** liest alles erneut.
 
 Der Reiter **ESPuino-Karten** zeigt die **bekannten Karten**. Die App merkt sich selbst, wofür jede Karte steht (Ordner, Abspielmodus und das Album in der Bibliothek), in `espuino/cards.json` im Datenordner. Denn die Zuweisungen speichert der ESPuino in seinem eigenen Speicher, die Dateien liegen auf der SD-Karte: Nach einem Wechsel der SD-Karte zeigen seine Karten ins Leere, und ein zweiter ESPuino kennt die Karten gar nicht. Zuweisungen, die die App noch nicht kennt, übernimmt sie beim Einlesen.
 
