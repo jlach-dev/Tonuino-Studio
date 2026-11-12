@@ -98,3 +98,31 @@ def test_unreachable_device_has_unknown_status(tmp_path):
     known.remember(CARD_A, sd_folder="/X")
     data, _ = build_cards(known, DeviceState(host="esp", error="weg"), None, "")
     assert data.cards[0].device_status == "" and data.cards[0].folder_present is None
+
+
+def test_card_of_library_album_uses_its_card_cover(tmp_path):
+    index = _library(tmp_path)
+    known = ec.load(str(tmp_path))
+    state = DeviceState(host="esp", reachable=True, folders=["/Die Fuchsbande"], dirs={"/": {"Die Fuchsbande"}})
+    state.assignments = {CARD_A: ("/Die Fuchsbande", 3), CARD_C: ("/Unbekannt", 3)}
+    data, _ = build_cards(known, state, index, "")
+    by_id = {c.card_id: c for c in data.cards}
+    assert by_id[CARD_A].album_id == "fuchs1"  # Verweis auf das Album der Bibliothek, keine eigene Kopie
+    assert by_id[CARD_C].album_id == "mediahub" + CARD_C  # ohne Album bleibt das Cover an der Karte
+
+
+def test_recycle_bin_is_no_library_album(tmp_path):
+    recycled = tmp_path / "#recycle" / "Conni geht verloren"
+    recycled.mkdir(parents=True)
+    (recycled / "01.mp3").write_bytes(b"ID3")
+    index = _library(tmp_path)
+    index.albums.append(LibraryAlbum(path=str(recycled), title="Conni geht verloren",
+                                     tracks=[str(recycled / "01.mp3")], album_id="conni"))
+    known = ec.load(str(tmp_path))
+    known.remember(CARD_B, name="Conni geht verloren", sd_folder="/Conni geht verloren", play_mode=3,
+                   library_path=str(recycled), album_id="conni")
+    assert ec.find_library_album(known.get(CARD_B), index) is None
+    data, changed = build_cards(known, DeviceState(host="esp", reachable=True, folders=[], dirs={"/": set()}),
+                                index, "")
+    assert changed and known.get(CARD_B).library_path == "" and known.get(CARD_B).album_id == ""
+    assert data.cards[0].album_id == "mediahub" + CARD_B and data.cards[0].local_tracks == []

@@ -236,7 +236,7 @@ Deine Sammlung bleibt, wo sie ist. Die App merkt sich nur eine Übersicht davon 
 
 **Ordner …** oder Menü **Einstellungen** → **Bibliothek-Ordner …** öffnet die Liste. **Ordner hinzufügen …** wählt einen Ordner; mehrere ziehst du aus dem Explorer in die Liste. **Entfernen** nimmt einen wieder heraus (die Dateien bleiben). Doppelte und verschachtelte Ordner werden gemeldet. **Übernehmen** startet das Einlesen.
 
-Jeder Ordner mit Audiodateien (MP3, FLAC, M4A, OGG, Opus, WAV) gilt als Album. Unterordner wie `CD1` und `CD2` werden zusammengefasst.
+Jeder Ordner mit Audiodateien (MP3, FLAC, M4A, OGG, Opus, WAV) gilt als Album. Unterordner wie `CD1` und `CD2` werden zusammengefasst. Papierkörbe und Systemordner des NAS oder von Windows (`#recycle`, `@eaDir`, `#snapshot`, `$RECYCLE.BIN` und ähnliche) liest die App nicht ein. Liegt ein Album in zwei Ordnern, zeigt die Bibliothek es zweimal; welche Kopie bleibt, entscheidest du im Dateisystem.
 
 Eingelesen wird beim ersten Wechsel in den Reiter und mit **Neu einlesen**. Dabei werden nur geänderte Alben neu gelesen. Ein gerade nicht erreichbares NAS blendet seine Alben nicht aus; sie erscheinen mit dem Abzeichen **offline**.
 
@@ -658,7 +658,7 @@ Die Spalten der Tabelle:
 
 - **Zugewiesen:** ✓ auf diesem ESPuino so zugewiesen, – nicht zugewiesen, **anders** dort anders belegt, ? ESPuino nicht erreichbar.
 - **Ordner:** ✓ auf seiner SD-Karte vorhanden, **fehlt**, ? unbekannt.
-- **Cover:** ✓ Kartencover vorhanden.
+- **Cover:** ✓ Kartencover vorhanden. Gehört die Karte zu einem Album der Bibliothek, gilt dessen Kartencover, ohne Kopie: Was du dort gestaltest, gilt auch für die Karte, und **Kartencover bearbeiten** öffnet den Cover-Manager dieses Albums. Nur Karten ohne Album in der Bibliothek haben ein eigenes Kartencover.
 
 Ein Klick öffnet die Kartenseite, **← Alle Karten** führt zurück. **Auf diesen ESPuino übertragen** bringt das Album aus der Bibliothek in den Ordner der Karte (nur fehlende Dateien) und weist die Karte auf diesem ESPuino zu. **Fehlende auf den ESPuino übertragen** macht das für alle Karten, deren Ordner fehlt oder die nicht zugewiesen sind, nach einer Rückfrage. Dafür muss das Hörspiel in der Bibliothek liegen; die App findet es über die Album-ID, den Ordner oder einen passenden Albumnamen.
 

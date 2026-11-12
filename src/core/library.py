@@ -520,6 +520,21 @@ def album_track_files(album_path: str) -> List[str]:
     return files
 
 
+# Systemordner von NAS und Windows: Papierkorb, Vorschaubilder, Snapshots. Was dort liegt, ist
+# geloescht oder eine Kopie und gehoert nicht in die Bibliothek.
+SYSTEM_FOLDERS = {"@eadir", "#recycle", "@recycle", "#snapshot", "@recently-snapshot", "#archive",
+                  "$recycle.bin", "system volume information", "@tmp", ".trash", ".trashes"}
+
+
+def is_system_folder(name: str) -> bool:
+    return name.startswith(".") or name.casefold() in SYSTEM_FOLDERS
+
+
+def in_system_folder(path: str) -> bool:
+    """Liegt der Pfad in einem Papierkorb oder anderen Systemordner?"""
+    return any(part.casefold() in SYSTEM_FOLDERS for part in Path(path).parts)
+
+
 def find_album_folders(source: str, failed: Optional[List[str]] = None) -> List[Tuple[str, List[str]]]:
     """(Albumpfad, Audiodateien) fuer alle Alben unter einem Quellordner.
     Ordner, die sich nicht lesen liessen (NAS-Aussetzer, fehlende Rechte),
@@ -531,7 +546,7 @@ def find_album_folders(source: str, failed: Optional[List[str]] = None) -> List[
             failed.append(error.filename or source)
 
     for dirpath, dirnames, filenames in os.walk(source, onerror=remember):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d.lower() != "@eadir")
+        dirnames[:] = sorted(d for d in dirnames if not is_system_folder(d))
         files = [os.path.join(dirpath, n) for n in sorted(filenames, key=_natural_key) if is_audio_file(n)]
         if files:
             result.append((dirpath, files))

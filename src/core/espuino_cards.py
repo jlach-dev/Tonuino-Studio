@@ -133,14 +133,15 @@ def find_library_album(card: KnownCard, index):
     einen Albumnamen, der zum Ordnernamen auf der SD-Karte passt"""
     if index is None:
         return None
-    albums = [a for a in index.albums if not a.offline and a.tracks]
+    from core.library import in_system_folder
+    albums = [a for a in index.albums if not a.offline and a.tracks and not in_system_folder(a.path)]
     if card.album_id:
         match = next((a for a in albums if a.album_id == card.album_id), None)
         if match is not None:
             return match
     if card.library_path:
         match = index.find(card.library_path)
-        if match is not None and not match.offline and match.tracks:
+        if match is not None and not match.offline and match.tracks and not in_system_folder(match.path):
             return match
     folder = card.sd_folder.strip("/").rpartition("/")[2].casefold()
     if folder:

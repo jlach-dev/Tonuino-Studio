@@ -543,6 +543,12 @@ class MediahubMixin:
         archive = get_archive(self)
         if archive is None:
             return
+        album = self.library_view.index.find(card.library_path) if card.library_path else None
+        if album is not None and card.library_album_id and album.album_id == card.library_album_id:
+            # Karte gehoert zu einem Album der Bibliothek: dessen Kartencover gilt, keine eigene Kopie
+            self._library_cover(album, focus=CoverManagerDialog.FOCUS_CARD)
+            self._mediahub_reload()
+            return
         folder = mh.build_folder(card, self._mediahub_media_root, archive)
         if not folder.tracks:
             QMessageBox.information(self, "Keine Dateien", f"Keine Datei dieser Karte {self._espuino_place()} "

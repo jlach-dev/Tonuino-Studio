@@ -308,7 +308,7 @@ class LibraryMixin:
         dialog.canceled.connect(worker.cancel)
         worker.start()
 
-    def _library_cover(self, album):
+    def _library_cover(self, album, focus=None):
         """Cover-Manager fuer ein Bibliotheksalbum: Album-Cover in die Dateien (+ cover.jpg),
         Kartencover ins Archiv"""
         if album is None or not album.tracks:
@@ -324,7 +324,8 @@ class LibraryMixin:
                            if os.path.isfile(os.path.join(album.path, n))), "")
         folder = Folder(index=None, path=album.path, tracks=tracks, cover_path=cover_file, name=album.name)
         dialog = CoverManagerDialog(folder, album.title or album.name, self.metadata_manager, archive, self,
-                                    focus=CoverManagerDialog.FOCUS_ALBUM, library=True, album_id=album.album_id)
+                                    focus=focus or CoverManagerDialog.FOCUS_ALBUM, library=True,
+                                    album_id=album.album_id)
         dialog.exec()
         if dialog.tags_changed or dialog.album_cover_changed or dialog.card_changed:
             if dialog.album_cover_changed:

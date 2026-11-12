@@ -299,8 +299,13 @@ def build_cards(known, state: DeviceState, library_index, sd_root: str) -> Tuple
     device = Device(esp_id=state.host, alias=f"ESPuino {state.host}")
     result = MediahubData(devices={state.host: device}, skipped_function=state.skipped_function,
                           skipped_webradio=state.skipped_webradio, skipped_mediahub=state.skipped_mediahub)
+    from core.library import in_system_folder
     for card in list(known.cards.values()):
         album = find_library_album(card, library_index)
+        if album is None and card.library_path and in_system_folder(card.library_path):
+            # frueher aus dem Papierkorb des NAS verknuepft: dieser Verweis gilt nicht mehr
+            known.remember(card.card_id, library_path="", album_id="")
+            changed = True
         if album is not None and (card.library_path != album.path
                                   or (album.album_id and card.album_id != album.album_id)):
             known.remember(card.card_id, library_path=album.path, album_id=album.album_id or card.album_id)
@@ -331,6 +336,7 @@ def build_cards(known, state: DeviceState, library_index, sd_root: str) -> Tuple
             devices=[device] if entry is not None else [], source_esp=state.host,
             sd_path=card.sd_folder, local_tracks=local_tracks,
             library_path=album.path if album is not None else "",
+            library_album_id=album.album_id if album is not None else "",
             device_status=status, device_target=target,
             folder_present=folder_exists(state, sd_root, card.sd_folder) if card.sd_folder else None,
         ))

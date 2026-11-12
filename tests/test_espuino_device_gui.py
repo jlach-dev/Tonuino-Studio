@@ -228,3 +228,29 @@ def test_transfer_menu_in_device_mode(setup):
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_cover_of_library_card_opens_the_library_album(setup, tmp_path, monkeypatch):
+    from core.library import LibraryAlbum
+    from gui.cover_manager_dialog import CoverManagerDialog
+    from gui.main_window import MainWindow
+    folder = tmp_path / "Bibliothek" / "Die Fuchsbande"
+    folder.mkdir(parents=True)
+    (folder / "01.mp3").write_bytes(b"ID3" + b"\0" * 64)
+    window = MainWindow()
+    try:
+        window.library_view.index.albums.append(LibraryAlbum(path=str(folder), title="Die Fuchsbande",
+                                                             tracks=[str(folder / "01.mp3")], album_id="fuchs"))
+        window._espuino_known.remember("777888999000", name="Fuchsbande", sd_folder="/Die Fuchsbande",
+                                       play_mode=5)
+        window._espuino_known.save()  # Neu einlesen laedt das Verzeichnis von der Platte
+        window._mediahub_reload()
+        card = window._mediahub_card("777888999000")
+        assert card.album_id == "fuchs"
+        opened = []
+        monkeypatch.setattr(window, "_library_cover", lambda album, focus=None: opened.append((album.album_id, focus)))
+        window._mediahub_open_cover("777888999000")
+        assert opened == [("fuchs", CoverManagerDialog.FOCUS_CARD)]
+    finally:
+        window.close()
+        window.deleteLater()

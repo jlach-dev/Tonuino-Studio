@@ -88,13 +88,15 @@ class MediahubCard:
     # Nur bei Karten direkt vom ESPuino (core/espuino_device.build_cards):
     local_tracks: List[str] = field(default_factory=list)  # Dateien auf dem PC (Bibliothek bzw. SD im Kartenleser)
     library_path: str = ""  # Album der Bibliothek, falls gefunden
+    # Album-ID dieses Bibliotheksalbums: Dann gilt dessen Kartencover (Verweis statt Kopie)
+    library_album_id: str = ""
     device_status: str = ""  # core/espuino_cards: ASSIGNED, ASSIGNED_OTHER, NOT_ASSIGNED; "" = unbekannt
     device_target: str = ""  # Ordner, auf den die Karte auf dem Geraet zeigt
     folder_present: Optional[bool] = None  # Ordner auf der SD-Karte des Geraets; None = unbekannt
 
     @property
     def album_id(self) -> str:
-        return album_id_for(self.card_id)
+        return self.library_album_id or album_id_for(self.card_id)
 
     @property
     def label(self) -> str:

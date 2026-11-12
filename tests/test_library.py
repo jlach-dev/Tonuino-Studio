@@ -72,6 +72,18 @@ def test_scan_finds_albums_merges_discs_and_reads_tags(tmp_path):
     assert [p.split("CD")[-1][:1] for p in raeuber.tracks] == ["1", "1", "2"]
 
 
+def test_scan_skips_recycle_bin_and_system_folders(tmp_path):
+    from core.library import in_system_folder
+    source = tmp_path / "NAS"
+    make_album(source, "Hexe", count=1, album="Die kleine Hexe")
+    for system in ("#recycle", "@eaDir", "#snapshot", "$RECYCLE.BIN"):
+        make_album(source / system, "Hexe", count=1, album="Die kleine Hexe")
+    index = Library(str(tmp_path / "data"), [str(source)]).scan()
+    assert [a.path for a in index.albums] == [str(source / "Hexe")]
+    assert in_system_folder(r"X:\#recycle\Conni\Conni geht verloren")
+    assert not in_system_folder(r"X:\Hörbücher2\Conni")
+
+
 def test_scan_is_incremental_and_index_roundtrip(tmp_path, monkeypatch):
     source = tmp_path / "Musik"
     make_album(source, "A", count=1)
