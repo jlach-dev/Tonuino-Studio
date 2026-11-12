@@ -13,7 +13,19 @@ from PyQt6.QtWidgets import (
 
 from core import ai_settings, card_store
 from core.sd_card import Folder
-from core.sheet_pdf import DEFAULT_TEMPLATE, LABEL_TEMPLATES, SheetItem, build_sheets, save_pdf
+from core.sheet_pdf import (
+    ALIGN_CENTER, ALIGN_END, ALIGN_START, CARD_ISO_MM, DEFAULT_TEMPLATE, LABEL_TEMPLATES, Placement, SheetItem,
+    build_sheets, layout_for, save_pdf,
+)
+
+FORMAT_ISO, FORMAT_CUSTOM, FORMAT_FILL = "iso", "custom", "fill"
+FORMATS = (
+    (FORMAT_ISO, "Standard-RFID-Karte (85,6 × 53,98 mm)"),
+    (FORMAT_CUSTOM, "Eigenes Kartenformat"),
+    (FORMAT_FILL, "Etikett ganz füllen"),
+)
+ALIGN_X = ((ALIGN_START, "links"), (ALIGN_CENTER, "mittig"), (ALIGN_END, "rechts"))
+ALIGN_Y = ((ALIGN_START, "oben"), (ALIGN_CENTER, "mittig"), (ALIGN_END, "unten"))
 
 
 def _card_dir(folder: Folder) -> str:
@@ -27,6 +39,10 @@ def _label(folder: Folder, folder_names: dict) -> str:
         return folder.name or "Karte"
     name = folder_names.get(folder.index) or f"Ordner {folder.index:02d}"
     return f"{folder.index:02d} – {name}"
+
+
+def _mm(value: float) -> str:
+    return f"{value:g}".replace(".", ",")
 
 
 class PrintSheetDialog(QDialog):
@@ -71,6 +87,48 @@ class PrintSheetDialog(QDialog):
         self.template_note = QLabel()
         self.template_note.setWordWrap(True)
         form.addRow("", self.template_note)
+
+        self.format_combo = QComboBox()
+        for key, text in FORMATS:
+            self.format_combo.addItem(text, key)
+        self.format_combo.setToolTip("Wie groß das Cover gedruckt wird. Standard: so groß wie die RFID-Karte, "
+                                     "auch wenn das Etikett größer ist")
+        self.format_combo.setCurrentIndex(max(0, self.format_combo.findData(
+            settings.value(ai_settings.SETTINGS_CARD_FORMAT, FORMAT_ISO, type=str))))
+        form.addRow("Kartenformat:", self.format_combo)
+        self.card_w = self._mm_spin(settings.value(ai_settings.SETTINGS_CARD_W, CARD_ISO_MM[0], type=float))
+        self.card_h = self._mm_spin(settings.value(ai_settings.SETTINGS_CARD_H, CARD_ISO_MM[1], type=float))
+        size_row = QHBoxLayout()
+        size_row.addWidget(self.card_w)
+        size_row.addWidget(QLabel("×"))
+        size_row.addWidget(self.card_h)
+        size_row.addWidget(QLabel("mm"))
+        size_row.addStretch(1)
+        form.addRow("", size_row)
+
+        self.align_x = QComboBox()
+        for key, text in ALIGN_X:
+            self.align_x.addItem(text, key)
+        self.align_y = QComboBox()
+        for key, text in ALIGN_Y:
+            self.align_y.addItem(text, key)
+        self.align_x.setCurrentIndex(max(0, self.align_x.findData(
+            settings.value(ai_settings.SETTINGS_ALIGN_X, ALIGN_START, type=str))))
+        self.align_y.setCurrentIndex(max(0, self.align_y.findData(
+            settings.value(ai_settings.SETTINGS_ALIGN_Y, ALIGN_START, type=str))))
+        align_row = QHBoxLayout()
+        align_row.addWidget(self.align_y)
+        align_row.addWidget(self.align_x)
+        align_row.addStretch(1)
+        self.align_label = QLabel("Lage im Etikett:")
+        form.addRow(self.align_label, align_row)
+        self.placement_note = QLabel()
+        self.placement_note.setWordWrap(True)
+        form.addRow("", self.placement_note)
+        for combo in (self.format_combo, self.align_x, self.align_y):
+            combo.currentIndexChanged.connect(self._update_placement)
+        for spin in (self.card_w, self.card_h):
+            spin.valueChanged.connect(self._update_placement)
 
         self.copies_spin = QSpinBox()
         self.copies_spin.setRange(1, 10)
@@ -127,13 +185,59 @@ class PrintSheetDialog(QDialog):
         spin.setValue(value)
         return spin
 
+    @staticmethod
+    def _mm_spin(value: float) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(20.0, 200.0)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.5)
+        spin.setValue(value)
+        return spin
+
     def _template(self):
-        return LABEL_TEMPLATES[self.template_combo.currentData()]
+        """Bogen samt Raster fuer das gewaehlte Kartenformat (Schnittmarken-Boegen)"""
+        return layout_for(LABEL_TEMPLATES[self.template_combo.currentData()], self._placement())
+
+    def _placement(self) -> Placement:
+        fmt = self.format_combo.currentData()
+        w, h = (self.card_w.value(), self.card_h.value()) if fmt == FORMAT_CUSTOM else CARD_ISO_MM
+        return Placement(card_w=max(w, h), card_h=min(w, h), fill_label=fmt == FORMAT_FILL,
+                         align_x=self.align_x.currentData(), align_y=self.align_y.currentData())
 
     def _on_template_changed(self, *_):
+        self.template_note.setText(LABEL_TEMPLATES[self.template_combo.currentData()].note)
+        self._update_placement()
+
+    def _update_placement(self, *_):
+        if not hasattr(self, "start_spin"):  # noch im Aufbau
+            return
+        fmt = self.format_combo.currentData()
+        self.card_w.setEnabled(fmt == FORMAT_CUSTOM)
+        self.card_h.setEnabled(fmt == FORMAT_CUSTOM)
         template = self._template()
+        placement = self._placement()
+        w, h = placement.size_mm(template)
+        if fmt == FORMAT_ISO:  # Felder zeigen das Standardformat
+            for spin, value in zip((self.card_w, self.card_h), CARD_ISO_MM):
+                spin.blockSignals(True)
+                spin.setValue(value)
+                spin.blockSignals(False)
+        fixed = placement.fill_label or template.cut_marks
+        for widget in (self.align_label, self.align_x, self.align_y):
+            widget.setEnabled(not fixed)
+        label = f"{_mm(template.label_w)} × {_mm(template.label_h)} mm"
+        if template.cut_marks:
+            note = f"Zum Ausschneiden: {template.per_sheet} Karten je Bogen in Kartengröße."
+        elif placement.fill_label:
+            note = f"Das Cover füllt das ganze Etikett ({label})."
+        elif w > template.label_w + 0.01 or h > template.label_h + 0.01:
+            note = (f"Die Karte ist größer als das Etikett ({label}): Das Cover wird am Etikettenrand "
+                    "abgeschnitten. Für Aufkleber auf die Karte besser „Etikett ganz füllen“ wählen.")
+        else:
+            note = (f"Etikett {label}, Karte {_mm(w)} × {_mm(h)} mm. Liegt die Karte an zwei Kanten des "
+                    "Etiketts, schneidest du nur noch an zwei Seiten.")
+        self.placement_note.setText(note)
         self.start_spin.setRange(1, template.per_sheet)
-        self.template_note.setText(template.note)
 
     def _check_all(self, state):
         for row in range(self.folder_list.count()):
@@ -142,7 +246,7 @@ class PrintSheetDialog(QDialog):
     def _items(self) -> List[SheetItem]:
         """Rendert jede gewaehlte Karte passend zur Etikettengroesse neu aus dem
         Rohmotiv (card_art_raw.png) - faellt sonst auf card.png zurueck."""
-        spec = self._template().card_spec()
+        spec = self._placement().card_spec(self._template())
         items = []
         backs = []
         for row in range(self.folder_list.count()):
@@ -172,6 +276,13 @@ class PrintSheetDialog(QDialog):
         settings.setValue(ai_settings.SETTINGS_TEMPLATE, template.key)
         settings.setValue(ai_settings.SETTINGS_OFFSET_X, self.offset_x.value())
         settings.setValue(ai_settings.SETTINGS_OFFSET_Y, self.offset_y.value())
+        placement = self._placement()
+        settings.setValue(ai_settings.SETTINGS_CARD_FORMAT, self.format_combo.currentData())
+        if self.format_combo.currentData() == FORMAT_CUSTOM:
+            settings.setValue(ai_settings.SETTINGS_CARD_W, self.card_w.value())
+            settings.setValue(ai_settings.SETTINGS_CARD_H, self.card_h.value())
+        settings.setValue(ai_settings.SETTINGS_ALIGN_X, placement.align_x)
+        settings.setValue(ai_settings.SETTINGS_ALIGN_Y, placement.align_y)
 
         items = [] if test_page else self._items()
         if not test_page and not items:
@@ -184,7 +295,8 @@ class PrintSheetDialog(QDialog):
             return
         try:
             pages = build_sheets(items, template, start_slot=self.start_spin.value() - 1,
-                                 offset_mm=(self.offset_x.value(), self.offset_y.value()), outline=test_page)
+                                 offset_mm=(self.offset_x.value(), self.offset_y.value()), outline=test_page,
+                                 placement=placement)
             save_pdf(pages, path)
         except Exception as e:
             QMessageBox.warning(self, "PDF fehlgeschlagen", str(e))

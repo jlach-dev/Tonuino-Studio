@@ -181,12 +181,39 @@ def test_card_text_keeps_series_word_and_ignores_single_track_albums():
     assert derive_card_text(two) == ("Bibi Blocksberg", "Folge 1: A\nFolge 2: B")
 
 
+
 def test_townstix_a4_8_fills_the_sheet_without_gaps():
     template = LABEL_TEMPLATES["townstix_a4_8"]
     assert template.per_sheet == 8 and template.slot_origin_mm(0) == (0.0, 0.0)
     assert template.slot_origin_mm(3) == (105.0, 74.25)
     x, y = template.slot_origin_mm(7)
     assert (x + template.label_w, y + template.label_h) == (210.0, 297.0)
-    pages = build_sheets([SheetItem(Image.new("RGB", (1011, 638), (255, 0, 0)), ORIENTATION_LANDSCAPE)] * 8, template, dpi=100)
-    assert len(pages) == 1 and pages[0].getpixel((1, 1)) == (255, 0, 0)
-    assert pages[0].getpixel((pages[0].width - 2, pages[0].height - 2)) == (255, 0, 0)
+
+
+def test_cover_is_printed_at_card_size_and_aligned_in_the_label():
+    from core.sheet_pdf import ALIGN_CENTER, ALIGN_END, Placement, card_box_mm
+    template = LABEL_TEMPLATES["townstix_a4_8"]
+    assert card_box_mm(template, Placement(), 3) == (105.0, 74.25, 85.6, 53.98)  # links oben buendig
+    x, y, w, h = card_box_mm(template, Placement(align_x=ALIGN_END, align_y=ALIGN_CENTER), 0)
+    assert (round(x + w, 2), round(y, 3)) == (105.0, round((74.25 - 53.98) / 2, 3))
+    assert card_box_mm(template, Placement(fill_label=True), 0) == (0.0, 0.0, 105.0, 74.25)
+    item = SheetItem(Image.new("RGB", (1011, 638), (255, 0, 0)), ORIENTATION_LANDSCAPE)
+    page = build_sheets([item], template, dpi=100)[0]
+    px = mm_to_px(85.6, 100)
+    assert page.getpixel((px - 2, 5)) == (255, 0, 0) and page.getpixel((px + 2, 5)) == (255, 255, 255)
+    assert page.getpixel((5, mm_to_px(53.98, 100) + 2)) == (255, 255, 255)
+
+
+def test_card_larger_than_label_is_clipped_and_cut_sheets_follow_the_card_format():
+    from core.sheet_pdf import Placement, layout_for
+    herma = LABEL_TEMPLATES["herma5028"]
+    item = SheetItem(Image.new("RGB", (1011, 638), (255, 0, 0)), ORIENTATION_LANDSCAPE)
+    page = build_sheets([item], herma, dpi=100)[0]
+    x, y = herma.slot_origin_mm(0)
+    # nichts ragt unter das Etikett, obwohl die Karte hoeher ist
+    assert page.getpixel((mm_to_px(x + 10, 100), mm_to_px(y + herma.label_h, 100) + 2)) == (255, 255, 255)
+    cut = layout_for(LABEL_TEMPLATES["iso_cut"], Placement(card_w=88.0, card_h=58.0))
+    assert (cut.label_w, cut.label_h) == (88.0, 58.0) and cut.per_sheet == 8
+    assert layout_for(LABEL_TEMPLATES["iso_cut"], Placement(card_w=90.0, card_h=60.0)).per_sheet == 3  # 1 x 3
+    x, y = cut.slot_origin_mm(cut.per_sheet - 1)
+    assert cut.margin_left >= 0 and x + cut.label_w <= 210 and y + cut.label_h <= 297

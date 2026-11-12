@@ -530,12 +530,18 @@ Menü **Kartencover** → **Druckbogen (PDF) erstellen …**. Angeboten werden n
 1. **Karten auswählen:** Häkchen setzen, **Alle** oder **Keine**.
 2. **Etikettenbogen:**
    - **HERMA 5028 (83,8 × 50,8 mm, 10/Bogen)**: Die Bogenränder sind nicht offiziell veröffentlicht, das Raster ist angenommen. Drucke deshalb die Testseite.
-   - **Townstix A4-8 (105 × 74,25 mm, 8/Bogen)**: zwei Spalten, vier Reihen, ohne Rand und Abstand. Die Etiketten reichen bis an den Papierrand. Kann dein Drucker nicht randlos drucken, bleibt an den äußeren Etiketten ein schmaler weißer Streifen. Die Etiketten sind etwas gedrungener als eine ISO-Karte; die App schneidet das Motiv dafür minimal zu.
-   - **ISO-Karte 85,6 × 54 mm, Schnittmarken (8/Bogen)**: zum Selbstausschneiden, mit 2 mm Beschnitt.
-3. **Exemplare je Karte:** 1 bis 10.
-4. **Rückseiten mitdrucken:** Rückseiten folgen als eigene Etiketten hinter allen Vorderseiten. Hochformat-Karten werden für den Druck gedreht.
-5. **Beginnen bei Etikett Nr.:** für angebrochene Bögen. Gezählt wird zeilenweise von links oben.
-6. **Druck-Versatz (mm):** X und Y von −10 bis +10, zum Korrigieren des Druckbilds.
+   - **Townstix A4-8 (105 × 74,25 mm, 8/Bogen)**: zwei Spalten, vier Reihen, ohne Rand und Abstand. Die Etiketten reichen bis an den Papierrand. Kann dein Drucker nicht randlos drucken, bleibt an den äußeren Etiketten ein schmaler weißer Streifen. Das Cover wird in Kartengröße gedruckt und liegt im Etikett so, wie unter **Lage im Etikett** eingestellt.
+   - **Zum Ausschneiden mit Schnittmarken (Kartenformat)**: zum Selbstausschneiden, mit 2 mm Beschnitt. Das Raster folgt dem Kartenformat, bei der Standardkarte 8 je Bogen.
+3. **Kartenformat:** wie groß das Cover gedruckt wird.
+   - **Standard-RFID-Karte (85,6 × 53,98 mm)**: Voreinstellung, so groß wie die Karte, auch auf größeren Etiketten.
+   - **Eigenes Kartenformat**: Breite und Höhe in mm, für andere Karten.
+   - **Etikett ganz füllen**: das Cover in Etikettengröße, etwa für Aufkleber, die kleiner als die Karte sind (HERMA 5028).
+   Ist die Karte größer als das Etikett, schneidet die App das Cover am Etikettenrand ab; nichts ragt auf das Nachbaretikett.
+4. **Lage im Etikett:** oben, mittig oder unten und links, mittig oder rechts. Liegt die Karte an zwei Kanten des Etiketts (Voreinstellung: oben links), schneidest du nur noch an zwei Seiten. Die Testseite zeigt die Karte blau im roten Etikett.
+5. **Exemplare je Karte:** 1 bis 10.
+6. **Rückseiten mitdrucken:** Rückseiten folgen als eigene Etiketten hinter allen Vorderseiten. Hochformat-Karten werden für den Druck gedreht.
+7. **Beginnen bei Etikett Nr.:** für angebrochene Bögen. Gezählt wird zeilenweise von links oben.
+8. **Druck-Versatz (mm):** X und Y von −10 bis +10, zum Korrigieren des Druckbilds.
 
 **So druckst du passgenau:**
 

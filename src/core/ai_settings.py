@@ -61,6 +61,11 @@ SETTINGS_STYLE = "covers/default_style"
 SETTINGS_TEMPLATE = "covers/label_template"
 SETTINGS_OFFSET_X = "covers/offset_x_mm"
 SETTINGS_OFFSET_Y = "covers/offset_y_mm"
+SETTINGS_CARD_FORMAT = "covers/print_card_format"  # iso | custom | fill
+SETTINGS_CARD_W = "covers/print_card_w_mm"
+SETTINGS_CARD_H = "covers/print_card_h_mm"
+SETTINGS_ALIGN_X = "covers/print_align_x"
+SETTINGS_ALIGN_Y = "covers/print_align_y"
 
 
 def api_key_from_env() -> Optional[str]:
