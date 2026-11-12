@@ -294,8 +294,9 @@ def test_read_cards_window_shows_each_card(setup):
         window.deleteLater()
 
 
-def test_click_on_device_folder_shows_its_cards(setup):
-    """Klick auf einen Ordner der Seitenleiste: Infos und alle Karten, die darauf zeigen"""
+def test_click_on_device_folder_shows_card_and_folder_in_one_view(setup):
+    """Klick auf einen Ordner: Kartenansicht mit allen Karten des Ordners und den Dateien;
+    Ordner ohne Karte: Ordnerseite mit Album bzw. Dateien. Filter in der Ordnerliste."""
     from gui.main_window import MainWindow
     window = MainWindow()
     try:
@@ -303,24 +304,29 @@ def test_click_on_device_folder_shows_its_cards(setup):
         item = next(side.folder_list.item(i) for i in range(side.folder_list.count())
                     if side.folder_list.item(i).text() == "Hörspiele")
         side.folder_list.itemClicked.emit(item)
+        assert page.pages.currentIndex() == 1 and page.card.card_id == CARD_A
+        assert not page.siblings_box.isHidden() and page.siblings_tree.topLevelItemCount() == 1
+        row = page.siblings_tree.topLevelItem(0)
+        assert row.text(2) == "zugewiesen" and row.font(0).bold()  # gezeigte Karte hervorgehoben
+        assert page.file_list.count() == 2 and page.btn_assign_more.isEnabled()
+
+        window._espuino_show_folder("/Leer")  # Ordner ohne Karte
         folder_page = page.folder_page
-        assert page.pages.currentWidget() is folder_page and folder_page.folder == "/Hörspiele"
-        assert folder_page.tree.topLevelItemCount() == 1 and folder_page.empty_label.isHidden()
-        row = folder_page.tree.topLevelItem(0)
-        assert row.data(0, 0x0100) == CARD_A and row.text(2) == "zugewiesen: /Hörspiele/Fuchsbande"
-        assert "Kein passendes Album" in folder_page.meta_label.text() and folder_page.btn_assign.isEnabled()
-        folder_page.tree.itemClicked.emit(row, 0)  # Karte oeffnen
-        assert page.card is not None and page.card.card_id == CARD_A
-        musik = next(side.folder_list.item(i) for i in range(side.folder_list.count())
-                     if side.folder_list.item(i).text() == "Musik")
-        side.folder_list.itemClicked.emit(musik)
-        assert folder_page.tree.topLevelItemCount() == 1  # Karte B zeigt auf eine Datei darin
+        assert page.pages.currentWidget() is folder_page and folder_page.tree.isHidden()
+        assert not folder_page.empty_label.isHidden() and folder_page.file_list.count() == 1
+        assert not folder_page.btn_cover.isEnabled()  # weder Album noch Karte
         folder_page.back_requested.emit()
         assert page.pages.currentIndex() == 2
+
+        side.folder_filter.setText("musik")
+        visible = [side.folder_list.item(i).text() for i in range(side.folder_list.count())
+                   if not side.folder_list.item(i).isHidden()]
+        assert visible == ["Musik"]
+        side.folder_filter.clear()
+        assert all(not side.folder_list.item(i).isHidden() for i in range(side.folder_list.count()))
     finally:
         window.close()
         window.deleteLater()
-
 
 def test_card_info_and_folder_page_show_the_library_album(setup, tmp_path, monkeypatch):
     """Karte mit Album in der Bibliothek: Album und Vorschaubild (frueher AttributeError)"""
@@ -340,8 +346,8 @@ def test_card_info_and_folder_page_show_the_library_album(setup, tmp_path, monke
         info = window._espuino_card_info(CARD_A)
         assert info.album == "Die Fuchsbande" and info.album_detail == "2 Titel, 10 min"
         assert info.album_cover_path == str(thumb)
-        window._espuino_show_folder("/Hörspiele/Fuchsbande")
-        assert "Album: Die Fuchsbande" in window.mediahub_page.folder_page.meta_label.text()
+        window._espuino_show_folder("/Hörspiele/Fuchsbande")  # Ordner mit Karte: Kartenansicht
+        assert window.mediahub_page.card.card_id == CARD_A
         monkeypatch.setattr(window.library_view, "library", None)  # Bibliothek noch nicht geladen
         assert window._espuino_card_info(CARD_A).album_cover_path == ""
     finally:
@@ -385,8 +391,9 @@ def test_folder_page_opens_the_cover_manager_of_the_album(setup, monkeypatch, tm
         opened = []
         monkeypatch.setattr(window, "_espuino_album_for_folder", lambda folder: album)
         monkeypatch.setattr(window, "_library_cover", lambda a, focus=None: opened.append((a, focus)))
-        window._espuino_show_folder("/Musik")
+        window._espuino_show_folder("/Neues Album")  # Ordner ohne Karte
         folder_page = window.mediahub_page.folder_page
+        assert "Album: Die Fuchsbande" in folder_page.meta_label.text() and folder_page.file_list.count() == 1
         assert folder_page.btn_cover.isEnabled()
         folder_page.btn_cover.click()
         assert opened and opened[0][0] is album

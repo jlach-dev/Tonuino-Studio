@@ -144,6 +144,11 @@ class EspuinoDeviceSidebar(QWidget):
         layout.addWidget(self.btn_reload)
         self.folders_label = QLabel("Auf dem ESPuino:")
         layout.addWidget(self.folders_label)
+        self.folder_filter = QLineEdit()
+        self.folder_filter.setPlaceholderText("Ordner filtern …")
+        self.folder_filter.setClearButtonEnabled(True)
+        self.folder_filter.textChanged.connect(self._apply_folder_filter)
+        layout.addWidget(self.folder_filter)
         self.folder_list = DeviceFolderList()
         self.folder_list.setObjectName("folderList")
         self.folder_list.albums_dropped.connect(self.albums_dropped)
@@ -211,10 +216,19 @@ class EspuinoDeviceSidebar(QWidget):
                 item.setForeground(QBrush(QColor(theme.OVERLAY2)))
                 item.setToolTip("Keine Karte zeigt auf diesen Ordner")
             self.folder_list.addItem(item)
+        self._apply_folder_filter()
         if state.folders is None:
             self.folders_label.setText("Auf dem ESPuino: (unbekannt)")
         else:
             self.folders_label.setText(f"Auf dem ESPuino: {len(state.folders)} Ordner")
+
+    def _apply_folder_filter(self, *_):
+        """Ordner nach Namen oder Kartennamen filtern (stehen im Tooltip)"""
+        needle = self.folder_filter.text().strip().casefold()
+        for row in range(self.folder_list.count()):
+            item = self.folder_list.item(row)
+            text = (item.text() + " " + (item.toolTip() or "")).casefold()
+            item.setHidden(bool(needle) and needle not in text)
 
     def _folder_menu(self, pos: QPoint):
         item = self.folder_list.itemAt(pos)
@@ -334,6 +348,53 @@ def in_folder(path: str, folder: str) -> bool:
     return bool(path) and (path == folder or path.startswith(folder + "/"))
 
 
+class FolderCardsTree(QTreeWidget):
+    """Karten, die auf einen Ordner zeigen (Kartenseite und Ordnerseite)"""
+    card_selected = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("trackList")
+        self.setRootIsDecorated(False)
+        self.setHeaderLabels(["Karte", "Nummer", "Auf diesem ESPuino", "Cover"])
+        header = self.header()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in range(1, 4):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        self.itemClicked.connect(lambda item, _col: self.card_selected.emit(item.data(0, FOLDER_ROLE)))
+        self.itemActivated.connect(lambda item, _col: self.card_selected.emit(item.data(0, FOLDER_ROLE)))
+
+    def set_cards(self, folder: str, cards: List[MediahubCard], has_cover: Dict[str, bool], current: str = ""):
+        self.clear()
+        for card in cards:
+            if card.device_target:  # Zuweisung auf dem verbundenen ESPuino
+                if same_folder(card.device_target, folder):
+                    here = "zugewiesen"
+                elif in_folder(card.device_target, folder):
+                    here = "zugewiesen: " + card.device_target
+                else:
+                    here = f"zeigt auf {card.device_target}"
+            elif card.device_status == NOT_ASSIGNED:
+                here = "nicht zugewiesen"
+            else:
+                here = "?"  # nicht verbunden
+            item = QTreeWidgetItem([card.label, format_card_id(card.card_id), here,
+                                    "✓" if has_cover.get(card.card_id) else "–"])
+            item.setData(0, FOLDER_ROLE, card.card_id)
+            if not here.startswith("zugewiesen"):
+                item.setForeground(2, QBrush(QColor(theme.YELLOW)))
+            if card.card_id == current:
+                font = item.font(0)
+                font.setBold(True)
+                for column in range(4):
+                    item.setFont(column, font)
+            self.addTopLevelItem(item)
+            if card.card_id == current:
+                self.setCurrentItem(item)
+        rows = max(1, len(cards))
+        self.setFixedHeight(self.header().sizeHint().height() + rows * max(24, self.sizeHintForRow(0)) + 6)
+
+
 class FolderPage(QWidget):
     """Ein Ordner auf der SD-Karte des ESPuino: Album und alle Karten, die darauf zeigen"""
     back_requested = pyqtSignal()
@@ -395,23 +456,22 @@ class FolderPage(QWidget):
         self.cards_title = QLabel("Karten für diesen Ordner")
         self.cards_title.setObjectName("sectionTitle")
         layout.addWidget(self.cards_title)
-        self.tree = QTreeWidget()
-        self.tree.setObjectName("trackList")
-        self.tree.setRootIsDecorated(False)
-        self.tree.setHeaderLabels(["Karte", "Nummer", "Auf diesem ESPuino", "Cover"])
-        header = self.tree.header()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 4):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.itemClicked.connect(lambda item, _col: self.card_selected.emit(item.data(0, FOLDER_ROLE)))
-        self.tree.itemActivated.connect(lambda item, _col: self.card_selected.emit(item.data(0, FOLDER_ROLE)))
-        layout.addWidget(self.tree, 1)
+        self.tree = FolderCardsTree()
+        self.tree.card_selected.connect(self.card_selected)
+        layout.addWidget(self.tree)
         self.empty_label = QLabel("Noch keine Karte zeigt auf diesen Ordner.")
         self.empty_label.setStyleSheet(f"color: {theme.OVERLAY2};")
         layout.addWidget(self.empty_label)
+        files_title = QLabel("Dateien")
+        files_title.setObjectName("sectionTitle")
+        layout.addWidget(files_title)
+        self.file_list = QListWidget()
+        self.file_list.setObjectName("trackList")
+        layout.addWidget(self.file_list, 1)
 
     def show_folder(self, folder: str, meta: List[str], preview_path: str, cards: List[MediahubCard],
-                    has_cover: Dict[str, bool], can_assign: bool, can_cover: bool = False):
+                    has_cover: Dict[str, bool], can_assign: bool, can_cover: bool = False,
+                    files: Optional[List[str]] = None):
         """cards: bekannte Karten, die auf diesen Ordner zeigen (hier oder laut Verzeichnis)"""
         self.folder = folder
         self.title_label.setText(folder.strip("/").rpartition("/")[2] or folder)
@@ -431,25 +491,16 @@ class FolderPage(QWidget):
         self.btn_cover.setEnabled(can_cover)
         self.btn_cover.setToolTip("" if can_cover else "Weder ein Album in der Bibliothek noch eine Karte mit "
                                   "Dateien gefunden")
-        self.tree.clear()
-        for card in cards:
-            if card.device_target:  # Zuweisung auf dem verbundenen ESPuino
-                if same_folder(card.device_target, folder):
-                    here = "zugewiesen"
-                elif in_folder(card.device_target, folder):
-                    here = "zugewiesen: " + card.device_target
-                else:
-                    here = f"zeigt auf {card.device_target}"
-            elif card.device_status == NOT_ASSIGNED:
-                here = "nicht zugewiesen"
-            else:
-                here = "?"  # nicht verbunden
-            item = QTreeWidgetItem([card.label, format_card_id(card.card_id), here,
-                                    "✓" if has_cover.get(card.card_id) else "–"])
-            item.setData(0, FOLDER_ROLE, card.card_id)
-            if not here.startswith("zugewiesen"):
-                item.setForeground(2, QBrush(QColor(theme.YELLOW)))
-            self.tree.addTopLevelItem(item)
+        self.tree.set_cards(folder, cards, has_cover)
+        self.tree.setVisible(bool(cards))
+        self.file_list.clear()
+        for name in files or []:
+            self.file_list.addItem(name)
+        if files is not None and not files:
+            self.file_list.addItem("Keine Audiodateien gefunden")
+        if files is None:
+            self.file_list.addItem("Dateien unbekannt – kein Album in der Bibliothek, "
+                                   "und die SD-Karte steckt nicht im PC")
         count = len(cards)
         self.cards_title.setText(f"Karten für diesen Ordner ({count})")
         self.empty_label.setVisible(count == 0)

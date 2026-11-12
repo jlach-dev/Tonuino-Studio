@@ -129,6 +129,8 @@ class MediahubPage(QWidget):
     print_requested = pyqtSignal()
     transfer_requested = pyqtSignal(str)  # card_id: Album auf diesen ESPuino bringen und zuweisen
     back_requested = pyqtSignal()  # von der Karte zurueck zur Kartentabelle (ESPuino direkt)
+    sibling_selected = pyqtSignal(str)  # andere Karte desselben Ordners (ESPuino direkt)
+    assign_folder_requested = pyqtSignal(str)  # weitere Karte fuer den Ordner der Karte
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -267,6 +269,29 @@ class MediahubPage(QWidget):
         head_layout.addLayout(info, 1)
         layout.addWidget(head)
 
+        from gui.espuino_device_view import FolderCardsTree
+        siblings_row = QHBoxLayout()
+        self.siblings_title = QLabel("Karten für diesen Ordner")
+        self.siblings_title.setObjectName("sectionTitle")
+        siblings_row.addWidget(self.siblings_title)
+        siblings_row.addStretch(1)
+        self.btn_assign_more = QPushButton("Weitere Karte zuweisen …")
+        self.btn_assign_more.setObjectName("ghostButton")
+        self.btn_assign_more.setToolTip("Noch eine Karte auf den ESPuino legen und demselben Ordner zuweisen, "
+                                        "etwa für ein zweites Kartenset")
+        self.btn_assign_more.clicked.connect(
+            lambda: self.card and self.assign_folder_requested.emit(self.card.sd_path))
+        siblings_row.addWidget(self.btn_assign_more)
+        self.siblings_box = QWidget()
+        siblings_layout = QVBoxLayout(self.siblings_box)
+        siblings_layout.setContentsMargins(0, 0, 0, 0)
+        siblings_layout.addLayout(siblings_row)
+        self.siblings_tree = FolderCardsTree()
+        self.siblings_tree.card_selected.connect(self.sibling_selected)
+        siblings_layout.addWidget(self.siblings_tree)
+        self.siblings_box.hide()
+        layout.addWidget(self.siblings_box)
+
         files_title = QLabel("Dateien")
         files_title.setObjectName("sectionTitle")
         layout.addWidget(files_title)
@@ -274,6 +299,17 @@ class MediahubPage(QWidget):
         self.file_list.setObjectName("trackList")
         layout.addWidget(self.file_list, 1)
         return page
+
+    def set_folder_cards(self, cards, has_cover: dict, can_assign: bool):
+        """ESPuino direkt: alle Karten, die auf den Ordner der gezeigten Karte zeigen"""
+        card = self.card
+        if card is None or not card.sd_path:
+            self.siblings_box.hide()
+            return
+        self.siblings_title.setText(f"Karten für diesen Ordner ({len(cards)})")
+        self.siblings_tree.set_cards(card.sd_path, cards, has_cover, current=card.card_id)
+        self.btn_assign_more.setEnabled(can_assign)
+        self.siblings_box.show()
 
     def show_folder(self, *args, **kwargs):
         self.card = None
