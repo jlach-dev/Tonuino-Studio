@@ -612,7 +612,7 @@ Der ESPuino speichert nichts auf der Karte. Er erkennt sie an ihrer Nummer, die 
 
 **ESPuino direkt im WLAN:**
 
-- **Adresse:** die IP-Adresse des ESPuino, etwa `192.168.178.20`. Sie steht in seiner Weboberfläche und in deinem Router. **Verbindung testen** zeigt die Firmware des ESPuino.
+- **Adresse:** die IP-Adresse des ESPuino, etwa `192.168.178.20`, oder sein Hostname. Sie steht in seiner Weboberfläche und in deinem Router. **Verbindung testen** zeigt die Firmware des ESPuino. Weitere ESPuinos legst du unter **Mit ESPuino verbinden** an, siehe unten.
 - **SD-Karte:** die SD-Karte des ESPuino im Kartenleser des PCs, oder eine Kopie davon. Die App liest die Musik von dort, nicht über das WLAN; das wäre zu langsam. Steckt die Karte gerade nicht im PC, lass das Feld leer. Die Kartenliste geht trotzdem, nur Kartencover brauchen die Dateien.
 
 **ESPuino-Mediahub:**
@@ -623,6 +623,18 @@ Der ESPuino speichert nichts auf der Karte. Er erkennt sie an ihrer Nummer, die 
 Mit Mediahub liest die App `db.json` nur. Sie schreibt nichts hinein und spricht den Mediahub nicht an. Die Kartencover liegen in beiden Fällen im Datenordner der App und gehören zur Kartennummer.
 
 **Karten neu einlesen** liest die Karten erneut, etwa nachdem du in der Weboberfläche des ESPuino oder im Mediahub eine Karte zugewiesen hast.
+
+### Mit ESPuino verbinden, mehrere ESPuinos
+
+Mit **ESPuino direkt im WLAN** fragt die App beim Start im Fenster **Mit ESPuino verbinden**, mit welchem ESPuino du arbeiten willst. Das Hauptfenster ist da schon offen; ein ausgeschalteter ESPuino hält den Start also nicht auf.
+
+- Die Liste zeigt alle eingerichteten ESPuinos mit Name, Adresse und Status. Ein erreichbarer ESPuino zeigt **verbunden**, dazu seinen Hostnamen aus seinen WLAN-Einstellungen, seine IP und die Firmware. Wer nicht antwortet, steht auf **nicht erreichbar**. Die App fragt dann alle fünf Sekunden erneut; du kannst den ESPuino also einschalten, während das Fenster offen ist.
+- **Verbinden** (oder Doppelklick) geht nur bei einem erreichbaren ESPuino.
+- **Hinzufügen …** legt einen weiteren ESPuino an: Adresse (IP oder Hostname), Name und, falls vorhanden, seine SD-Karte im Kartenleser. Lässt du den Namen leer, nimmt die App den Hostnamen des ESPuino. Ein ausgeschalteter ESPuino lässt sich nach Rückfrage trotzdem speichern. **Bearbeiten …** und **Entfernen** ändern nur diese Liste, nicht den ESPuino und nicht die bekannten Karten.
+- **Beim Start fragen** abgewählt: Die App verbindet sich beim Start ohne Rückfrage mit dem zuletzt benutzten ESPuino, sobald er antwortet. Das Fenster bleibt nur offen, solange er nicht antwortet.
+- **Ohne ESPuino weiter** zeigt die bekannten Karten mit ihren Kartencovern. Zuweisen, Übertragen über das WLAN und der Gerätestand gehen erst nach dem Verbinden. Steckt die SD-Karte im Kartenleser, kannst du trotzdem dorthin übertragen.
+
+Später wechselst du mit **ESPuino wechseln …** oben in der Seitenleiste (ohne Verbindung: **Verbinden …**). Die bekannten Karten gelten für alle ESPuinos; der Status **zugewiesen** und **Ordner** bezieht sich immer auf den verbundenen.
 
 ### Karte zuweisen (ESPuino direkt)
 

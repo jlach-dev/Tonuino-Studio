@@ -341,7 +341,7 @@ def test_ai_back_button_creates_image_to_assign(qt_app, tmp_path, monkeypatch):
     class FakeBackWorker:
         done = failed = refused = finished = FakeSignal()
 
-        def __init__(self, client, model, request, front_bytes, wish, with_tracklist):
+        def __init__(self, client, model, request, front_bytes, wish, with_tracklist, masking=None):
             assert with_tracklist and front_bytes == front.data and wish == "Fritzi im Wald"
 
         def start(self):

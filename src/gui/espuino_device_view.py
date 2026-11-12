@@ -9,6 +9,7 @@ ESPuino direkt (siehe core/espuino_device.py, core/espuino_cards.py):
 Eigene Datei des Forks (siehe core/branding.py).
 """
 
+import html
 from typing import Dict, List, Optional
 
 from PyQt6.QtCore import QPoint, Qt, pyqtSignal
@@ -18,6 +19,7 @@ from PyQt6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from core.espuino_device import NOT_CONNECTED
 from core.espuino_cards import ASSIGNED, ASSIGNED_OTHER, NOT_ASSIGNED
 from core.espuino_transfer import safe_name
 from core.mediahub_cards import MediahubCard, format_card_id
@@ -100,6 +102,7 @@ class DeviceFolderList(QListWidget):
 class EspuinoDeviceSidebar(QWidget):
     """Seitenleiste im ESPuino-Modus mit Quelle "ESPuino direkt"""
     setup_requested = pyqtSignal()
+    connect_requested = pyqtSignal()
     assign_requested = pyqtSignal()
     reload_requested = pyqtSignal()
     albums_dropped = pyqtSignal(list)
@@ -114,6 +117,10 @@ class EspuinoDeviceSidebar(QWidget):
         self.device_label.setWordWrap(True)
         self.device_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.device_label)
+        self.btn_connect = QPushButton("Verbinden …")
+        self.btn_connect.setToolTip("Mit einem ESPuino im WLAN verbinden oder zu einem anderen wechseln")
+        self.btn_connect.clicked.connect(self.connect_requested)
+        layout.addWidget(self.btn_connect)
         self.btn_setup = QPushButton("ESPuino einrichten …")
         self.btn_setup.setToolTip("Adresse des ESPuino und SD-Karte im Kartenleser, oder den Mediahub wählen")
         self.btn_setup.clicked.connect(self.setup_requested)
@@ -140,20 +147,39 @@ class EspuinoDeviceSidebar(QWidget):
         self.drop_label.setStyleSheet(f"color: {theme.OVERLAY2};")
         layout.addWidget(self.drop_label)
 
-    def set_state(self, host: str, state, folder_cards: Dict[str, List[str]]):
+    def set_state(self, host: str, state, folder_cards: Dict[str, List[str]], name: str = ""):
         """state: core.espuino_device.DeviceState oder None (nicht eingerichtet).
-        folder_cards: "/Ordner" (klein) -> Kartennamen, die darauf zeigen"""
+        folder_cards: "/Ordner" (klein) -> Kartennamen, die darauf zeigen.
+        name: Name des Geraets in der Liste der ESPuinos"""
         configured = bool(host)
+        connected = state is not None and state.error != NOT_CONNECTED
         self.btn_assign.setEnabled(configured and state is not None and state.reachable)
-        self.btn_reload.setEnabled(configured)
+        self.btn_reload.setEnabled(configured and connected)
+        self.btn_connect.setText("ESPuino wechseln …" if configured and connected else "Verbinden …")
+        self.btn_connect.setObjectName("" if connected else "primaryButton")
+        self.btn_connect.style().unpolish(self.btn_connect)  # Stil nach dem Objektnamen neu anwenden
+        self.btn_connect.style().polish(self.btn_connect)
         self.folder_list.clear()
-        if not configured:
+        if state is None:
             self.device_label.setText("<b>ESPuino</b><br>noch nicht eingerichtet")
             self.folder_list.drop_enabled = False
             self.folder_list.drop_hint_blocked = "Zuerst „ESPuino einrichten“"
+            self.folders_label.setText("Auf dem ESPuino:")
             return
-        lines = [f"<b>ESPuino {host}</b>"]
-        if state.reachable:
+        if not configured:
+            self.device_label.setText("<b>Kein ESPuino verbunden</b><br>Bekannte Karten und Cover gehen trotzdem.")
+            self.folder_list.drop_enabled = False
+            self.folder_list.drop_hint_blocked = "Zuerst mit einem ESPuino verbinden"
+            self.folders_label.setText("Auf dem ESPuino: (nicht verbunden)")
+            return
+        title = html.escape(name or f"ESPuino {host}")
+        address = [host] if name and name != host else []
+        if state.ip and state.ip != host:
+            address.append(state.ip)
+        lines = [f"<b>{title}</b>"] + ([html.escape(" · ".join(address))] if address else [])
+        if not connected:
+            lines.append(f"<span style='color:{theme.OVERLAY2}'>nicht verbunden</span>")
+        elif state.reachable:
             lines.append(f"Firmware {state.firmware}")
             if state.total_bytes:
                 lines.append(f"SD-Karte: {_gb(state.total_bytes)}, {_gb(state.free_bytes)} frei")
@@ -164,7 +190,7 @@ class EspuinoDeviceSidebar(QWidget):
         self.device_label.setText("<br>".join(lines))
         can_drop = state.reachable or state.folders_from_pc
         self.folder_list.drop_enabled = can_drop
-        self.folder_list.drop_hint_blocked = "ESPuino nicht erreichbar"
+        self.folder_list.drop_hint_blocked = "ESPuino nicht erreichbar" if connected else "Erst verbinden"
         for folder in state.folders or []:
             cards = folder_cards.get(folder.strip("/").casefold(), [])
             item = QListWidgetItem(folder.strip("/"))

@@ -36,6 +36,8 @@ from core.mediahub_cards import KIND_FILES, Device, MediahubCard, MediahubData
 SETTINGS_SOURCE = "espuino/source"
 SETTINGS_HOST = "espuino/host"
 SETTINGS_SD_ROOT = "espuino/sd_root"
+SETTINGS_DEVICES = "espuino/devices"  # JSON-Liste aller eingerichteten ESPuinos
+SETTINGS_ASK_ON_START = "espuino/ask_on_start"
 SOURCE_DEVICE = "device"
 SOURCE_MEDIAHUB = "mediahub"
 SOURCES = (SOURCE_DEVICE, SOURCE_MEDIAHUB)
@@ -99,8 +101,8 @@ def _request(host: str, path: str, data: Optional[dict] = None, timeout: float =
         raise DeviceError(f"Unerwartete Antwort von {normalize_host(host)}{path} – ist das ein ESPuino?") from None
 
 
-def fetch_info(host: str) -> dict:
-    info = _request(host, "/info")
+def fetch_info(host: str, timeout: float = TIMEOUT) -> dict:
+    info = _request(host, "/info", timeout=timeout)
     if not isinstance(info, dict) or "software" not in info:
         raise DeviceError(f"{normalize_host(host)} antwortet, ist aber offenbar kein ESPuino.")
     return info
@@ -188,6 +190,7 @@ class DeviceState:
     reachable: bool = False
     error: str = ""
     firmware: str = ""
+    ip: str = ""
     total_bytes: int = 0
     free_bytes: int = 0
     assignments: Dict[str, Tuple[str, int]] = field(default_factory=dict)  # Karte -> (Ordner, Modus)
@@ -229,14 +232,22 @@ def list_dirs(host: str, sd_path: str = "/") -> Set[str]:
             if isinstance(e, dict) and e.get("dir") and e.get("name") and e["name"] != "System Volume Information"}
 
 
-def fetch_state(host: str, sd_root: str = "") -> DeviceState:
+NOT_CONNECTED = "Nicht verbunden"
+
+
+def fetch_state(host: str, sd_root: str = "", connect: bool = True) -> DeviceState:
     """Zuweisungen, Platz und Ordner des ESPuino. Steckt seine SD-Karte im PC
     (sd_root vorhanden), kommen die Ordner von dort. Nicht erreichbar: reachable
-    False und error gesetzt, die Ordner ggf. trotzdem aus dem Kartenleser."""
+    False und error gesetzt, die Ordner ggf. trotzdem aus dem Kartenleser.
+    connect False: gar nicht erst im WLAN fragen (error NOT_CONNECTED)."""
     state = DeviceState(host=normalize_host(host))
     try:
+        if not connect:
+            raise DeviceError(NOT_CONNECTED)
         info = fetch_info(state.host)
         state.firmware = firmware_label(info)
+        wifi = info.get("wifi") or {}
+        state.ip = str(wifi.get("ip") or "") if isinstance(wifi, dict) else ""
         sd = info.get("sdcard") or {}
         state.total_bytes = int(sd.get("totalBytes") or 0)
         state.free_bytes = int(sd.get("freeBytes") or 0)
@@ -354,6 +365,135 @@ def load_cards(host: str, sd_root: str, known=None, library_index=None) -> Media
     return data
 
 
+# --- Mehrere ESPuinos -------------------------------------------------------------
+#
+# Gespeichert als JSON-Liste unter SETTINGS_DEVICES; SETTINGS_HOST bleibt die Adresse
+# des zuletzt verbundenen Geraets (aeltere Fassungen kannten nur dieses eine).
+
+@dataclass
+class SavedDevice:
+    """Ein eingerichteter ESPuino: Name (frei oder sein Hostname), Adresse im WLAN
+    und der Ordner seiner SD-Karte auf dem PC (leer: steckt nicht im Kartenleser)"""
+    host: str
+    name: str = ""
+    sd_root: str = ""
+
+    @property
+    def label(self) -> str:
+        return self.name or self.host
+
+
+def _same_host(a: str, b: str) -> bool:
+    return a.strip().casefold() == b.strip().casefold()
+
+
+def saved_devices() -> List[SavedDevice]:
+    """Alle eingerichteten ESPuinos; uebernimmt die Einzeladresse aelterer Fassungen"""
+    from PyQt6.QtCore import QSettings
+    s = QSettings()
+    try:
+        raw = json.loads(s.value(SETTINGS_DEVICES, "", type=str) or "[]")
+    except json.JSONDecodeError:
+        raw = []
+    devices: List[SavedDevice] = []
+    for entry in raw if isinstance(raw, list) else []:
+        if isinstance(entry, dict) and str(entry.get("host") or "").strip():
+            host = str(entry["host"]).strip()
+            if not any(_same_host(d.host, host) for d in devices):
+                devices.append(SavedDevice(host, str(entry.get("name") or ""), str(entry.get("sd_root") or "")))
+    legacy = s.value(SETTINGS_HOST, "", type=str).strip()
+    if legacy and not any(_same_host(d.host, legacy) for d in devices):
+        devices.insert(0, SavedDevice(legacy, "", s.value(SETTINGS_SD_ROOT, "", type=str)))
+    return devices
+
+
+def store_devices(devices: List[SavedDevice]) -> None:
+    from PyQt6.QtCore import QSettings
+    QSettings().setValue(SETTINGS_DEVICES, json.dumps(
+        [{"host": d.host, "name": d.name, "sd_root": d.sd_root} for d in devices], ensure_ascii=False))
+
+
+def find_device(host: str) -> Optional[SavedDevice]:
+    return next((d for d in saved_devices() if _same_host(d.host, host)), None)
+
+
+def remember_device(host: str, name: Optional[str] = None, sd_root: Optional[str] = None) -> SavedDevice:
+    """Geraet anlegen oder aendern (None: Wert bleibt)"""
+    devices = saved_devices()
+    device = next((d for d in devices if _same_host(d.host, host)), None)
+    if device is None:
+        device = SavedDevice(host)
+        devices.append(device)
+    if name is not None:
+        device.name = name
+    if sd_root is not None:
+        device.sd_root = sd_root
+    store_devices(devices)
+    return device
+
+
+def forget_device(host: str) -> None:
+    from PyQt6.QtCore import QSettings
+    store_devices([d for d in saved_devices() if not _same_host(d.host, host)])
+    s = QSettings()
+    if _same_host(s.value(SETTINGS_HOST, "", type=str), host):
+        s.setValue(SETTINGS_HOST, "")
+        s.setValue(SETTINGS_SD_ROOT, "")
+
+
+def current_host() -> str:
+    from PyQt6.QtCore import QSettings
+    return QSettings().value(SETTINGS_HOST, "", type=str)
+
+
+def set_current(host: str) -> None:
+    """Mit diesem Geraet arbeiten (leer: mit keinem)"""
+    from PyQt6.QtCore import QSettings
+    s = QSettings()
+    device = find_device(host) if host else None
+    s.setValue(SETTINGS_HOST, device.host if device else "")
+    s.setValue(SETTINGS_SD_ROOT, device.sd_root if device else "")
+
+
+def fetch_hostname(host: str, timeout: float = TIMEOUT) -> str:
+    """Hostname, den der ESPuino in seinen WLAN-Einstellungen fuehrt ("" wenn unbekannt)"""
+    try:
+        data = _request(host, "/settings?section=wifi", timeout=timeout)
+    except DeviceError:
+        return ""
+    wifi = data.get("wifi", data) if isinstance(data, dict) else {}
+    return str(wifi.get("hostname") or "").strip() if isinstance(wifi, dict) else ""
+
+
+@dataclass
+class Probe:
+    """Ergebnis einer kurzen Pruefung, ob ein ESPuino gerade antwortet"""
+    host: str
+    reachable: bool = False
+    ip: str = ""
+    hostname: str = ""
+    firmware: str = ""
+    error: str = ""
+
+
+PROBE_TIMEOUT = 3
+
+
+def probe(host: str, timeout: float = PROBE_TIMEOUT) -> Probe:
+    result = Probe(host)
+    try:
+        info = fetch_info(host, timeout)
+    except DeviceError as exc:
+        result.error = str(exc)
+        return result
+    result.reachable = True
+    result.firmware = firmware_label(info)
+    wifi = info.get("wifi") or {}
+    result.ip = str(wifi.get("ip") or "") if isinstance(wifi, dict) else ""
+    result.hostname = fetch_hostname(host, timeout)
+    return result
+
+
 def settings() -> Tuple[str, str, str]:
     """(Quelle, Adresse des ESPuino, SD-Karte auf dem PC). Wer schon einen
     Mediahub eingerichtet hat, behaelt ihn als Quelle."""
@@ -366,14 +506,27 @@ def settings() -> Tuple[str, str, str]:
     return source, s.value(SETTINGS_HOST, "", type=str), s.value(SETTINGS_SD_ROOT, "", type=str)
 
 
-def save_settings(source: str, host: str, sd_root: str) -> None:
+def save_settings(source: str, host: str, sd_root: str, name: Optional[str] = None) -> None:
+    """Quelle speichern; mit Adresse wird der ESPuino (in der Liste) zum aktuellen"""
     if source not in SOURCES:
         raise ValueError(f"Unbekannte Quelle: {source!r}")
     from PyQt6.QtCore import QSettings
     s = QSettings()
     s.setValue(SETTINGS_SOURCE, source)
+    if host:
+        remember_device(host, name=name, sd_root=sd_root)
     s.setValue(SETTINGS_HOST, host)
     s.setValue(SETTINGS_SD_ROOT, sd_root)
+
+
+def ask_on_start() -> bool:
+    from PyQt6.QtCore import QSettings
+    return QSettings().value(SETTINGS_ASK_ON_START, True, type=bool)
+
+
+def set_ask_on_start(value: bool) -> None:
+    from PyQt6.QtCore import QSettings
+    QSettings().setValue(SETTINGS_ASK_ON_START, bool(value))
 
 
 def is_audio_file(path: str) -> bool:

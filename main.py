@@ -79,8 +79,13 @@ def main():
         from gui.first_start_dialog import ask_app_mode
         ask_app_mode()
 
+    # ESPuino: erst das Fenster zeigen, dann fragen, womit verbunden werden soll
+    smoke_test = bool(os.environ.get("TONUINO_SMOKE_TEST"))
+    MainWindow.espuino_ask_on_start = not smoke_test
     window = MainWindow()
     window.show()
+    if not smoke_test:
+        QTimer.singleShot(0, window.espuino_start_session)
 
     # CI startet die gebaute Datei und erwartet, dass sie von selbst sauber endet
     if os.environ.get("TONUINO_SMOKE_TEST"):

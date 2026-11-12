@@ -26,6 +26,8 @@ class FakeEspuino:
             "400400400400": {"id": "400400400400", "fileOrUrl": "http://hub.invalid", "playMode": 18},
         }
         self.posts = []
+        self.requests = []  # Pfade aller GET-Anfragen
+        self.hostname = "ESPuino-Testzimmer"
         self.files = {}  # "/Ordner/Datei" -> Inhalt, ueber POST /explorer hochgeladen
         self.dirs = {"/Hörspiele"}  # Ordner auf der SD-Karte
         fake = self
@@ -46,9 +48,13 @@ class FakeEspuino:
                 return urllib.parse.unquote(urllib.parse.urlparse(self.path).query.partition("path=")[2])
 
             def do_GET(self):
+                fake.requests.append(self.path)
                 if self.path == "/info":
                     self._send(200, {"software": {"version": "Software-revision: 20261008-DEV", "branch": "dev"},
-                                     "sdcard": {"totalBytes": "32000000000", "freeBytes": "31000000000"}})
+                                     "sdcard": {"totalBytes": "32000000000", "freeBytes": "31000000000"},
+                                     "wifi": {"ip": "192.0.2.24", "rssi": -50}})
+                elif self.path == "/settings?section=wifi":
+                    self._send(200, {"wifi": {"hostname": fake.hostname, "scanOnStart": True}})
                 elif self.path == "/rfid":
                     self._send(200, list(fake.assignments.values()))
                 elif self.path.startswith("/explorer"):

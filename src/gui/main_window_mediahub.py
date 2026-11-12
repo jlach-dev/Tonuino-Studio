@@ -45,6 +45,11 @@ MODE_MENU_LABELS = {
 class MediahubMixin:
     """Methoden von MainWindow (siehe Modul-Doku)"""
 
+    # main.py setzt das: beim Start nicht sofort im WLAN fragen (ein ausgeschalteter
+    # ESPuino wuerde den Start aufhalten), sondern nach dem Anzeigen fragen, womit
+    # verbunden werden soll (espuino_start_session). Tests verbinden sofort.
+    espuino_ask_on_start = False
+
     def _is_espuino(self) -> bool:
         return getattr(self, "app_mode", MODE_TONUINO) == MODE_ESPUINO
 
@@ -57,6 +62,7 @@ class MediahubMixin:
         self._mediahub_media_root = ""
         self._espuino_source = dev.SOURCE_DEVICE
         self._espuino_host = ""
+        self._espuino_connected = not self.espuino_ask_on_start
         self._espuino_known = None
         self._espuino_state = None
         self._add_mode_menu()
@@ -99,6 +105,7 @@ class MediahubMixin:
         sidebar_layout.insertWidget(sidebar_layout.indexOf(self.folder_list), self.mediahub_sidebar, 1)
         self.espuino_sidebar = EspuinoDeviceSidebar()
         self.espuino_sidebar.setup_requested.connect(self._mediahub_setup)
+        self.espuino_sidebar.connect_requested.connect(self.espuino_connect)
         self.espuino_sidebar.reload_requested.connect(self._mediahub_reload)
         self.espuino_sidebar.assign_requested.connect(self._espuino_assign)
         self.espuino_sidebar.assign_folder_requested.connect(self._espuino_assign_folder)
@@ -190,10 +197,34 @@ class MediahubMixin:
         if dialog.exec():
             if dialog.source == dev.SOURCE_DEVICE:
                 dev.save_settings(dev.SOURCE_DEVICE, dialog.host, dialog.sd_root)
+                self._espuino_connected = True  # der Dialog hat die Verbindung geprueft
             else:
                 dev.save_settings(dev.SOURCE_MEDIAHUB, host, sd_root)
                 mh.save_settings_paths(dialog.db_path, dialog.media_root)
             self._mediahub_reload()
+
+    def espuino_start_session(self):
+        """Nach dem Anzeigen des Fensters (main.py): mit welchem ESPuino verbinden?"""
+        if not self._is_espuino() or self._espuino_connected or dev.settings()[0] != dev.SOURCE_DEVICE:
+            return
+        self.espuino_connect(startup=True)
+
+    def espuino_connect(self, startup: bool = False):
+        """Dialog "Mit ESPuino verbinden"; Abbrechen beim Start: ohne Geraet weiter"""
+        from gui.espuino_connect_dialog import ConnectDialog
+        dialog = ConnectDialog(self, auto_connect=startup and not dev.ask_on_start())
+        accepted = dialog.exec()
+        host = dialog.selected_host
+        dialog.deleteLater()
+        if accepted and host:
+            dev.set_current(host)
+            self._espuino_connected = True
+        elif not startup:
+            if dev.find_device(self._espuino_host) is not None:
+                return  # abgebrochen: alles bleibt, wie es war
+            dev.set_current("")  # das aktuelle Geraet wurde entfernt
+            self._espuino_connected = False
+        self._mediahub_reload()
 
     def _espuino_is_device(self) -> bool:
         return self._espuino_source == dev.SOURCE_DEVICE
@@ -257,7 +288,8 @@ class MediahubMixin:
     def _espuino_reload_device(self, host: str, sd_root: str):
         page = self.mediahub_page
         self._mediahub_media_root = sd_root
-        if not host:
+        known = espuino_cards.load(self._espuino_data_dir())
+        if not host and not known.cards and not dev.saved_devices():
             self._mediahub_data = None
             self._espuino_state = None
             self.espuino_sidebar.set_state("", None, {})
@@ -265,8 +297,10 @@ class MediahubMixin:
                                "seine SD-Karte im Kartenleser. Studio liest dann seine Karten und kann neue "
                                "zuweisen.", configured=False)
             return
-        state = dev.fetch_state(host, sd_root)
-        known = espuino_cards.load(self._espuino_data_dir())
+        if host:
+            state = dev.fetch_state(host, sd_root, connect=self._espuino_connected)
+        else:  # bekannte Karten ohne Geraet
+            state = dev.DeviceState(host="", error=dev.NOT_CONNECTED)
         data, changed = dev.build_cards(known, state, self.library_view.index, sd_root)
         if changed:
             try:
@@ -278,14 +312,16 @@ class MediahubMixin:
         for card_id, (target, _mode) in state.assignments.items():
             card = known.get(card_id)
             folder_cards.setdefault(target.strip("/").casefold(), []).append(card.label if card else card_id)
-        self.espuino_sidebar.set_state(host, state, folder_cards)
+        device = dev.find_device(host)
+        self.espuino_sidebar.set_state(host, state, folder_cards, device.label if device else "")
         has_cover = self._mediahub_cover_map()
         page.cards_table.set_cards(data.cards, has_cover, state.reachable)
         if page.card is not None and mh.card_by_id(data, page.card.card_id) is not None:
             self._mediahub_show_card(page.card.card_id)
         else:
             self._mediahub_show_overview(has_cover)
-        self._status(f"{len(data.cards)} bekannte Karten" + ("" if state.reachable else " – ESPuino nicht erreichbar"))
+        offline = "" if state.reachable else " – ohne ESPuino" if not self._espuino_connected else             " – ESPuino nicht erreichbar"
+        self._status(f"{len(data.cards)} bekannte Karten" + offline)
 
     def _espuino_back(self):
         self.mediahub_page.card = None
@@ -335,7 +371,7 @@ class MediahubMixin:
 
     def _espuino_can_transfer(self) -> bool:
         source, host, sd_root = dev.settings()
-        return source == dev.SOURCE_DEVICE and bool(host or sd_root)
+        return source == dev.SOURCE_DEVICE and bool((host and self._espuino_connected) or sd_root)
 
     def _espuino_transfer_busy(self) -> bool:
         worker = getattr(self, "_espuino_transfer_worker", None)
