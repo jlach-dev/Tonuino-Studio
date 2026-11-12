@@ -179,3 +179,14 @@ def test_card_text_keeps_series_word_and_ignores_single_track_albums():
     two = FolderInfo(artist="Bibi Blocksberg", albums=["Bibi Blocksberg - Folge 1: A", "Bibi Blocksberg - Folge 2: B"],
                      album_counts={"Bibi Blocksberg - Folge 1: A": 4, "Bibi Blocksberg - Folge 2: B": 5})
     assert derive_card_text(two) == ("Bibi Blocksberg", "Folge 1: A\nFolge 2: B")
+
+
+def test_townstix_a4_8_fills_the_sheet_without_gaps():
+    template = LABEL_TEMPLATES["townstix_a4_8"]
+    assert template.per_sheet == 8 and template.slot_origin_mm(0) == (0.0, 0.0)
+    assert template.slot_origin_mm(3) == (105.0, 74.25)
+    x, y = template.slot_origin_mm(7)
+    assert (x + template.label_w, y + template.label_h) == (210.0, 297.0)
+    pages = build_sheets([SheetItem(Image.new("RGB", (1011, 638), (255, 0, 0)), ORIENTATION_LANDSCAPE)] * 8, template, dpi=100)
+    assert len(pages) == 1 and pages[0].getpixel((1, 1)) == (255, 0, 0)
+    assert pages[0].getpixel((pages[0].width - 2, pages[0].height - 2)) == (255, 0, 0)

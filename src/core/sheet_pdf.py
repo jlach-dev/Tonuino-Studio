@@ -70,6 +70,12 @@ LABEL_TEMPLATES: Dict[str, LabelTemplate] = {t.key: t for t in [
     _centered("herma5028", "HERMA 5028 (83,8 × 50,8 mm, 10/Bogen)",
               83.8, 50.8, 2, 5, gap_x=12.7, gap_y=0.0,
               note="Bogenränder nicht verifiziert – bitte Testseite drucken"),
+    # Townstix A4-8: 2 x 4 Etiketten ohne Rand und Abstand (Masse laut Hersteller,
+    # townstix.com/templates). Die meisten Drucker drucken nicht bis an den
+    # Papierrand - die aeusseren Etiketten bekommen dann einen weissen Streifen.
+    LabelTemplate("townstix_a4_8", "Townstix A4-8 (105 × 74,25 mm, 8/Bogen)",
+                  105.0, 74.25, 2, 4, 0.0, 0.0, 0.0, 0.0,
+                  note="Randlos: Drucker ohne Randlosdruck lassen außen einen weißen Streifen"),
     # Vollflaechiges A4-Etikett/Fotopapier, selbst ausschneiden
     _centered("iso_cut", "ISO-Karte 85,6 × 54 mm, Schnittmarken (8/Bogen)",
               85.6, 54.0, 2, 4, gap_x=10.0, gap_y=10.0, bleed=2.0, cut_marks=True, verified=True,

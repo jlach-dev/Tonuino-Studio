@@ -530,6 +530,7 @@ Menü **Kartencover** → **Druckbogen (PDF) erstellen …**. Angeboten werden n
 1. **Karten auswählen:** Häkchen setzen, **Alle** oder **Keine**.
 2. **Etikettenbogen:**
    - **HERMA 5028 (83,8 × 50,8 mm, 10/Bogen)**: Die Bogenränder sind nicht offiziell veröffentlicht, das Raster ist angenommen. Drucke deshalb die Testseite.
+   - **Townstix A4-8 (105 × 74,25 mm, 8/Bogen)**: zwei Spalten, vier Reihen, ohne Rand und Abstand. Die Etiketten reichen bis an den Papierrand. Kann dein Drucker nicht randlos drucken, bleibt an den äußeren Etiketten ein schmaler weißer Streifen. Die Etiketten sind etwas gedrungener als eine ISO-Karte; die App schneidet das Motiv dafür minimal zu.
    - **ISO-Karte 85,6 × 54 mm, Schnittmarken (8/Bogen)**: zum Selbstausschneiden, mit 2 mm Beschnitt.
 3. **Exemplare je Karte:** 1 bis 10.
 4. **Rückseiten mitdrucken:** Rückseiten folgen als eigene Etiketten hinter allen Vorderseiten. Hochformat-Karten werden für den Druck gedreht.
