@@ -126,7 +126,25 @@ class RFIDReader:
         # zusammenhaengende Folge von Kommandos sendet, haelt dieses Lock.
         self.lock = threading.RLock()
         self._scard_available = self._check_scard()
+        self._stale = False  # Verbindung tot (Leser kurz weg): poll() verbindet neu
     
+    # PC/SC-Fehler, nach denen die Verbindung nicht mehr taugt und neu aufgebaut werden muss
+    READER_GONE_CODES = ("0x80100017", "0x80100009", "0x8010001d", "0x8010002e")
+
+    @classmethod
+    def _reader_gone(cls, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return any(code in text for code in cls.READER_GONE_CODES)
+
+    def _note_failure(self, exc: Exception) -> bool:
+        """Merkt eine tote Verbindung (Warnung einmal je Ausfall). True, wenn es eine war."""
+        if not self._reader_gone(exc):
+            return False
+        if not self._stale:
+            log.warning(f"RFID-Leser nicht verfügbar, wird neu verbunden: {exc}")
+        self._stale = True
+        return True
+
     def _check_scard(self) -> bool:
         """Prueft ob pyscard verfuegbar ist"""
         return importlib.util.find_spec("smartcard") is not None
@@ -159,7 +177,7 @@ class RFIDReader:
         
         try:
             from smartcard.System import readers
-            from smartcard.scard import SCARD_SHARE_DIRECT, SCARD_SHARE_SHARED
+            from smartcard.scard import SCARD_LEAVE_CARD, SCARD_SHARE_DIRECT, SCARD_SHARE_SHARED
             from smartcard.CardConnection import CardConnection
 
             reader_list = readers()
@@ -178,7 +196,10 @@ class RFIDReader:
             # laesst (dictProtocol[0] existiert nicht) statt den echten Fehler zu zeigen.
             protocol = CardConnection.T0_protocol | CardConnection.T1_protocol
             try:
-                self._card.connect(mode=SCARD_SHARE_SHARED, protocol=protocol)
+                # LEAVE_CARD: pyscard trennt sonst mit SCARD_UNPOWER_CARD - das schaltet
+                # das Feld ab, die Karte geht in HALT und gilt als "entfernt", bis man
+                # sie abhebt und neu auflegt (aufgelegte Karten wurden nicht erkannt)
+                self._card.connect(mode=SCARD_SHARE_SHARED, protocol=protocol, disposition=SCARD_LEAVE_CARD)
                 self._reader_available = True
                 return True
             except Exception as e:
@@ -192,7 +213,7 @@ class RFIDReader:
                 ):
                     # Keine Karte aufgelegt - versuche Reader mit SCARD_SHARE_DIRECT zu aktivieren
                     try:
-                        self._card.connect(mode=SCARD_SHARE_DIRECT)
+                        self._card.connect(mode=SCARD_SHARE_DIRECT, disposition=SCARD_LEAVE_CARD)
                         self._reader_available = True
                         self._direct_mode = True
                         return True
@@ -208,16 +229,19 @@ class RFIDReader:
             self._reader_available = False
             return False
     
-    def disconnect(self):
-        """Trennt die Verbindung zum Reader"""
+    def disconnect(self, unpower: bool = True):
+        """Trennt die Verbindung zum Reader. unpower False: Feld bleibt an, eine
+        aufliegende Karte bleibt erkennbar (beim Neuverbinden)"""
         if self._card:
             try:
-                from smartcard.scard import SCARD_UNPOWER_CARD
-                self._card.disconnect(SCARD_UNPOWER_CARD)
+                from smartcard.scard import SCARD_LEAVE_CARD, SCARD_UNPOWER_CARD
+                self._card.disposition = SCARD_UNPOWER_CARD if unpower else SCARD_LEAVE_CARD
+                self._card.disconnect()
             except Exception:
                 pass
         self._card = None
         self._reader_available = False
+        self._stale = False
 
     def is_reader_present(self) -> bool:
         """Prueft ob der verbundene Reader noch physisch vorhanden ist (z.B. nicht
@@ -247,13 +271,14 @@ class RFIDReader:
                 self._direct_mode = False
                 return True
             return False
-        except Exception:
-            pass
+        except Exception as e:
+            if self._note_failure(e):
+                return False
 
         # Kommunikation fehlgeschlagen (z.B. Karte entfernt, oder wir sind noch
         # im DIRECT-Modus ohne Karte) - Verbindung neu aufbauen und erneut pruefen
         try:
-            from smartcard.scard import SCARD_SHARE_SHARED, SCARD_SHARE_DIRECT
+            from smartcard.scard import SCARD_LEAVE_CARD, SCARD_SHARE_SHARED, SCARD_SHARE_DIRECT
             from smartcard.CardConnection import CardConnection
         except ImportError:
             return False
@@ -268,18 +293,20 @@ class RFIDReader:
             # der Wechsel von SCARD_SHARE_DIRECT zurueck zu SCARD_SHARE_SHARED auf
             # derselben CardConnection fehl, sobald zuvor kein Protokoll ausgehandelt war.
             protocol = CardConnection.T0_protocol | CardConnection.T1_protocol
-            self._card.connect(mode=SCARD_SHARE_SHARED, protocol=protocol)
+            self._card.connect(mode=SCARD_SHARE_SHARED, protocol=protocol, disposition=SCARD_LEAVE_CARD)
             self._direct_mode = False
             response, sw1, sw2 = self._transmit(self.CMD_GET_UID)
             return sw1 == 0x90 and sw2 == 0x00
-        except Exception:
+        except Exception as e:
+            if self._note_failure(e):
+                return False
             # Immer noch keine Karte - Reader im DIRECT-Modus "warm" halten,
             # damit der naechste is_card_present()-Aufruf wieder sauber greift
             try:
-                self._card.connect(mode=SCARD_SHARE_DIRECT)
+                self._card.connect(mode=SCARD_SHARE_DIRECT, disposition=SCARD_LEAVE_CARD)
                 self._direct_mode = True
-            except Exception:
-                pass
+            except Exception as e2:
+                self._note_failure(e2)
             return False
     
     def poll(self) -> RfidStatus:
@@ -306,6 +333,16 @@ class RFIDReader:
             # ist (z.B. nicht per USB abgezogen), unabhaengig von einer Karte
             if not self.is_reader_present():
                 self.disconnect()
+                return status
+
+            if self._stale:
+                self.disconnect(unpower=False)
+                try:
+                    status.reader = "ok" if self.connect(0) else "error"
+                except Exception:
+                    status.reader = "error"
+                if status.reader == "ok":
+                    log.info("RFID-Leser neu verbunden")
                 return status
 
             status.reader = "ok"
@@ -347,7 +384,8 @@ class RFIDReader:
             return None
             
         except Exception as e:
-            log.warning(f"Fehler beim Lesen der UID: {e}")
+            if not self._note_failure(e):
+                log.warning(f"Fehler beim Lesen der UID: {e}")
             return None
     
     def get_card_atr(self) -> Optional[str]:
