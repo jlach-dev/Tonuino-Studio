@@ -416,9 +416,11 @@ def build_cards(known, state: DeviceState, library_index, sd_root: str) -> Tuple
                     files.append(Path(track).relative_to(root).as_posix())
                 except ValueError:
                     files.append(os.path.basename(track))
-        else:
+        elif state.folders_from_pc:  # nur, wenn die SD-Karte wirklich im PC steckt
             files, found = card_files(sd_root, card.sd_folder, card.play_mode)
             local_tracks = [str(Path(sd_root).joinpath(*f.split("/"))) for f in files] if found else []
+        else:  # leerer Kartenleser: dort nicht suchen (Windows meldet sonst einen Geraetefehler)
+            files, local_tracks = [card.sd_folder.strip("/")], []
         entry = state.assignments.get(card.card_id)
         if not state.reachable and not state.backup_date:
             status, target = "", ""
