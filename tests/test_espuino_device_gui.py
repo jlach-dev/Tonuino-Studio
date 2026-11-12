@@ -670,3 +670,45 @@ def test_sidebar_shows_and_filters_series(setup, monkeypatch):
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_sd_card_in_reader_works_while_espuino_is_off(setup, tmp_path, monkeypatch):
+    """ESPuino aus, seine SD-Karte im PC: einrichten speichern, Ordner von der Karte, uebertragen ohne Zuweisen"""
+    from PyQt6.QtWidgets import QMessageBox
+    from core.library import LibraryAlbum
+    from gui.espuino_dialogs import EspuinoSetupDialog
+    from gui.main_window import MainWindow
+    sd = setup["sd"]
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    dialog = EspuinoSetupDialog(dev.SOURCE_DEVICE, "127.0.0.1:9", str(sd))
+    try:
+        dialog.try_accept()  # nicht erreichbar: nach Rueckfrage trotzdem gespeichert
+        assert dialog.result() == dialog.DialogCode.Accepted and not dialog.reachable
+    finally:
+        dialog.deleteLater()
+    dev.save_settings(dev.SOURCE_DEVICE, "127.0.0.1:9", str(sd))
+
+    folder = tmp_path / "Bibliothek" / "Die Fuchsbande"
+    folder.mkdir(parents=True)
+    tracks = []
+    for name in ("01.mp3", "02.mp3"):
+        (folder / name).write_bytes(b"ID3" + b"\0" * 64)
+        tracks.append(str(folder / name))
+    window = MainWindow()
+    try:
+        side, table = window.espuino_sidebar, window.mediahub_page.cards_table
+        assert "SD-Karte steckt im PC" in side.device_label.text() and side.folder_list.count() == 2
+        window.library_view.index.albums.append(LibraryAlbum(path=str(folder), title="Die Fuchsbande",
+                                                             tracks=tracks, album_id="fuchs"))
+        window._espuino_known.remember("777888999000", name="Fuchsbande", sd_folder="/Die Fuchsbande", play_mode=5)
+        window._espuino_known.save()
+        window._mediahub_reload()
+        assert table.btn_transfer_missing.isEnabled()  # Uebertragen geht ohne ESPuino
+        runs = []
+        monkeypatch.setattr(window, "_espuino_run_transfer",
+                            lambda plans, local, host, assignments, finished: runs.append((local, assignments)))
+        window._espuino_transfer_missing()
+        assert runs and runs[0][0] == str(sd) and all(a is None for a in runs[0][1])  # nicht zuweisen
+    finally:
+        window.close()
+        window.deleteLater()

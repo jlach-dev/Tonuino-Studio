@@ -213,7 +213,7 @@ class MediahubMixin:
         if dialog.exec():
             if dialog.source == dev.SOURCE_DEVICE:
                 dev.save_settings(dev.SOURCE_DEVICE, dialog.host, dialog.sd_root)
-                self._espuino_connected = True  # der Dialog hat die Verbindung geprueft
+                self._espuino_connected = dialog.reachable  # aus: nur die SD-Karte im Kartenleser
             else:
                 dev.save_settings(dev.SOURCE_MEDIAHUB, host, sd_root)
                 mh.save_settings_paths(dialog.db_path, dialog.media_root)
@@ -356,7 +356,8 @@ class MediahubMixin:
         self.espuino_sidebar.set_state(host, state, folder_cards, device.label if device else "",
                                        self._espuino_folder_series(state.folders or []))
         has_cover = self._mediahub_cover_map()
-        page.cards_table.set_cards(data.cards, has_cover, state.reachable)
+        # Uebertragen geht auch ohne ESPuino, wenn seine SD-Karte im PC steckt
+        page.cards_table.set_cards(data.cards, has_cover, state.reachable or state.folders_from_pc)
         if page.card is not None and mh.card_by_id(data, page.card.card_id) is not None:
             self._mediahub_show_card(page.card.card_id)
         else:
@@ -669,13 +670,26 @@ class MediahubMixin:
             assignments.append((card.card_id, int(card.play_mode or 3)))
         if not plans:
             return
+        state = self._espuino_state
+        can_assign = state is not None and state.reachable
+        if not can_assign:
+            if not local:
+                QMessageBox.information(self, "Auf den ESPuino übertragen", "Der ESPuino ist nicht erreichbar, "
+                                        "und seine SD-Karte steckt nicht im Kartenleser.")
+                return
+            assignments = [None] * len(plans)  # Zuweisen erst, wenn der ESPuino wieder laeuft
         size = sum(p.total for p in plans)
         way = "auf die SD-Karte im Kartenleser" if local else "über das WLAN"
         names = "\n".join(f"• {c.label}" for c in cards[:12]) + ("\n• …" if len(cards) > 12 else "")
-        answer = QMessageBox.question(
-            self, "Auf den ESPuino übertragen",
-            f"{len(plans)} Karte{'' if len(plans) == 1 else 'n'} {way} übertragen ({size / 1e6:.0f} MB, "
-            f"vorhandene Dateien werden übersprungen) und auf diesem ESPuino zuweisen?\n\n{names}")
+        count = f"{len(plans)} Karte{'' if len(plans) == 1 else 'n'} {way} übertragen ({size / 1e6:.0f} MB, " \
+                "vorhandene Dateien werden übersprungen)"
+        if can_assign:
+            text = f"{count} und auf diesem ESPuino zuweisen?\n\n{names}"
+        else:
+            text = (f"{count}?\n\nZugewiesen wird noch nicht – der ESPuino ist nicht erreichbar. Danach: "
+                    "SD-Karte zurück, ESPuino einschalten, verbinden und „Fehlende übertragen“ (weist dann nur "
+                    f"noch zu).\n\n{names}")
+        answer = QMessageBox.question(self, "Auf den ESPuino übertragen", text)
         if answer != QMessageBox.StandardButton.Yes:
             return
         self._espuino_run_transfer(plans, local, host, assignments, lambda _cancelled: self._mediahub_reload())

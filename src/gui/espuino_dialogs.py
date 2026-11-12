@@ -44,6 +44,7 @@ class EspuinoSetupDialog(QDialog):
         self.setWindowTitle("ESPuino einrichten")
         self.setMinimumWidth(640)
         self.card_count = 0
+        self.reachable = False  # nach Uebernehmen: hat der ESPuino geantwortet?
         layout = QVBoxLayout(self)
 
         self.radio_device = QRadioButton("ESPuino direkt im WLAN")
@@ -180,13 +181,24 @@ class EspuinoSetupDialog(QDialog):
 
     def try_accept(self):
         if self.source == SOURCE_DEVICE:
-            if not self.check_device():
-                QMessageBox.warning(self, "ESPuino einrichten", self.test_label.text())
-                return
             if self.sd_root and not os.path.isdir(self.sd_root):
                 QMessageBox.warning(self, "ESPuino einrichten", "Die SD-Karte ist kein vorhandener Ordner. "
                                     "Feld leer lassen, wenn sie gerade nicht im Kartenleser steckt.")
                 return
+            self.reachable = self.check_device()
+            if not self.reachable:
+                try:
+                    normalize_host(self.host)
+                except DeviceError as exc:
+                    QMessageBox.warning(self, "ESPuino einrichten", str(exc))
+                    return
+                # typisch: seine SD-Karte steckt gerade im PC, der ESPuino ist aus
+                answer = QMessageBox.question(
+                    self, "ESPuino einrichten",
+                    self.test_label.text() + "\n\nTrotzdem speichern? Mit der SD-Karte im Kartenleser kannst du "
+                    "Alben übertragen und Cover gestalten; Zuweisen geht erst, wenn der ESPuino wieder läuft.")
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
             self.accept()
             return
         try:
