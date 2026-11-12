@@ -108,6 +108,7 @@ class MediahubMixin:
         self.espuino_sidebar.connect_requested.connect(self.espuino_connect)
         self.espuino_sidebar.reload_requested.connect(self._mediahub_reload)
         self.espuino_sidebar.assign_requested.connect(self._espuino_assign)
+        self.espuino_sidebar.read_requested.connect(self._espuino_read_cards)
         self.espuino_sidebar.assign_folder_requested.connect(self._espuino_assign_folder)
         self.espuino_sidebar.albums_dropped.connect(self._espuino_transfer)
         self.espuino_sidebar.folder_list.album_names = lambda paths: album_folder_names(paths,
@@ -363,6 +364,69 @@ class MediahubMixin:
         self._mediahub_reload()
         if mh.card_by_id(self._mediahub_data, card_id) is not None:
             self._mediahub_on_card_clicked(card_id)
+
+    # --- Karte auslesen ---------------------------------------------------------------
+
+    def _espuino_read_cards(self):
+        """Fenster, das jede aufgelegte Karte zeigt (bleibt offen, nicht modal)"""
+        from gui.espuino_card_reader import CardReaderDialog
+        reader = getattr(self, "_espuino_reader", None)
+        if reader is not None:
+            reader.raise_()
+            reader.activateWindow()
+            return
+        if not self._espuino_is_device() or not self._espuino_host:
+            return
+        reader = CardReaderDialog(self._espuino_host, self._espuino_card_info, self)
+        reader.show_card_requested.connect(self._espuino_reader_show_card)
+        reader.assign_requested.connect(lambda card_id: self._espuino_assign(preset_card=card_id))
+        reader.destroyed.connect(lambda *_: setattr(self, "_espuino_reader", None))
+        self._espuino_reader = reader
+        reader.show()
+
+    def _espuino_reader_show_card(self, card_id: str):
+        if mh.card_by_id(self._mediahub_data, card_id) is not None:
+            self.view_switch.setCurrentIndex(0)
+            self._mediahub_show_card(card_id)
+
+    def _espuino_card_info(self, card_id: str):
+        """Alles, was Studio zu einer Kartennummer weiss (fuer "Karte auslesen")"""
+        from core import card_store
+        from gui.espuino_card_reader import CardInfo
+        info = CardInfo(card_id)
+        state = self._espuino_state
+        entry = state.assignments.get(card_id) if state is not None else None
+        if entry is not None:
+            info.assignment = entry[0]
+            info.play_mode = mh.play_mode_label(str(entry[1]))
+        card = mh.card_by_id(self._mediahub_data, card_id)
+        if card is None:
+            if entry is not None:
+                info.status = "Seit dem letzten Einlesen neu zugewiesen – „Neu einlesen“ zeigt mehr."
+            return info
+        info.known, info.name = True, card.label
+        if not info.play_mode and card.play_mode:
+            info.play_mode = mh.play_mode_label(card.play_mode)
+        if entry is None and card.sd_path:
+            info.status = f"Gehört zu {card.sd_path}, ist aber auf diesem ESPuino nicht zugewiesen."
+        elif entry is not None and card.sd_path and not dev.same_folder(entry[0], card.sd_path):
+            info.status = f"Studio kennt sie als {card.sd_path}."
+        elif card.folder_present is False:
+            info.status = "Der Ordner fehlt auf der SD-Karte des ESPuino."
+        album = self.library_view.index.find(card.library_path) if card.library_path else None
+        if album is not None:
+            info.album = album.name
+            minutes = int(round(album.duration / 60)) if album.duration else 0
+            info.album_detail = f"{album.track_count} Titel" + (f", {minutes} min" if minutes else "")
+            thumb = self.library_view.index.thumb_path(album)
+            info.album_cover_path = str(thumb) if thumb else ""
+        archive = get_archive(self, ask=False)
+        if archive is not None:
+            card_dir = str(archive.card_dir(card.album_id))
+            front, back = card_store.card_paths(card_dir)[0], card_store.back_paths(card_dir)[0]
+            info.front_path = str(front) if front.is_file() else ""
+            info.back_path = str(back) if back.is_file() else ""
+        return info
 
     def _espuino_assign_folder(self, folder: str):
         self._espuino_assign(preset_path=folder, album=self._espuino_album_for_folder(folder))

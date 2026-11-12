@@ -104,6 +104,7 @@ class EspuinoDeviceSidebar(QWidget):
     setup_requested = pyqtSignal()
     connect_requested = pyqtSignal()
     assign_requested = pyqtSignal()
+    read_requested = pyqtSignal()
     reload_requested = pyqtSignal()
     albums_dropped = pyqtSignal(list)
     assign_folder_requested = pyqtSignal(str)  # "/Ordner"
@@ -130,6 +131,11 @@ class EspuinoDeviceSidebar(QWidget):
         self.btn_assign.setToolTip("Karte auf den ESPuino legen und einen Ordner der SD-Karte zuweisen")
         self.btn_assign.clicked.connect(self.assign_requested)
         layout.addWidget(self.btn_assign)
+        self.btn_read = QPushButton("Karte auslesen …")
+        self.btn_read.setToolTip("Karten an den ESPuino halten und sehen, welche es ist – mit Kartencover. "
+                                 "Praktisch beim Bekleben")
+        self.btn_read.clicked.connect(self.read_requested)
+        layout.addWidget(self.btn_read)
         self.btn_reload = QPushButton("Neu einlesen")
         self.btn_reload.setToolTip("Zuweisungen und Ordner erneut vom ESPuino lesen")
         self.btn_reload.clicked.connect(self.reload_requested)
@@ -154,6 +160,7 @@ class EspuinoDeviceSidebar(QWidget):
         configured = bool(host)
         connected = state is not None and state.error != NOT_CONNECTED
         self.btn_assign.setEnabled(configured and state is not None and state.reachable)
+        self.btn_read.setEnabled(self.btn_assign.isEnabled())
         self.btn_reload.setEnabled(configured and connected)
         self.btn_connect.setText("ESPuino wechseln …" if configured and connected else "Verbinden …")
         self.btn_connect.setObjectName("" if connected else "primaryButton")

@@ -254,3 +254,41 @@ def test_cover_of_library_card_opens_the_library_album(setup, tmp_path, monkeypa
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_read_cards_window_shows_each_card(setup):
+    """"Karte auslesen": jede aufgelegte Karte zeigt Name, Zuweisung und Kartencover"""
+    from PIL import Image
+    from PyQt6.QtCore import QEvent
+    from gui.cover_manager_dialog import get_archive
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        assert window.espuino_sidebar.btn_read.isEnabled()
+        card = window._mediahub_card(CARD_A)
+        card_dir = get_archive(window, ask=False).card_dir(card.album_id)
+        card_dir.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (101, 64), (0, 0, 200)).save(card_dir / "card.png")
+
+        window._espuino_read_cards()
+        reader = window._espuino_reader
+        window._espuino_read_cards()  # zweiter Klick holt dasselbe Fenster nach vorn
+        assert window._espuino_reader is reader
+        reader.on_message('{"rfidId": "%s"}' % CARD_A)
+        assert "001" in reader.number_label.text() and reader.info.known
+        assert "/Hörspiele/Fuchsbande" in reader.info_label.text()
+        assert reader.info.front_path.endswith("card.png") and not reader.front_box.image.pixmap().isNull()
+        assert reader.btn_show.isEnabled() and not reader.btn_assign.isEnabled()
+
+        reader.on_message('{"rfidId": "999999999999"}')
+        assert not reader.info.known and "Unbekannte Karte" in reader.name_label.text()
+        assert "nicht zugewiesen" in reader.info_label.text() and reader.btn_assign.isEnabled()
+        reader.on_message('{"status": "ok"}')  # andere Meldungen des ESPuino aendern nichts
+        assert reader.count == 2
+
+        reader.close()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        assert window._espuino_reader is None
+    finally:
+        window.close()
+        window.deleteLater()

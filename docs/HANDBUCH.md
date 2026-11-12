@@ -654,6 +654,17 @@ Später wechselst du mit **ESPuino wechseln …** oben in der Seitenleiste (ohne
 
 Die Dateien müssen dafür schon auf der SD-Karte des ESPuino liegen, siehe den nächsten Abschnitt.
 
+### Karte auslesen (ESPuino direkt)
+
+**Karte auslesen …** in der Seitenleiste öffnet ein Fenster, das so lange am ESPuino mithört, bis du es schließt. Halte eine Karte an den ESPuino, und das Fenster zeigt:
+
+- Kartennummer und Namen;
+- wohin sie auf diesem ESPuino zeigt und den Abspielmodus;
+- das Album aus der Bibliothek mit Titelzahl und Dauer;
+- Kartencover vorn und hinten und das Album-Cover.
+
+Das hilft vor allem beim Bekleben vieler Karten, damit jedes Cover auf der richtigen Karte landet. Eine unbekannte Karte zeigt die App gelb; mit **Diese Karte zuweisen …** belegst du sie gleich. **In der Kartenliste zeigen** öffnet die Karte im Reiter **ESPuino-Karten**. Das Fenster liest nur und ändert nichts. Der ESPuino spielt die Karte dabei allerdings wie gewohnt ab. Der Knopf geht nur, solange ein ESPuino verbunden ist.
+
 ### Alben auf den ESPuino übertragen
 
 Zieh ein Album aus der [Bibliothek](#6-bibliothek) in die Seitenleiste auf die Liste **Auf dem ESPuino**, auf eine freie Stelle. Alternativ gibt es im Rechtsklick-Menü einer Kachel **Auf den ESPuino übertragen** (bei mehreren markierten Kacheln für alle). Ziehst du ein Album auf einen Ordner mit seinem Namen, ergänzt die App dort nur fehlende Dateien; andere Ordner nehmen nichts an. Das Album kommt als Ordner mit seinem Namen auf die SD-Karte, etwa `/Conni geht verloren`. Die Dateinamen bleiben; nur wenn sie alphabetisch nicht in der richtigen Reihenfolge stehen, bekommen sie eine Nummer davor. Anders als beim TonUINO gibt es keine Ordnernummern und keine Umbenennung in `001.mp3`.
