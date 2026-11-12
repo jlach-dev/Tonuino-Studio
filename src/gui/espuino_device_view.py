@@ -271,16 +271,17 @@ class KnownCardsTable(QWidget):
         self.tree.setObjectName("trackList")
         self.tree.setRootIsDecorated(False)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.tree.setHeaderLabels(["Karte", "Nummer", "Zugewiesen", "Ordner", "Cover"])
+        self.tree.setHeaderLabels(["Karte", "Nummer", "Zugewiesen", "SD-Karte", "Bibliothek", "Cover"])
         header = self.tree.header()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 5):
+        for column in range(1, 6):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         self.tree.itemActivated.connect(lambda item, _col: self.card_selected.emit(item.data(0, FOLDER_ROLE)))
         self.tree.itemClicked.connect(lambda item, _col: self.card_selected.emit(item.data(0, FOLDER_ROLE)))
         layout.addWidget(self.tree, 1)
         self.legend = QLabel("Zugewiesen: ✓ auf diesem ESPuino · – nicht zugewiesen · anders: dort anders belegt. "
-                             "Ordner: ✓ auf der SD-Karte · fehlt.")
+                             "SD-Karte: Ordner auf der SD-Karte des ESPuino ✓ oder fehlt. "
+                             "Bibliothek: Album in der Bibliothek ✓ oder fehlt (nur dann lässt es sich übertragen).")
         self.legend.setWordWrap(True)
         self.legend.setStyleSheet(f"color: {theme.OVERLAY2};")
         layout.addWidget(self.legend)
@@ -296,7 +297,8 @@ class KnownCardsTable(QWidget):
         for card in cards:
             folder = {True: "✓", False: "fehlt", None: "?"}[card.folder_present]
             status = STATUS_TEXT.get(card.device_status, "?")
-            item = QTreeWidgetItem([card.label, format_card_id(card.card_id), status, folder,
+            library = "✓" if card.library_path else "fehlt"
+            item = QTreeWidgetItem([card.label, format_card_id(card.card_id), status, folder, library,
                                     "✓" if has_cover.get(card.card_id) else "–"])
             item.setData(0, FOLDER_ROLE, card.card_id)
             tips = [f"Ordner: {card.sd_path or '–'}"]
@@ -308,6 +310,8 @@ class KnownCardsTable(QWidget):
             if warn:
                 for column in (2, 3):
                     item.setForeground(column, QBrush(QColor(theme.YELLOW)))
+            if not card.library_path:
+                item.setForeground(4, QBrush(QColor(theme.OVERLAY2)))
             if not has_cover.get(card.card_id):
                 font = item.font(0)
                 font.setItalic(True)

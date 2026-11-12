@@ -699,8 +699,8 @@ class MediahubMixin:
         if state is not None and not state.reachable:
             lines.append(f"Der ESPuino ist nicht erreichbar – Status unbekannt ({state.error})")
         elif missing:
-            lines.append(f"{missing} Karte{'' if missing == 1 else 'n'} lassen sich auf diesen ESPuino übertragen "
-                         "(Ordner fehlt oder nicht zugewiesen).")
+            lines.append(f"{missing} Karte{' lässt' if missing == 1 else 'n lassen'} sich auf diesen ESPuino "
+                         "übertragen (Ordner fehlt auf der SD-Karte oder nicht zugewiesen, Album in der Bibliothek).")
         skipped = []
         if data.skipped_function:
             skipped.append(f"{data.skipped_function} Funktionskarte{'' if data.skipped_function == 1 else 'n'}")

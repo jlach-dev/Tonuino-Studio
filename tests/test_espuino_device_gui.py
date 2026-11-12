@@ -63,6 +63,8 @@ def test_window_shows_device_and_known_cards(setup):
         assert side.folder_list.drop_enabled
         table = page.cards_table.tree
         assert table.topLevelItemCount() == 2 and page.pages.currentIndex() == 2
+        assert table.headerItem().text(3) == "SD-Karte" and table.headerItem().text(4) == "Bibliothek"
+        assert {table.topLevelItem(i).text(4) for i in range(2)} == {"fehlt"}  # kein Album in der Bibliothek
         text = page.device_text.text()
         assert "2 bekannte Karten" in text and "1 Funktionskarte" in text and "1 vom Mediahub verwaltet" in text
         window._mediahub_show_card(CARD_A)

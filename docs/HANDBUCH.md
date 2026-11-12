@@ -641,7 +641,7 @@ Mit **ESPuino direkt im WLAN** fragt die App beim Start im Fenster **Mit ESPuino
 - **Beim Start fragen** abgewählt: Die App verbindet sich beim Start ohne Rückfrage mit dem zuletzt benutzten ESPuino, sobald er antwortet. Das Fenster bleibt nur offen, solange er nicht antwortet.
 - **Ohne ESPuino weiter** zeigt die bekannten Karten mit ihren Kartencovern. Zuweisen, Übertragen über das WLAN und der Gerätestand gehen erst nach dem Verbinden. Steckt die SD-Karte im Kartenleser, kannst du trotzdem dorthin übertragen.
 
-Später wechselst du mit **ESPuino wechseln …** oben in der Seitenleiste (ohne Verbindung: **Verbinden …**). Die bekannten Karten gelten für alle ESPuinos; der Status **zugewiesen** und **Ordner** bezieht sich immer auf den verbundenen.
+Später wechselst du mit **ESPuino wechseln …** oben in der Seitenleiste (ohne Verbindung: **Verbinden …**). Die bekannten Karten gelten für alle ESPuinos; die Spalten **Zugewiesen** und **SD-Karte** beziehen sich immer auf den verbundenen.
 
 ### Karten auslesen und zuweisen (ESPuino direkt)
 
@@ -689,7 +689,8 @@ Der Reiter **ESPuino-Karten** zeigt die **bekannten Karten**. Die App merkt sich
 Die Spalten der Tabelle:
 
 - **Zugewiesen:** ✓ auf diesem ESPuino so zugewiesen, – nicht zugewiesen, **anders** dort anders belegt, ? ESPuino nicht erreichbar.
-- **Ordner:** ✓ auf seiner SD-Karte vorhanden, **fehlt**, ? unbekannt.
+- **SD-Karte:** Ordner auf der SD-Karte des ESPuino ✓ vorhanden, **fehlt**, ? unbekannt.
+- **Bibliothek:** Album in der Bibliothek ✓ gefunden oder **fehlt**. Nur mit Album lässt sich eine Karte auf den ESPuino übertragen.
 - **Cover:** ✓ Kartencover vorhanden. Gehört die Karte zu einem Album der Bibliothek, gilt dessen Kartencover, ohne Kopie: Was du dort gestaltest, gilt auch für die Karte, und **Kartencover bearbeiten** öffnet den Cover-Manager dieses Albums. Nur Karten ohne Album in der Bibliothek haben ein eigenes Kartencover.
 
 Ein Klick öffnet die Kartenseite, **← Alle Karten** führt zurück. **Auf diesen ESPuino übertragen** bringt das Album aus der Bibliothek in den Ordner der Karte (nur fehlende Dateien) und weist die Karte auf diesem ESPuino zu. **Fehlende auf den ESPuino übertragen** macht das für alle Karten, deren Ordner fehlt oder die nicht zugewiesen sind, nach einer Rückfrage. Dafür muss das Hörspiel in der Bibliothek liegen; die App findet es über die Album-ID, den Ordner oder einen passenden Albumnamen.
