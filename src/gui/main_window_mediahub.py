@@ -21,7 +21,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import QApplication, QCheckBox, QMenu, QMessageBox, QProgressDialog
 
-from core import espuino_cards
+from core import espuino_cards, loudness
 from core import espuino_device as dev
 from core.espuino_transfer import plan_album
 from core import mediahub_cards as mh
@@ -29,10 +29,12 @@ from core.app_mode import MODE_ESPUINO, MODE_TONUINO, MODES, current_mode, displ
 from core.card_store import card_paths
 from gui.about_dialog import show_about
 from gui.cover_manager_dialog import CoverManagerDialog, get_archive
+from gui.common import close_progress_dialog, confirm_action, keep_open_until_done
 from gui.espuino_dialogs import EspuinoSetupDialog, TransferDialog, TransferWorker
 from gui.espuino_device_view import EspuinoDeviceSidebar, album_folder_names
 from gui.mediahub_view import MediahubPage, MediahubSidebar
 from gui.print_sheet_dialog import PrintSheetDialog
+from gui.workers import LoudnessAnalysisWorker, LoudnessApplyWorker
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +126,8 @@ class MediahubMixin:
         self.espuino_sidebar.folder_selected.connect(self._espuino_show_folder)
         self.espuino_sidebar.albums_dropped.connect(self._espuino_transfer)
         self.espuino_sidebar.delete_folders_requested.connect(self._espuino_delete_folders)
+        self.espuino_sidebar.normalize_folders_requested.connect(self._espuino_normalize_folders)
+        self.espuino_sidebar.can_normalize = self._espuino_can_normalize
         self.espuino_sidebar.folder_list.album_names = lambda paths: album_folder_names(paths,
                                                                                          self.library_view.index)
         sidebar_layout.insertWidget(sidebar_layout.indexOf(self.folder_list), self.espuino_sidebar, 1)
@@ -1011,11 +1015,13 @@ class MediahubMixin:
         if not albums:
             return
         existing = {a.path: self._espuino_existing_folders(a) for a in albums}
-        dialog = TransferDialog(albums, sd_root, host, self, existing=existing)
+        dialog = TransferDialog(albums, sd_root, host, self, existing=existing,
+                                can_normalize=self.audio_converter.is_available)
         if not dialog.exec():
             dialog.deleteLater()
             return
         plans, assign_after, local, complete = dialog.plans, dialog.assign_after, dialog.sd_root, dialog.complete
+        normalize = dialog.normalize
         dialog.deleteLater()
         target = plans[0].folder if plans else (complete[0][1] if complete else "")
         if complete:
@@ -1036,7 +1042,7 @@ class MediahubMixin:
             else:
                 self._mediahub_reload()
 
-        self._espuino_run_transfer(plans, local, host, None, finished)
+        self._espuino_run_transfer(plans, local, host, None, finished, normalize=normalize)
 
     def _espuino_existing_folders(self, album) -> list:
         """Ordner auf der SD-Karte des ESPuino, in denen dieses Album schon liegt:
@@ -1081,6 +1087,7 @@ class MediahubMixin:
             QMessageBox.information(self, title, "Der ESPuino ist nicht erreichbar, "
                                     "und seine SD-Karte steckt nicht im Kartenleser.")
             return
+        normalize = self._espuino_normalize_wanted()
         plans, assignments, transfer_cards = [], [], []
         assign_only, complete, waiting, impossible, errors = [], [], [], [], []
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -1092,7 +1099,7 @@ class MediahubMixin:
                 if album is not None and album.tracks:
                     plan = plan_album(album.tracks, card.sd_path)
                     try:
-                        plan.items = pending_items(plan, local, "" if local else host)
+                        plan.items = pending_items(plan, local, "" if local else host, by_name=normalize)
                     except dev.DeviceError as exc:
                         errors.append(f"{card.label}: {exc}")
                         continue
@@ -1130,6 +1137,9 @@ class MediahubMixin:
             way = "auf die SD-Karte im Kartenleser" if local else "über das WLAN"
             parts.append(f"{plural(len(plans), 'Album', 'Alben')} {way} übertragen – "
                          f"{plural(files, 'fehlende Datei', 'fehlende Dateien')}, {amount}:" + NL + names(transfer_cards))
+            if normalize:
+                parts.append("Die Lautstärke wird dabei angeglichen (Einstellung aus „Auf den ESPuino übertragen“); "
+                             "die Dateien in der Bibliothek bleiben unverändert.")
         if assign_count:
             reserved = [c for c, a in zip(transfer_cards, assignments) if a is not None] + assign_only
             parts.append(f"{plural(assign_count, 'vorgemerkte Karte', 'vorgemerkte Karten')} auf diesem "
@@ -1191,7 +1201,17 @@ class MediahubMixin:
         if card is not None:
             self._espuino_transfer_cards([card])
 
-    def _espuino_run_transfer(self, plans, local: str, host: str, assignments, finished):
+    def _espuino_normalize_wanted(self) -> bool:
+        """Lautstaerke beim Uebertragen angleichen: gemerkte Wahl, nur mit FFmpeg"""
+        from core.loudness_copy import normalize_on_transfer
+        return self.audio_converter.is_available and normalize_on_transfer()
+
+    def _espuino_run_transfer(self, plans, local: str, host: str, assignments, finished, normalize=None):
+        """normalize: None = gemerkte Wahl aus dem Uebertragen-Dialog"""
+        from core.loudness_copy import TransferNormalizer
+        if normalize is None:
+            normalize = self._espuino_normalize_wanted()
+        normalizer = TransferNormalizer(self.audio_converter) if normalize else None
         self._release_files()
         progress = QProgressDialog("Übertrage …", "Abbrechen", 0, 1000, self)
         progress.setWindowTitle("Auf den ESPuino übertragen")
@@ -1199,7 +1219,7 @@ class MediahubMixin:
         progress.setMinimumDuration(0)
         progress.setAutoClose(False)
         progress.setAutoReset(False)
-        worker = TransferWorker(plans, local, host, self, assignments=assignments)
+        worker = TransferWorker(plans, local, host, self, assignments=assignments, normalizer=normalizer)
         self._espuino_transfer_worker = worker
         progress.canceled.connect(worker.cancel)
         assigned = []
@@ -1220,7 +1240,13 @@ class MediahubMixin:
                 text += f", {skipped} schon vorhanden"
             if assigned:
                 text += f", {len(assigned)} Karte{'' if len(assigned) == 1 else 'n'} zugewiesen"
+            if normalizer is not None and normalizer.summary():
+                text += "; " + normalizer.summary()
             self._status(text + (" – abgebrochen" if cancelled else ""))
+            if normalizer is not None and normalizer.errors:
+                QMessageBox.warning(self, "Lautstärke angleichen",
+                                    f"{len(normalizer.errors)} Datei(en) ließen sich nicht messen oder angleichen "
+                                    "und wurden unverändert übertragen:\n\n" + "\n".join(normalizer.errors[:5]))
             finished(cancelled)
 
         worker.progress.connect(on_progress)
@@ -1228,6 +1254,132 @@ class MediahubMixin:
         worker.done.connect(on_done)
         worker.assigned.connect(lambda card_id, _folder, _mode: assigned.append(card_id))
         worker.start()
+
+    # --- Lautstaerke angleichen auf der SD-Karte im Kartenleser ------------------------
+
+    def _espuino_can_normalize(self) -> bool:
+        _source, _host, sd_root = dev.settings()
+        return bool(sd_root) and os.path.isdir(sd_root) and self.audio_converter.is_available
+
+    @staticmethod
+    def _espuino_folder_audio(sd_root: str, folders: list):
+        """(MP3-Dateien, Zahl anderer Audiodateien) in den Ordnern, auch in Unterordnern"""
+        from pathlib import Path
+        from core.loudness_copy import is_mp3
+        mp3, other, seen = [], 0, set()
+        for folder in folders:
+            local = Path(sd_root).joinpath(*[p for p in folder.split("/") if p])
+            if not local.is_dir():
+                continue
+            for path in sorted(local.rglob("*")):
+                if path.name.startswith(".") or not path.is_file() or path in seen:
+                    continue  # versteckte Dateien, etwa ._ von macOS oder .tmp_norm_
+                seen.add(path)
+                if is_mp3(path.name):
+                    mp3.append(path)
+                elif path.suffix.lower() in dev.AUDIO_EXTENSIONS:
+                    other += 1
+        return mp3, other
+
+    def _espuino_normalize_folders(self, folders: list):
+        """Wie "Lautstaerke angleichen" im TonUINO-Modus, fuer Ordner auf der SD-Karte
+        des ESPuino im Kartenleser: messen, dann die abweichenden Dateien ersetzen"""
+        from types import SimpleNamespace
+        title = "Lautstärke angleichen"
+        if not folders:
+            return
+        if not self.audio_converter.is_available:
+            QMessageBox.warning(self, "FFmpeg fehlt", "FFmpeg ist nicht verfügbar.")
+            return
+        _source, _host, sd_root = dev.settings()
+        if not (sd_root and os.path.isdir(sd_root)):
+            QMessageBox.information(self, title, "Das geht nur, wenn die SD-Karte des ESPuino im Kartenleser steckt. "
+                                    "Beim Übertragen aus der Bibliothek lässt sich die Lautstärke auch über "
+                                    "das WLAN angleichen (Haken „Lautstärke angleichen“).")
+            return
+        files, other = self._espuino_folder_audio(sd_root, folders)
+        if not files:
+            QMessageBox.information(self, title, "Keine MP3-Dateien in "
+                                    + (f"„{folders[0]}“." if len(folders) == 1 else f"den {len(folders)} Ordnern."))
+            return
+        where = f"im Ordner „{folders[0]}“" if len(folders) == 1 else f"in {len(folders)} Ordnern"
+        text = (f"Soll die Lautstärke der {len(files)} MP3-Datei(en) {where} auf {loudness.TARGET_LUFS:.0f} LUFS "
+                "angeglichen werden?\n\nDateien, die bereits passen, bleiben unverändert. Alle anderen werden neu "
+                "kodiert (leicht verlustbehaftet) und auf der SD-Karte ersetzt. Das lässt sich nicht rückgängig "
+                "machen; die Dateien in der Bibliothek bleiben unverändert.")
+        if other:
+            text += f"\n\n{other} Datei(en) in anderen Formaten werden übersprungen."
+        if not confirm_action(self, title, text):
+            return
+        root = os.path.normpath(sd_root)
+        tracks = [SimpleNamespace(filepath=str(p), filename=os.path.relpath(str(p), root).replace("\\", "/"))
+                  for p in files]
+        self._espuino_loudness_rows, self._espuino_loudness_errors = [], []
+        dialog = QProgressDialog("Lautstärke wird gemessen …", "Abbrechen", 0, len(tracks), self)
+        dialog.setWindowTitle(title)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setValue(0)
+        self._espuino_loudness_dialog = dialog
+        phase = ["Messen"]
+
+        def on_progress(current, total, name):
+            dialog.setValue(current - 1)
+            dialog.setLabelText(f"{phase[0]}: {current}/{total} – {name}")
+
+        def finish(done):
+            close_progress_dialog(dialog)
+            errors = self._espuino_loudness_errors
+            unchanged = len(self._espuino_loudness_rows) - done - len(errors)
+            if done == 0 and not errors:
+                self._status("Alle Dateien liegen bereits im Zielbereich")
+            else:
+                self._status(f"Lautstärke von {done} Datei(en) angeglichen, {max(unchanged, 0)} passten schon")
+            if errors:
+                QMessageBox.warning(self, "Nicht alle Dateien angepasst",
+                                    f"{len(errors)} Datei(en) konnten nicht angepasst werden (unverändert):\n\n"
+                                    + "\n".join(errors[:5]))
+            self._mediahub_reload()
+
+        def analysis_finished():
+            if analysis.was_cancelled:
+                close_progress_dialog(dialog)
+                self._status("Lautstärke-Angleichung abgebrochen")
+                return
+            changes = []
+            for track, measured, error in self._espuino_loudness_rows:
+                if error:
+                    self._espuino_loudness_errors.append(f"{track.filename}: {error}")
+                    continue
+                gain = loudness.gain_for(loudness.LoudnessResult(integrated=measured)) if measured is not None else None
+                if gain is not None:
+                    changes.append((track, gain))
+            if not changes:
+                finish(0)
+                return
+            self._release_files()  # der Player koennte eine der Dateien geoeffnet haben
+            dialog.setMaximum(len(changes))
+            dialog.setValue(0)
+            phase[0] = "Anpassen"
+            apply = LoudnessApplyWorker(changes, self.audio_converter)
+            apply.progress.connect(on_progress)
+            apply.error.connect(lambda name, message: self._espuino_loudness_errors.append(f"{name}: {message}"))
+            apply.completed.connect(finish)
+            self._espuino_loudness_workers.append(apply)
+            apply.start()
+
+        analysis = LoudnessAnalysisWorker(tracks, self.audio_converter)
+        analysis.progress.connect(on_progress)
+        analysis.measured.connect(lambda track, lufs, error: self._espuino_loudness_rows.append((track, lufs, error)))
+        analysis.completed.connect(analysis_finished)
+        self._espuino_loudness_workers = [analysis]
+
+        def cancel():
+            for worker in self._espuino_loudness_workers:
+                worker.cancel()
+
+        keep_open_until_done(dialog, cancel, "Wird nach der aktuellen Datei abgebrochen …")
+        analysis.start()
 
     def _mediahub_cover_map(self) -> dict:
         archive = get_archive(self, ask=False)

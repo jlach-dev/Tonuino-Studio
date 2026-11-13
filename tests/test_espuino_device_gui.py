@@ -1019,3 +1019,57 @@ def test_folder_files_play_from_the_card_reader_or_over_wlan(setup):
         window.player_bar.stop_and_clear()
         window.close()
         window.deleteLater()
+
+
+def test_transfer_dialog_remembers_normalize_choice(setup, tmp_path):
+    """Haken "Lautstaerke angleichen": aus als Standard, gemerkt; ohne FFmpeg gesperrt"""
+    from core.library import LibraryAlbum
+    from core.loudness_copy import normalize_on_transfer
+    from gui.espuino_dialogs import TransferDialog
+    folder = tmp_path / "Bibliothek" / "Fuchsbande 2"
+    folder.mkdir(parents=True)
+    (folder / "01.mp3").write_bytes(b"ID3" + b"\0" * 64)
+    album = LibraryAlbum(path=str(folder), title="Fuchsbande 2", tracks=[str(folder / "01.mp3")])
+    sd = str(setup["sd"])
+    dialog = TransferDialog([album], sd, "", can_normalize=True)
+    assert not dialog.normalize
+    dialog.normalize_check.setChecked(True)
+    dialog.try_accept()
+    assert dialog.normalize and normalize_on_transfer()
+    again = TransferDialog([album], sd, "", can_normalize=True)
+    assert again.normalize
+    without = TransferDialog([album], sd, "", can_normalize=False)
+    assert not without.normalize and not without.normalize_check.isEnabled()
+    for d in (dialog, again, without):
+        d.deleteLater()
+
+
+def test_normalize_folder_on_sd_in_card_reader(setup, monkeypatch):
+    """Rechtsklick "Lautstaerke angleichen" auf der SD-Karte im PC: nur abweichende MP3 ersetzt"""
+    from gui import main_window_mediahub as mwm
+    from gui.main_window import MainWindow
+    from gui.workers import LoudnessAnalysisWorker, LoudnessApplyWorker
+    from tests.test_loudness_copy import FakeConverter
+    sd = setup["sd"]
+    (sd / "Hörspiele" / "Fuchsbande" / "03.m4a").write_bytes(b"m4a")
+    (sd / "Hörspiele" / "Fuchsbande" / "._01.mp3").write_bytes(b"mac")
+    monkeypatch.setattr(LoudnessAnalysisWorker, "start", lambda self: self.run())
+    monkeypatch.setattr(LoudnessApplyWorker, "start", lambda self: self.run())
+    questions = []
+    monkeypatch.setattr(mwm, "confirm_action", lambda parent, title, text, **k: questions.append(text) or True)
+    window = MainWindow()
+    try:
+        converter = FakeConverter({"01.mp3": -24.0})
+        window.audio_converter = converter
+        assert window.espuino_sidebar.can_normalize()
+        window._espuino_normalize_folders(["/Hörspiele/Fuchsbande"])
+        assert "2 MP3-Datei(en)" in questions[0] and "1 Datei(en) in anderen Formaten" in questions[0]
+        assert sorted(converter.measured) == ["01.mp3", "02.mp3"]
+        assert (sd / "Hörspiele" / "Fuchsbande" / "01.mp3").read_bytes().startswith(b"NORM+8.0|")
+        assert (sd / "Hörspiele" / "Fuchsbande" / "02.mp3").read_bytes() == b"ID3" + b"\0" * 32
+        assert (sd / "Hörspiele" / "Fuchsbande" / "._01.mp3").read_bytes() == b"mac"
+        dev.save_settings(dev.SOURCE_DEVICE, setup["esp"].host, "")
+        assert not window.espuino_sidebar.can_normalize()
+    finally:
+        window.close()
+        window.deleteLater()

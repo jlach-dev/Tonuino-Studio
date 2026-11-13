@@ -1,6 +1,6 @@
 # Tonuino-Studio – Benutzerhandbuch
 
-Gilt für Version 2.2.0. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
+Gilt für Version 2.2.1. Fett gesetzte Wörter sind die Beschriftungen aus dem Programm.
 
 > Die Bilder zeigen die echte Oberfläche, aber erfundene Hörspiele mit selbst gezeichneten Covern. Sie entstehen mit `tools/make_manual_screenshots.py`.
 
@@ -689,6 +689,10 @@ Der Weg hängt davon ab, ob die SD-Karte gerade im PC steckt:
 Den Zielordner kannst du vorher ändern, etwa `/Hörspiele/Conni geht verloren`. Dateien, die es im Zielordner schon gibt, überspringt die App; ein abgebrochener Durchgang lässt sich so einfach fortsetzen. **Abbrechen** im Fortschrittsfenster entfernt nur die gerade halb übertragene Datei.
 
 Ist **Danach eine Karte für dieses Album zuweisen** angehakt, öffnet sich anschließend [Karte zuweisen](#karte-zuweisen-espuino-direkt) mit dem neuen Ordner. Dann nur noch die Karte auflegen.
+
+**Lautstärke angleichen.** Mit diesem Haken misst die App jede MP3-Datei vor dem Übertragen und schickt eine auf −16 LUFS angeglichene Kopie auf die SD-Karte, über das WLAN wie in den Kartenleser. Messung und Zielwert sind dieselben wie im TonUINO-Modus (siehe [Tracks](#tracks)). Anders als dort bleiben die Dateien in der Bibliothek unverändert. Passende Dateien gehen unverändert hinüber, andere Formate als MP3 ebenfalls. Das Neu-Kodieren kostet je Datei ein paar Sekunden, und die Kopie ist leicht verlustbehaftet. Der Haken ist anfangs aus. Die App merkt sich die Wahl, sie gilt auch für **Ausgewählte übertragen** und für das Übertragen beim Zuweisen. Ohne FFmpeg ist der Haken gesperrt. Liegt schon etwas auf der SD-Karte, wird eine Datei nur übersprungen, wenn es dort eine mit gleichem Namen gibt; die Größe zählt dann nicht.
+
+Liegt ein Ordner schon auf der SD-Karte und steckt die Karte im Kartenleser, gleicht Rechtsklick auf den Ordner in der Seitenleiste → **Lautstärke angleichen …** seine MP3-Dateien direkt dort an, auch in Unterordnern und für mehrere markierte Ordner. Wie im TonUINO-Modus werden nur abweichende Dateien neu kodiert und ersetzt; das lässt sich nicht rückgängig machen. Über das WLAN geht das nicht, dafür das Album mit dem Haken erneut in einen neuen Ordner übertragen.
 
 ### ESPuino direkt: Seitenleiste, bekannte Karten und Status
 

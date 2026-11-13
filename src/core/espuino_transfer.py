@@ -34,6 +34,9 @@ UPLOAD_TIMEOUT = 120  # Sekunden je Datei; der ESPuino schreibt grob 0,3 bis 1 M
 CHUNK = 64 * 1024
 
 Progress = Callable[[int, int, str], None]  # (Bytes fertig, Bytes gesamt, aktuelle Datei)
+# Vor dem Uebertragen je Datei: Pfad der Datei, die wirklich hinuebergeht (etwa eine
+# Kopie mit angeglichener Lautstaerke, core/loudness_copy.py)
+Prepare = Callable[[str], str]
 
 
 @dataclass
@@ -101,13 +104,15 @@ def _local(sd_root: str, sd_path: str) -> Path:
     return Path(sd_root).joinpath(*[p for p in sd_path.split("/") if p])
 
 
-def pending_items(plan: TransferPlan, sd_root: str = "", host: str = "") -> List[TransferItem]:
+def pending_items(plan: TransferPlan, sd_root: str = "", host: str = "",
+                  by_name: bool = False) -> List[TransferItem]:
     """Dateien, die beim Uebertragen wirklich kopiert wuerden - nach denselben
-    Regeln wie copy_to_sd (SD-Karte im PC: gleicher Name und gleiche Groesse)
-    bzw. upload_to_device (WLAN: gleicher Name). Fuer die Rueckfrage vorher."""
+    Regeln wie copy_to_sd (SD-Karte im PC: gleicher Name und gleiche Groesse,
+    mit by_name nur gleicher Name) bzw. upload_to_device (WLAN: gleicher Name).
+    by_name gilt beim Angleichen der Lautstaerke: die Kopie ist anders gross als
+    das Original. Fuer die Rueckfrage vorher."""
     if sd_root:
-        return [i for i in plan.items
-                if not (_local(sd_root, i.target).is_file() and _local(sd_root, i.target).stat().st_size == i.size)]
+        return [i for i in plan.items if not _present(_local(sd_root, i.target), i.size, by_name)]
     existing: dict = {}
     result = []
     for item in plan.items:
@@ -119,10 +124,20 @@ def pending_items(plan: TransferPlan, sd_root: str = "", host: str = "") -> List
     return result
 
 
+def _present(target: Path, size: int, by_name: bool) -> bool:
+    try:
+        return target.is_file() and (by_name or target.stat().st_size == size)
+    except OSError:
+        return False
+
+
 def copy_to_sd(plan: TransferPlan, sd_root: str, progress: Optional[Progress] = None,
-               cancelled: Callable[[], bool] = lambda: False) -> TransferResult:
+               cancelled: Callable[[], bool] = lambda: False,
+               prepare: Optional[Prepare] = None) -> TransferResult:
     """Auf die SD-Karte im Kartenleser kopieren. Vorhandene Dateien mit gleicher
-    Groesse werden uebersprungen (Neustart nach Abbruch)."""
+    Groesse werden uebersprungen (Neustart nach Abbruch); mit prepare (die Datei
+    wird vorher veraendert) genuegt der gleiche Name - halb kopierte Dateien
+    tragen ohnehin die Endung .part."""
     if not sd_root or not os.path.isdir(sd_root):
         raise DeviceError("Die SD-Karte des ESPuino steckt nicht im PC.")
     result = TransferResult()
@@ -134,14 +149,22 @@ def copy_to_sd(plan: TransferPlan, sd_root: str, progress: Optional[Progress] = 
         target = _local(sd_root, item.target)
         if progress:
             progress(result.bytes, total, os.path.basename(item.target))
-        if target.is_file() and target.stat().st_size == item.size:
+        if _present(target, item.size, prepare is not None):
             result.skipped += 1
             result.bytes += item.size
             continue
+        source = item.source
+        if prepare is not None:
+            if progress:
+                progress(result.bytes, total, os.path.basename(item.target) + " – Lautstärke")
+            source = prepare(item.source)
+            if cancelled():
+                result.cancelled = True
+                break
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(target.name + ".part")
         try:
-            shutil.copyfile(item.source, partial)
+            shutil.copyfile(source, partial)
             os.replace(partial, target)
         except OSError as exc:
             partial.unlink(missing_ok=True)
@@ -208,7 +231,8 @@ def _delete_partial(host: str, sd_path: str) -> None:
 
 
 def upload_to_device(plan: TransferPlan, host: str, progress: Optional[Progress] = None,
-                     cancelled: Callable[[], bool] = lambda: False) -> TransferResult:
+                     cancelled: Callable[[], bool] = lambda: False,
+                     prepare: Optional[Prepare] = None) -> TransferResult:
     """Ueber das WLAN hochladen. Dateien, die es im Zielordner schon gibt, werden
     uebersprungen (der ESPuino nennt keine Groessen, nur Namen)."""
     host = normalize_host(host)
@@ -228,17 +252,25 @@ def upload_to_device(plan: TransferPlan, host: str, progress: Optional[Progress]
             continue
         done_before = result.bytes
         sent = [0]
-
-        def on_read(n, name=name, done_before=done_before):
-            sent[0] += n
+        source = item.source
+        if prepare is not None:
             if progress:
-                progress(done_before + sent[0], total, name)
+                progress(done_before, total, name + " – Lautstärke")
+            source = prepare(item.source)
+            if cancelled():
+                result.cancelled = True
+                break
 
-        reader = _ProgressReader(item.source, on_read, cancelled)
+        def on_read(n, name=name, done_before=done_before, size=item.size):
+            sent[0] += n
+            if progress:  # die angeglichene Kopie kann etwas groesser sein als geplant
+                progress(done_before + min(sent[0], size), total, name)
+
+        reader = _ProgressReader(source, on_read, cancelled)
         url = f"http://{host}/explorer?path={urllib.parse.quote(item.target)}"
         request = urllib.request.Request(url, data=reader, method="POST")
         request.add_header("Content-Type", "application/octet-stream")
-        request.add_header("Content-Length", str(item.size))
+        request.add_header("Content-Length", str(os.path.getsize(source)))
         try:
             with urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT) as response:
                 response.read()

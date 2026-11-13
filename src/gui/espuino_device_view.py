@@ -111,10 +111,12 @@ class EspuinoDeviceSidebar(QWidget):
     assign_folder_requested = pyqtSignal(str)  # "/Ordner"
     folder_selected = pyqtSignal(str)  # "/Ordner": Infos und Karten zeigen
     delete_folders_requested = pyqtSignal(list)  # "/Ordner", ...
+    normalize_folders_requested = pyqtSignal(list)  # "/Ordner", ...: Lautstaerke angleichen
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.can_delete = False  # ESPuino erreichbar oder seine SD-Karte im PC
+        self.can_normalize = lambda: False  # SD-Karte im Kartenleser und FFmpeg (setzt das Hauptfenster)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -295,6 +297,13 @@ class EspuinoDeviceSidebar(QWidget):
         if not self.can_delete:
             delete.setToolTip("Nur mit verbundenem ESPuino oder seiner SD-Karte im PC")
         delete.triggered.connect(lambda: self.delete_folders_requested.emit(folders))
+        menu.addSeparator()
+        normalize = menu.addAction("Lautstärke angleichen …")
+        normalize.setEnabled(bool(self.can_normalize()))
+        menu.setToolTipsVisible(True)
+        normalize.setToolTip("Misst die MP3-Dateien und gleicht sie an. Nur mit der SD-Karte des ESPuino im "
+                             "Kartenleser; über das WLAN beim Übertragen aus der Bibliothek.")
+        normalize.triggered.connect(lambda: self.normalize_folders_requested.emit(folders))
         menu.exec(self.folder_list.viewport().mapToGlobal(pos))
 
 

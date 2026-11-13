@@ -17,7 +17,9 @@ from PyQt6.QtWidgets import (
 from core.espuino_device import (
     SOURCE_DEVICE, SOURCE_MEDIAHUB, DeviceError, assign_card, fetch_info, firmware_label, normalize_host,
 )
+from core import loudness
 from core.espuino_transfer import copy_to_sd, pending_items, plan_album, safe_name, upload_to_device
+from core.loudness_copy import normalize_on_transfer, set_normalize_on_transfer
 from core.mediahub_cards import DB_FILENAME, MediahubError, db_file, load_cards
 from gui import theme
 
@@ -217,18 +219,21 @@ class EspuinoSetupDialog(QDialog):
 class TransferWorker(QThread):
     """Kopiert bzw. laedt die Plaene nacheinander hoch (core/espuino_transfer.py).
     assignments: je Plan None oder (Kartennummer, Abspielmodus); die Karte wird
-    erst zugewiesen, wenn alle Dateien ihres Plans auf der SD-Karte sind."""
+    erst zugewiesen, wenn alle Dateien ihres Plans auf der SD-Karte sind.
+    normalizer: None oder ein core.loudness_copy.TransferNormalizer - dann geht je
+    Datei eine Kopie mit angeglichener Lautstaerke hinueber."""
     progress = pyqtSignal(int, int, str)  # Bytes fertig, Bytes gesamt, Text
     failed = pyqtSignal(str)
     done = pyqtSignal(int, int, bool)  # kopiert, uebersprungen, abgebrochen
     assigned = pyqtSignal(str, str, int)  # Kartennummer, Ordner, Abspielmodus
 
-    def __init__(self, plans, sd_root: str, host: str, parent=None, assignments=None):
+    def __init__(self, plans, sd_root: str, host: str, parent=None, assignments=None, normalizer=None):
         super().__init__(parent)
         self.plans = plans
         self.sd_root = sd_root
         self.host = host
         self.assignments = assignments or [None] * len(plans)
+        self.normalizer = normalizer
         self._cancel = False
 
     def cancel(self):
@@ -243,9 +248,9 @@ class TransferWorker(QThread):
                 def report(done, _total, name, offset=offset, folder=plan.folder):
                     self.progress.emit(offset + done, total, f"{folder}/{name}" if name else folder)
                 if self.sd_root:
-                    result = copy_to_sd(plan, self.sd_root, report, lambda: self._cancel)
+                    result = copy_to_sd(plan, self.sd_root, report, lambda: self._cancel, self.normalizer)
                 else:
-                    result = upload_to_device(plan, self.host, report, lambda: self._cancel)
+                    result = upload_to_device(plan, self.host, report, lambda: self._cancel, self.normalizer)
                 copied += result.copied
                 skipped += result.skipped
                 offset += plan.total
@@ -259,6 +264,9 @@ class TransferWorker(QThread):
         except DeviceError as exc:
             self.failed.emit(str(exc))
             return
+        finally:
+            if self.normalizer is not None:
+                self.normalizer.cleanup()
         self.done.emit(copied, skipped, False)
 
 
@@ -267,7 +275,7 @@ class TransferDialog(QDialog):
 
     WLAN_BYTES_PER_SECOND = 400 * 1024  # grobe Schaetzung fuer den Hinweis
 
-    def __init__(self, albums, sd_root: str, host: str, parent=None, existing=None):
+    def __init__(self, albums, sd_root: str, host: str, parent=None, existing=None, can_normalize: bool = False):
         super().__init__(parent)
         self.albums = albums  # LibraryAlbum
         self.sd_root = sd_root if sd_root and os.path.isdir(sd_root) else ""
@@ -321,6 +329,22 @@ class TransferDialog(QDialog):
         self.assign_check.setChecked(True)
         self.assign_check.setVisible(len(albums) == 1 and bool(host))
         layout.addWidget(self.assign_check)
+        self.normalize_check = QCheckBox("Lautstärke angleichen")
+        self.normalize_check.setToolTip(
+            f"Misst jede MP3-Datei und überträgt eine auf {loudness.TARGET_LUFS:.0f} LUFS angeglichene Kopie "
+            "(neu kodiert, leicht verlustbehaftet). Die Dateien in der Bibliothek bleiben unverändert. "
+            "Andere Formate gehen unverändert hinüber.")
+        self.normalize_check.setChecked(can_normalize and normalize_on_transfer())
+        self.normalize_check.setEnabled(can_normalize)
+        if not can_normalize:
+            self.normalize_check.setToolTip("Dafür fehlt FFmpeg.")
+        self.normalize_check.toggled.connect(self._update_amount)
+        layout.addWidget(self.normalize_check)
+        normalize_note = QLabel("Die Dateien in der Bibliothek bleiben dabei unverändert, auf die SD-Karte geht "
+                                "eine angeglichene Kopie (nur MP3).")
+        normalize_note.setWordWrap(True)
+        normalize_note.setStyleSheet(f"color: {theme.OVERLAY2}; margin-left: 24px;")
+        layout.addWidget(normalize_note)
         note = QLabel("Dateien, die es im Zielordner schon gibt, werden übersprungen.")
         note.setStyleSheet(f"color: {theme.OVERLAY2};")
         layout.addWidget(note)
@@ -338,6 +362,10 @@ class TransferDialog(QDialog):
     def assign_after(self) -> bool:
         return not self.assign_check.isHidden() and self.assign_check.isChecked()
 
+    @property
+    def normalize(self) -> bool:
+        return self.normalize_check.isEnabled() and self.normalize_check.isChecked()
+
     def _folder_for(self, album) -> str:
         """Ordner, in den das Album kommt: ein vorhandener, sonst einer mit dem Albumnamen"""
         folders = self.existing.get(album.path)
@@ -352,7 +380,8 @@ class TransferDialog(QDialog):
         """Je Plan die Dateien, die wirklich fehlen; None, wenn sich das nicht pruefen laesst"""
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            return [pending_items(p, self.sd_root, "" if self.sd_root else self.host) for p in plans]
+            return [pending_items(p, self.sd_root, "" if self.sd_root else self.host, by_name=self.normalize)
+                    for p in plans]
         except DeviceError:
             return None
         finally:
@@ -390,4 +419,6 @@ class TransferDialog(QDialog):
                     self.complete.append((album, plan.folder))
             plans = [p for p in plans if p.items]
         self.plans = plans
+        if self.normalize_check.isEnabled():
+            set_normalize_on_transfer(self.normalize_check.isChecked())
         self.accept()
