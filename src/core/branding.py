@@ -17,4 +17,4 @@ HOMEPAGE = f"https://github.com/{GITHUB_REPO}"
 UPSTREAM_REPO = "donschoof/tonuino-manager"
 # Rueckmeldungen der Beta-Tester ("Fehler melden"): Forumsthreads, bis dahin die Foren selbst
 FEEDBACK_TONUINO_URL = "https://discourse.voss.earth/"
-FEEDBACK_ESPUINO_URL = "https://forum.espuino.de/"
+FEEDBACK_ESPUINO_URL = "https://forum.espuino.de/t/espuino-studio-the-one-stop-shop-karten-auslesen-zuweisen-alben-uebertragen-und-kartencover-gestalten/4966"
