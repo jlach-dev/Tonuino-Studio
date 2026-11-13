@@ -176,15 +176,21 @@ def _clip_line(line: Tuple[int, int, int, int], clip: Optional[Tuple[int, int, i
     return x0, y0, x1, y1
 
 
+def _mark_width(dpi: int) -> int:
+    """Strichstaerke der Marken: 0,25 mm. Duennere Linien verschwinden beim
+    verkleinerten Anzeigen im PDF-Betrachter mal hier, mal da."""
+    return max(2, mm_to_px(0.25, dpi))
+
+
 def _draw_cut_marks(draw: ImageDraw.ImageDraw, x: int, y: int, w: int, h: int, dpi: int,
-                    clip: Optional[Tuple[int, int, int, int]] = None):
+                    clip: Optional[Tuple[int, int, int, int]] = None, bleed_mm: float = 0.0):
     """Schnittmarken ausserhalb des Beschnitts an allen vier Ecken. clip
     begrenzt sie auf das eigene Etikett, damit nichts auf das Nachbaretikett
     gedruckt wird."""
-    length = mm_to_px(3, dpi)
-    offset = mm_to_px(1, dpi)
+    length = mm_to_px(4, dpi)
+    offset = mm_to_px(max(1.0, bleed_mm + 0.5), dpi)  # erst hinter dem Beschnitt
     color = (0, 0, 0)
-    width = max(1, dpi // 150)
+    width = _mark_width(dpi)
     for cx in (x, x + w):
         for cy in (y, y + h):
             sx = -1 if cx == x else 1
@@ -220,7 +226,7 @@ def _draw_registration_mark(draw: ImageDraw.ImageDraw, cx: int, cy: int, dpi: in
     """Passmarke: Kreis mit Fadenkreuz, zum Pruefen von Versatz und Vorder-/Rueckseite"""
     r = mm_to_px(REGISTRATION_RADIUS_MM, dpi)
     arm = mm_to_px(REGISTRATION_RADIUS_MM + 1.0, dpi)
-    width = max(1, dpi // 150)
+    width = _mark_width(dpi)
     draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=(0, 0, 0), width=width)
     draw.line((cx - arm, cy, cx + arm, cy), fill=(0, 0, 0), width=width)
     draw.line((cx, cy - arm, cx, cy + arm), fill=(0, 0, 0), width=width)
@@ -279,7 +285,7 @@ def build_sheets(items: List[SheetItem], template: LabelTemplate, start_slot: in
             # auf vorgestanzten bleiben die Marken im eigenen Etikett
             _draw_cut_marks(draw, mm_to_px(x_mm + offset_mm[0], dpi), mm_to_px(y_mm + offset_mm[1], dpi),
                             mm_to_px(w_mm, dpi), mm_to_px(h_mm, dpi), dpi,
-                            clip=None if template.cut_marks else clip)
+                            clip=None if template.cut_marks else clip, bleed_mm=bleed)
         slot += 1
 
     if marks:

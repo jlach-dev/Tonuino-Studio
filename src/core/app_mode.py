@@ -47,6 +47,9 @@ def needs_first_start_choice() -> bool:
     stillschweigend TonUINO gespeichert und wird nie gefragt."""
     from PyQt6.QtCore import QSettings
     settings = QSettings()
+    # macOS: ohne das liefert allKeys() auch globale Systemwerte (NSUserDefaults),
+    # und die Frage kaeme nie
+    settings.setFallbacksEnabled(False)
     if settings.contains(SETTINGS_APP_MODE):
         return False
     if settings.allKeys():
