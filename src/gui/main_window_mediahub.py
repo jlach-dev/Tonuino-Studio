@@ -438,7 +438,7 @@ class MediahubMixin:
         if self._espuino_transfer_busy() or not album.tracks:
             return
         _source, host, sd_root = dev.settings()
-        local = sd_root if sd_root and os.path.isdir(sd_root) else ""
+        local = sd_root if sd_root and dev.sd_available(sd_root) else ""
         state = self._espuino_state
         assignment = (card_id, play_mode) if state is not None and state.reachable else None  # sonst vormerken
 
@@ -648,7 +648,7 @@ class MediahubMixin:
         else:
             meta.append("Kein passendes Album in der Bibliothek gefunden.")
             _source, _host, sd_root = dev.settings()
-            if sd_root and os.path.isdir(sd_root):
+            if sd_root and dev.sd_available(sd_root):
                 found, _ok = dev.card_files(sd_root, folder, 3)
                 files = found if _ok else []
             sd_files = ["/" + f.strip("/") for f in files or []]
@@ -689,7 +689,7 @@ class MediahubMixin:
         """(sd_root, host) zum Loeschen - wie beim Uebertragen die SD-Karte im PC zuerst,
         sonst das WLAN; None, wenn keins von beiden geht"""
         _source, host, sd_root = dev.settings()
-        if sd_root and os.path.isdir(sd_root):
+        if sd_root and dev.sd_available(sd_root):
             return sd_root, ""
         state = self._espuino_state
         if host and state is not None and state.reachable:
@@ -809,7 +809,7 @@ class MediahubMixin:
         if not sd_path or not self._espuino_is_device():
             return ""
         _source, host, sd_root = dev.settings()
-        if sd_root and os.path.isdir(sd_root):
+        if sd_root and dev.sd_available(sd_root):
             path = os.path.join(sd_root, *sd_path.strip("/").split("/"))
             if os.path.isfile(path):
                 return path
@@ -1081,7 +1081,7 @@ class MediahubMixin:
         state = self._espuino_state
         can_assign = state is not None and state.reachable
         _source, host, sd_root = dev.settings()
-        local = sd_root if sd_root and os.path.isdir(sd_root) else ""
+        local = sd_root if sd_root and dev.sd_available(sd_root) else ""
         title = "Auf den ESPuino übertragen"
         if not can_assign and not local:
             QMessageBox.information(self, title, "Der ESPuino ist nicht erreichbar, "
@@ -1258,8 +1258,10 @@ class MediahubMixin:
     # --- Lautstaerke angleichen auf der SD-Karte im Kartenleser ------------------------
 
     def _espuino_can_normalize(self) -> bool:
+        """Fuers Rechtsklick-Menue: ohne Blick auf die SD-Karte (das kann bei einem leeren
+        Kartenleser Sekunden dauern); ob sie wirklich steckt, prueft erst die Aktion"""
         _source, _host, sd_root = dev.settings()
-        return bool(sd_root) and os.path.isdir(sd_root) and self.audio_converter.is_available
+        return bool(sd_root) and self.audio_converter.is_available
 
     @staticmethod
     def _espuino_folder_audio(sd_root: str, folders: list):
@@ -1292,7 +1294,7 @@ class MediahubMixin:
             QMessageBox.warning(self, "FFmpeg fehlt", "FFmpeg ist nicht verfügbar.")
             return
         _source, _host, sd_root = dev.settings()
-        if not (sd_root and os.path.isdir(sd_root)):
+        if not (sd_root and dev.sd_available(sd_root)):
             QMessageBox.information(self, title, "Das geht nur, wenn die SD-Karte des ESPuino im Kartenleser steckt. "
                                     "Beim Übertragen aus der Bibliothek lässt sich die Lautstärke auch über "
                                     "das WLAN angleichen (Haken „Lautstärke angleichen“).")

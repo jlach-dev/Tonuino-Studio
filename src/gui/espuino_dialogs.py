@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.espuino_device import (
-    SOURCE_DEVICE, SOURCE_MEDIAHUB, DeviceError, assign_card, fetch_info, firmware_label, normalize_host,
+    SOURCE_DEVICE, SOURCE_MEDIAHUB, DeviceError, assign_card, fetch_info, firmware_label, normalize_host, sd_available,
 )
 from core import loudness
 from core.espuino_transfer import copy_to_sd, pending_items, plan_album, safe_name, upload_to_device
@@ -278,7 +278,7 @@ class TransferDialog(QDialog):
     def __init__(self, albums, sd_root: str, host: str, parent=None, existing=None, can_normalize: bool = False):
         super().__init__(parent)
         self.albums = albums  # LibraryAlbum
-        self.sd_root = sd_root if sd_root and os.path.isdir(sd_root) else ""
+        self.sd_root = sd_root if sd_available(sd_root) else ""
         self.host = host
         # Albumpfad -> Ordner, in denen das Album schon auf der SD-Karte liegt
         self.existing = {k: v for k, v in (existing or {}).items() if v}

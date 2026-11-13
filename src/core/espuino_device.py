@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -230,6 +231,42 @@ def card_files(sd_root: str, sd_path: str, play_mode: int) -> Tuple[List[str], b
     return [rel_fallback], False
 
 
+# Ein Kartenleser ohne (lesbare) Karte antwortet unter Windows erst nach 5 bis 10 s
+# mit einem Geraetefehler (etwa WinError 1117). Solche langsamen Antworten merkt
+# sich die App eine Weile, sonst haengt jeder Klick, der nachsieht, ob die
+# SD-Karte im PC steckt. Schnelle Antworten werden nie gemerkt: eine frisch
+# eingesteckte Karte zaehlt sofort.
+SLOW_SD_CHECK_SECONDS = 1.0
+SLOW_SD_CHECK_MEMORY = 60.0
+_slow_sd_checks: Dict[str, Tuple[float, bool]] = {}
+
+
+def sd_available(sd_root: str) -> bool:
+    """Steckt die SD-Karte des ESPuino (Einstellung espuino/sd_root) im PC?"""
+    if not sd_root:
+        return False
+    known = _slow_sd_checks.get(sd_root)
+    if known is not None and time.monotonic() - known[0] < SLOW_SD_CHECK_MEMORY:
+        return known[1]
+    started = time.monotonic()
+    try:
+        present = os.path.isdir(sd_root)
+    except OSError:
+        present = False
+    if time.monotonic() - started >= SLOW_SD_CHECK_SECONDS:
+        _slow_sd_checks[sd_root] = (time.monotonic(), present)
+        log.info("SD-Karte %s antwortet langsam (%s), Ergebnis wird %d s gemerkt",
+                 sd_root, "vorhanden" if present else "nicht lesbar", SLOW_SD_CHECK_MEMORY)
+    else:
+        _slow_sd_checks.pop(sd_root, None)
+    return present
+
+
+def forget_sd_checks() -> None:
+    """Beim Neu-Einlesen und nach dem Einrichten wieder wirklich nachsehen"""
+    _slow_sd_checks.clear()
+
+
 @dataclass
 class DeviceState:
     """Was gerade auf einem ESPuino ist: Zuweisungen (NVS) und Ordner der SD-Karte"""
@@ -335,7 +372,7 @@ def fetch_state(host: str, sd_root: str = "", connect: bool = True) -> DeviceSta
     except (DeviceError, TypeError, ValueError) as exc:
         state.error = str(exc)
     local_folders = None
-    if sd_root and os.path.isdir(sd_root):
+    if sd_available(sd_root):
         try:
             local_folders = sorted("/" + p.name for p in Path(sd_root).iterdir()
                                    if p.is_dir() and p.name != "System Volume Information"
@@ -604,6 +641,7 @@ def save_settings(source: str, host: str, sd_root: str, name: Optional[str] = No
     """Quelle speichern; mit Adresse wird der ESPuino (in der Liste) zum aktuellen"""
     if source not in SOURCES:
         raise ValueError(f"Unbekannte Quelle: {source!r}")
+    forget_sd_checks()  # neu eingerichtet: wieder wirklich nachsehen
     from PyQt6.QtCore import QSettings
     s = QSettings()
     s.setValue(SETTINGS_SOURCE, source)

@@ -242,3 +242,28 @@ def test_unreadable_sd_card_does_not_crash(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "iterdir", broken_iterdir)
     state = dev.fetch_state("127.0.0.1:9", str(tmp_path))
     assert not state.folders_from_pc and "nicht lesbar" in state.sd_error
+
+
+def test_slow_sd_check_is_remembered_fast_one_is_not(monkeypatch, tmp_path):
+    """Leerer Kartenleser: die langsame Antwort wird gemerkt, eine schnelle nie"""
+    from core import espuino_device as d
+    calls = []
+
+    def isdir(path):
+        calls.append(path)
+        return False
+
+    d.forget_sd_checks()
+    monkeypatch.setattr(d.os.path, "isdir", isdir)
+    monkeypatch.setattr(d, "SLOW_SD_CHECK_SECONDS", 0.0)  # jede Antwort gilt als langsam
+    assert not d.sd_available("E:/") and not d.sd_available("E:/")
+    assert calls == ["E:/"]
+    d.forget_sd_checks()
+    assert not d.sd_available("E:/") and len(calls) == 2
+    monkeypatch.setattr(d, "SLOW_SD_CHECK_SECONDS", 60.0)  # schnell: jedes Mal nachsehen
+    d.forget_sd_checks()
+    d.sd_available("F:/")
+    d.sd_available("F:/")
+    assert calls.count("F:/") == 2
+    assert not d.sd_available("")
+    d.forget_sd_checks()
