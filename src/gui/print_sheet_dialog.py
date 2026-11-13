@@ -140,6 +140,12 @@ class PrintSheetDialog(QDialog):
         self.backs_check.setEnabled(self.backs_check.isChecked())
         form.addRow("", self.backs_check)
 
+        self.marks_check = QCheckBox("Pass- und Schnittmarken drucken")
+        self.marks_check.setToolTip(
+            "Schnittmarken an den Kartenecken, Passmarken (Kreis mit Fadenkreuz) am Blattrand, "
+            "wo kein Etikett liegt. Auf vorgestanzten Bögen bleiben die Marken im eigenen Etikett.")
+        form.addRow("", self.marks_check)
+
         self.start_spin = QSpinBox()
         self.start_spin.setToolTip("Für angebrochene Bögen: erstes freies Etikett (zeilenweise von links oben)")
         form.addRow("Beginnen bei Etikett Nr.:", self.start_spin)
@@ -205,7 +211,11 @@ class PrintSheetDialog(QDialog):
                          align_x=self.align_x.currentData(), align_y=self.align_y.currentData())
 
     def _on_template_changed(self, *_):
-        self.template_note.setText(LABEL_TEMPLATES[self.template_combo.currentData()].note)
+        template = LABEL_TEMPLATES[self.template_combo.currentData()]
+        self.template_note.setText(template.note)
+        if hasattr(self, "marks_check"):
+            self.marks_check.setChecked(QSettings().value(
+                ai_settings.SETTINGS_PRINT_MARKS + template.key, template.cut_marks, type=bool))
         self._update_placement()
 
     def _update_placement(self, *_):
@@ -283,6 +293,8 @@ class PrintSheetDialog(QDialog):
             settings.setValue(ai_settings.SETTINGS_CARD_H, self.card_h.value())
         settings.setValue(ai_settings.SETTINGS_ALIGN_X, placement.align_x)
         settings.setValue(ai_settings.SETTINGS_ALIGN_Y, placement.align_y)
+        settings.setValue(ai_settings.SETTINGS_PRINT_MARKS + self.template_combo.currentData(),
+                          self.marks_check.isChecked())
 
         items = [] if test_page else self._items()
         if not test_page and not items:
@@ -296,7 +308,7 @@ class PrintSheetDialog(QDialog):
         try:
             pages = build_sheets(items, template, start_slot=self.start_spin.value() - 1,
                                  offset_mm=(self.offset_x.value(), self.offset_y.value()), outline=test_page,
-                                 placement=placement)
+                                 placement=placement, marks=self.marks_check.isChecked())
             save_pdf(pages, path)
         except Exception as e:
             QMessageBox.warning(self, "PDF fehlgeschlagen", str(e))

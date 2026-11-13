@@ -66,6 +66,7 @@ SETTINGS_CARD_W = "covers/print_card_w_mm"
 SETTINGS_CARD_H = "covers/print_card_h_mm"
 SETTINGS_ALIGN_X = "covers/print_align_x"
 SETTINGS_ALIGN_Y = "covers/print_align_y"
+SETTINGS_PRINT_MARKS = "covers/print_marks/"  # + Bogen-Schluessel, bool
 
 
 def api_key_from_env() -> Optional[str]:

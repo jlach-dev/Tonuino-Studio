@@ -548,8 +548,9 @@ Menü **Kartencover** → **Druckbogen (PDF) erstellen …**. Angeboten werden n
 4. **Lage im Etikett:** oben, mittig oder unten und links, mittig oder rechts. Liegt die Karte an zwei Kanten des Etiketts (Voreinstellung: oben links), schneidest du nur noch an zwei Seiten. Die Testseite zeigt die Karte blau im roten Etikett.
 5. **Exemplare je Karte:** 1 bis 10.
 6. **Rückseiten mitdrucken:** Rückseiten folgen als eigene Etiketten hinter allen Vorderseiten. Hochformat-Karten werden für den Druck gedreht.
-7. **Beginnen bei Etikett Nr.:** für angebrochene Bögen. Gezählt wird zeilenweise von links oben.
-8. **Druck-Versatz (mm):** X und Y von −10 bis +10, zum Korrigieren des Druckbilds.
+7. **Pass- und Schnittmarken drucken:** Schnittmarken an den Kartenecken und Passmarken (Kreis mit Fadenkreuz) in der Mitte der Blattränder, aber nur dort, wo kein Etikett liegt. Auf vorgestanzten Bögen bleiben die Schnittmarken im eigenen Etikett, auf randlosen Bögen entfallen die Passmarken. Voreinstellung: an beim Bogen zum Ausschneiden, sonst aus. Die Wahl wird je Bogen gemerkt.
+8. **Beginnen bei Etikett Nr.:** für angebrochene Bögen. Gezählt wird zeilenweise von links oben.
+9. **Druck-Versatz (mm):** X und Y von −10 bis +10, zum Korrigieren des Druckbilds.
 
 **So druckst du passgenau:**
 

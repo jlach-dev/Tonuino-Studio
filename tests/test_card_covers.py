@@ -217,3 +217,32 @@ def test_card_larger_than_label_is_clipped_and_cut_sheets_follow_the_card_format
     assert layout_for(LABEL_TEMPLATES["iso_cut"], Placement(card_w=90.0, card_h=60.0)).per_sheet == 3  # 1 x 3
     x, y = cut.slot_origin_mm(cut.per_sheet - 1)
     assert cut.margin_left >= 0 and x + cut.label_w <= 210 and y + cut.label_h <= 297
+
+
+def test_marks_can_be_switched_and_stay_on_their_own_label():
+    from core.sheet_pdf import Placement, registration_marks_mm
+    item = SheetItem(Image.new("RGB", (1011, 638), (255, 0, 0)), ORIENTATION_LANDSCAPE)
+
+    def dark(page):
+        return page.convert("L").histogram()[0]
+
+    # Bogen zum Ausschneiden: Marken wie bisher, abschaltbar
+    cut = LABEL_TEMPLATES["iso_cut"]
+    assert dark(build_sheets([item], cut, dpi=100)[0]) > 0
+    assert dark(build_sheets([item], cut, dpi=100, marks=False)[0]) == 0
+
+    # vorgestanzt: ohne Haken keine Marken, mit Haken nur im eigenen Etikett
+    herma = LABEL_TEMPLATES["herma5028"]
+    assert dark(build_sheets([item], herma, dpi=100)[0]) == 0
+    page = build_sheets([item], herma, dpi=100, marks=True)[0]
+    assert dark(page) > 0
+    x, y = herma.slot_origin_mm(1)  # Nachbaretikett bleibt frei von Schnittmarken
+    region = page.crop((mm_to_px(x, 100), mm_to_px(y, 100),
+                        mm_to_px(x + herma.label_w, 100), mm_to_px(y + herma.label_h, 100)))
+    assert dark(region) == 0
+
+    # Townstix randlos: kein Platz am Rand, also keine Passmarken
+    assert registration_marks_mm(LABEL_TEMPLATES["townstix_a4_8"]) == []
+    page = build_sheets([item], LABEL_TEMPLATES["townstix_a4_8"], dpi=100, marks=True,
+                        placement=Placement(fill_label=True))[0]
+    assert dark(page) == 0  # Karte fuellt das Etikett, Marken lagen ausserhalb
