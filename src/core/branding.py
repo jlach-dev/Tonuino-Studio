@@ -16,5 +16,5 @@ GITHUB_REPO = "jlach-dev/Tonuino-Studio"
 HOMEPAGE = f"https://github.com/{GITHUB_REPO}"
 UPSTREAM_REPO = "donschoof/tonuino-manager"
 # Rueckmeldungen der Beta-Tester ("Fehler melden"): Forumsthreads, bis dahin die Foren selbst
-FEEDBACK_TONUINO_URL = "https://discourse.voss.earth/"
+FEEDBACK_TONUINO_URL = "https://discourse.voss.earth/t/tonuino-studio-the-one-stop-shop-sd-karte-hoerspiel-bibliothek-und-kartencover-mit-ki/15035"
 FEEDBACK_ESPUINO_URL = "https://forum.espuino.de/t/espuino-studio-the-one-stop-shop-karten-auslesen-zuweisen-alben-uebertragen-und-kartencover-gestalten/4966"
