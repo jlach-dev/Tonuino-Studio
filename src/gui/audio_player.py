@@ -409,7 +409,9 @@ class AudioPlayerBar(QFrame):
             except Exception:
                 info = None  # Anzeige faellt auf den Dateinamen zurueck
         self._show_track_info(info, title)
-        self.player.setSource(QUrl.fromLocalFile(filepath))
+        # ESPuino ueber WLAN: die Datei wird vom Geraet gestreamt
+        is_url = filepath.startswith(("http://", "https://"))
+        self.player.setSource(QUrl(filepath) if is_url else QUrl.fromLocalFile(filepath))
         self.playback_changed.emit()
         self._set_loaded_state(True)
         self._update_play_enabled()

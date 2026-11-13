@@ -100,7 +100,7 @@ Beim Start sucht die App nach einer neuen Version. Abschalten kannst du das im M
 
 **Links** steht die Seitenleiste: **SD-Karte öffnen**, **Neuer Ordner**, **SD-Karte bereinigen**, die Liste **Ordner:** und darunter der Bereich **RFID-Karte**.
 
-**Rechts** schaltest du oben zwischen den Reitern **SD-Karte** und **Bibliothek** um. Ganz unten sitzt der Player.
+**Rechts** schaltest du oben zwischen den Reitern **SD-Karte** und **Bibliothek** um. Ganz rechts daneben öffnet der Käfer **Fehler melden / Feedback …** (siehe Abschnitt „Fehler melden“). Ganz unten sitzt der Player.
 
 **Menüs:**
 
@@ -708,6 +708,8 @@ Ein Klick auf eine Karte öffnet die Kartenseite, **← Alle Karten** führt zur
 
 Die Kartenseite zeigt unter dem Titel die Serie wie in der Bibliothek: das Serienprofil des Albums im Archiv, sonst den Interpreten des Bibliotheksalbums.
 
+**Reiter und Player.** Im ESPuino-Modus steht der Reiter **Bibliothek** vorn und ist beim Start offen, **ESPuino-Karten** folgt dahinter. Ein Doppelklick auf eine Datei in der Dateiliste der Karten- oder Ordnerseite spielt sie im Player unten; Zurück und Weiter springen in derselben Liste. Gespielt wird die Datei aus der Bibliothek, sonst von der SD-Karte im Kartenleser, sonst über das WLAN vom ESPuino (gestreamt, das kann kurz dauern).
+
 **Löschen.** Ordner löschst du per Rechtsklick in der Ordnerliste links (**Ordner löschen …**, auch mehrere markierte) oder mit Entf, außerdem mit **Ordner löschen …** auf der Ordner- und der Kartenseite. Die Rückfrage nennt Anzahl und Größe der Dateien und die Karten, die darauf zeigen und danach nichts mehr spielen; auf Wunsch entfernt sie deren Zuweisung auf dem ESPuino gleich mit (in der App bleiben sie vorgemerkt). Einzelne Dateien löschst du per Rechtsklick oder Entf in der Dateiliste; die App sieht vorher nach, ob die Datei wirklich auf der SD-Karte liegt. Gelöscht wird auf der SD-Karte im Kartenleser, sonst über das WLAN; danach prüft die App, ob der Eintrag weg ist. Auf der SD-Karte gibt es keinen Papierkorb. **Karte entfernen …** (Rechtsklick oder Entf in der Kartenliste, Knopf auf der Kartenseite) löscht die Zuweisung auf diesem ESPuino und nimmt die Karte aus der Liste der App; Ordner, Dateien und Kartencover bleiben. Ist die Karte auf dem ESPuino zugewiesen, geht das nur mit Verbindung, sonst käme sie beim nächsten Einlesen zurück. Der ESPuino schreibt seine `backup.txt` beim Entfernen nicht neu, erst bei der nächsten Zuweisung.
 
 **Alben per Drag & Drop**, die schon auf der SD-Karte liegen (gleicher Ordnername oder ein Ordner, den die App diesem Album zuordnet), erkennt die App: Der Dialog zeigt einen Hinweis, nimmt den vorhandenen Ordner als Ziel und nennt nur die fehlenden Dateien. Ist alles da, wird nichts kopiert, und es geht gleich weiter zum Zuweisen.
@@ -854,7 +856,7 @@ Die Statusleiste unten im Hauptfenster zeigt die letzte Meldung, etwa Ergebnisse
 
 ### Fehler melden
 
-**Einstellungen** → **Fehler melden / Feedback …** stellt Version, Modus, System, bei ESPuino die Firmware und die letzten Zeilen des Protokolls zusammen. Benutzerordner, IP-Adressen und Kartennummern sind darin unkenntlich gemacht. Beschreibe oben, was passiert ist. Die App sendet nichts selbst: **In Zwischenablage kopieren**, oder **Im Forum melden …** (kopiert und öffnet das Forum zum Modus) bzw. **GitHub-Issue öffnen …** (kopiert und öffnet ein neues Issue, dafür brauchst du ein GitHub-Konto). Dort fügst du den Text ein.
+Der Käfer oben rechts neben den Reitern oder **Einstellungen** → **Fehler melden / Feedback …** stellt Version, Modus, System, bei ESPuino die Firmware und die letzten Zeilen des Protokolls zusammen. Benutzerordner, IP-Adressen und Kartennummern sind darin unkenntlich gemacht. Beschreibe oben, was passiert ist. Die App sendet nichts selbst: **In Zwischenablage kopieren**, oder **Im Forum melden …** (kopiert und öffnet das Forum zum Modus) bzw. **GitHub-Issue öffnen …** (kopiert und öffnet ein neues Issue, dafür brauchst du ein GitHub-Konto). Dort fügst du den Text ein.
 
 ### Die KI liefert kein Bild
 

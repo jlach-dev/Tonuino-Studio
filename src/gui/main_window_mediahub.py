@@ -150,12 +150,18 @@ class MediahubMixin:
         self.mediahub_page.assign_folder_requested.connect(self._espuino_assign_folder)
         self.mediahub_page.cards_table.transfer_selected_requested.connect(
             lambda ids: self._espuino_transfer_cards([c for c in map(self._mediahub_card, ids) if c is not None]))
+        self._espuino_setup_player()
         self.stack.addWidget(self.mediahub_page)
         self._sd_page = self.mediahub_page
-        self.view_switch.setTabToolTip(0, "Karten des ESPuino: Kartencover gestalten und drucken")
-        self.view_switch.setTabToolTip(1, "Hörspiele und Musik auf PC und NAS – Album-Cover und Tags")
-        if self.view_switch.currentIndex() == 0:
-            self.stack.setCurrentWidget(self.mediahub_page)
+        # Bibliothek vorn und beim Start offen, die Karten dahinter
+        self.view_switch.blockSignals(True)
+        self.view_switch.moveTab(self.tab_library, self.tab_sd)
+        self.tab_sd, self.tab_library = 1, 0
+        self.view_switch.setCurrentIndex(self.tab_library)
+        self.view_switch.blockSignals(False)
+        self.view_switch.setTabToolTip(self.tab_sd, "Karten des ESPuino: Kartencover gestalten und drucken")
+        self.view_switch.setTabToolTip(self.tab_library, "Hörspiele und Musik auf PC und NAS – Album-Cover und Tags")
+        self._on_view_switched(self.tab_library)
         self._mediahub_reload()
 
     @staticmethod
@@ -197,7 +203,7 @@ class MediahubMixin:
     # --- Ansicht --------------------------------------------------------------------
 
     def _on_view_switched(self, index: int):
-        if self._is_espuino() and index == 0:
+        if self._is_espuino() and index == self.tab_sd:
             self.stack.setCurrentWidget(self.mediahub_page)
             return
         super()._on_view_switched(index)
@@ -205,7 +211,7 @@ class MediahubMixin:
     def _show_welcome(self):
         if self._is_espuino():
             self._sd_page = self.mediahub_page
-            if self.view_switch.currentIndex() == 0:
+            if self.view_switch.currentIndex() == self.tab_sd:
                 self.stack.setCurrentWidget(self.mediahub_page)
             return
         super()._show_welcome()
@@ -288,7 +294,7 @@ class MediahubMixin:
         self._espuino_source, self._espuino_host = source, host
         sidebar, page = self.mediahub_sidebar, self.mediahub_page
         device = source == dev.SOURCE_DEVICE
-        self.view_switch.setTabText(0, "ESPuino-Karten" if device else "Mediahub-Karten")
+        self.view_switch.setTabText(self.tab_sd, "ESPuino-Karten" if device else "Mediahub-Karten")
         page.overview_title.setText("ESPuino-Karten" if device else "Mediahub-Karten")
         page.device_mode = device
         sidebar.setVisible(not device)
@@ -550,7 +556,7 @@ class MediahubMixin:
 
     def _espuino_reader_show_card(self, card_id: str):
         if mh.card_by_id(self._mediahub_data, card_id) is not None:
-            self.view_switch.setCurrentIndex(0)
+            self.view_switch.setCurrentIndex(self.tab_sd)
             self._mediahub_show_card(card_id)
 
     def _espuino_album_thumb(self, album) -> str:
@@ -617,8 +623,8 @@ class MediahubMixin:
         if cards:  # Ordner mit Karte: dieselbe Ansicht wie die Karte, darunter alle Karten des Ordners
             here = [c for c in cards if c.device_target and dev.same_folder(c.device_target, folder)]
             self._mediahub_show_card((here or cards)[0].card_id)
-            if self.view_switch.currentIndex() != 0:
-                self.view_switch.setCurrentIndex(0)
+            if self.view_switch.currentIndex() != self.tab_sd:
+                self.view_switch.setCurrentIndex(self.tab_sd)
             return
         # Ordner ohne Karte
         meta = []
@@ -649,9 +655,14 @@ class MediahubMixin:
         can_delete = self._espuino_delete_target() is not None
         self.mediahub_page.show_folder(folder, meta, preview, [], {}, reachable, album is not None, files,
                                        can_delete=can_delete)
+        locals_ = list(album.tracks) if album is not None else []
+        entries = [(sd_files[i] if i < len(sd_files) else "", locals_[i] if i < len(locals_) else "",
+                    os.path.basename(name.replace("\\", "/").rstrip("/")) or name)
+                   for i, name in enumerate(files or [])]
+        self._espuino_set_play_entries(self.mediahub_page.folder_page.file_list, entries)
         self.mediahub_page.folder_page.set_series(self._espuino_folder_series([folder]).get(folder.casefold(), ""))
-        if self.view_switch.currentIndex() != 0:
-            self.view_switch.setCurrentIndex(0)
+        if self.view_switch.currentIndex() != self.tab_sd:
+            self.view_switch.setCurrentIndex(self.tab_sd)
 
     def _espuino_folder_cover(self, folder: str):
         """Cover-Manager aus der Ordnerseite: fuer das Bibliotheksalbum, sonst fuer die erste Karte"""
@@ -766,6 +777,110 @@ class MediahubMixin:
         if errors:
             QMessageBox.warning(self, title, "\n".join(errors))
         self._mediahub_reload()
+
+    # --- Wiedergabe -----------------------------------------------------------------
+
+    def _espuino_setup_player(self):
+        """Dateilisten der Karten- und Ordnerseite spielen per Doppelklick im Player"""
+        self._espuino_play_lists = {}  # id(Liste) -> [(SD-Pfad, lokale Datei, Titel)] je Zeile
+        self._espuino_now = None  # (Liste, Zeile) des geladenen Tracks
+        for file_list in (self.mediahub_page.file_list, self.mediahub_page.folder_page.file_list):
+            file_list.itemDoubleClicked.connect(
+                lambda item, lst=file_list: self._espuino_play_row(lst, lst.row(item), toggle=True))
+            file_list.currentRowChanged.connect(lambda _row: self._espuino_update_idle())
+            file_list.setToolTip("Doppelklick spielt die Datei ab")
+
+    def _espuino_set_play_entries(self, file_list, entries: list):
+        self._espuino_play_lists[id(file_list)] = entries
+        if self._espuino_now is not None and self._espuino_now[0] is file_list:
+            self._espuino_now = None  # Liste neu aufgebaut: Zeilen passen nicht mehr
+        self._espuino_update_player_navigation()
+        self._espuino_update_idle()
+
+    def _espuino_play_source(self, sd_path: str, local: str = "") -> str:
+        """Was der Player spielen kann: die Datei der Bibliothek, sonst die SD-Karte
+        im Kartenleser, sonst der Download vom ESPuino ueber WLAN; "" wenn nichts geht"""
+        if local and os.path.isfile(local):
+            return local
+        if not sd_path or not self._espuino_is_device():
+            return ""
+        _source, host, sd_root = dev.settings()
+        if sd_root and os.path.isdir(sd_root):
+            path = os.path.join(sd_root, *sd_path.strip("/").split("/"))
+            if os.path.isfile(path):
+                return path
+        state = self._espuino_state
+        if host and state is not None and state.reachable:
+            return dev.download_url(host, sd_path)
+        return ""
+
+    def _espuino_play_row(self, file_list, row: int, toggle: bool = False):
+        entries = self._espuino_play_lists.get(id(file_list), [])
+        if not 0 <= row < len(entries):
+            return
+        sd_path, local, title = entries[row]
+        source = self._espuino_play_source(sd_path, local)
+        if not source:
+            self._status("Abspielen geht, wenn das Album in der Bibliothek liegt, die SD-Karte im PC "
+                         "steckt oder der ESPuino verbunden ist.")
+            return
+        self._espuino_now = (file_list, row)
+        if toggle:
+            self.player_bar.toggle_track(source, title)
+        else:
+            self.player_bar.load_track(source, title, autoplay=True)
+        file_list.setCurrentRow(row)
+        self._espuino_update_player_navigation()
+
+    def _espuino_visible_file_list(self):
+        page = self.mediahub_page
+        current = page.pages.currentWidget()
+        for file_list in (page.file_list, page.folder_page.file_list):
+            if current is not None and current.isAncestorOf(file_list):
+                return file_list
+        return None
+
+    def _espuino_play_selected(self):
+        file_list = self._espuino_visible_file_list()
+        if file_list is not None:
+            self._espuino_play_row(file_list, max(0, file_list.currentRow()))
+
+    def _espuino_play_relative(self, delta: int):
+        if self._espuino_now is None:
+            return
+        file_list, row = self._espuino_now
+        self._espuino_play_row(file_list, row + delta)
+
+    def _espuino_update_player_navigation(self):
+        now = getattr(self, "_espuino_now", None)
+        if now is None or not hasattr(self, "player_bar"):
+            if hasattr(self, "player_bar"):
+                self.player_bar.set_navigation_enabled(False, False)
+            return
+        file_list, row = now
+        count = len(self._espuino_play_lists.get(id(file_list), []))
+        self.player_bar.set_navigation_enabled(row > 0, row < count - 1)
+
+    def _espuino_update_idle(self):
+        file_list = self._espuino_visible_file_list()
+        entries = self._espuino_play_lists.get(id(file_list), []) if file_list is not None else []
+        self.player_bar.set_idle_playable(bool(entries))
+
+    def _espuino_card_play_entries(self, card, folder) -> list:
+        """Zeilen der Dateiliste einer Karte: SD-Pfad (nur ESPuino direkt), lokale Datei, Titel"""
+        sd_paths = self._espuino_card_sd_files(card) if self._espuino_is_device() else []
+        album = self.library_view.index.find(card.library_path) if card.library_path else None
+        album_tracks = list(album.tracks) if album is not None and album.tracks else []
+        by_name = {os.path.basename(t.filepath).casefold(): t.filepath for t in folder.tracks}
+        entries = []
+        for i, rel in enumerate(card.files):
+            if len(album_tracks) == len(card.files):
+                local = album_tracks[i]
+            else:
+                local = by_name.get(os.path.basename(rel).casefold(), "")
+            sd_path = sd_paths[i] if i < len(sd_paths) else ""
+            entries.append((sd_path, local, os.path.basename(rel.rstrip("/")) or rel))
+        return entries
 
     def _espuino_card_sd_files(self, card) -> list:
         """Pfade auf der SD-Karte zu den Zeilen der Dateiliste einer Karte"""
@@ -1192,6 +1307,7 @@ class MediahubMixin:
         folder = mh.build_folder(card, self._mediahub_media_root, get_archive(self, ask=False))
         self.mediahub_page.can_delete_files = self._espuino_is_device() and self._espuino_delete_target() is not None
         self.mediahub_page.show_card(card, folder, self._espuino_place())
+        self._espuino_set_play_entries(self.mediahub_page.file_list, self._espuino_card_play_entries(card, folder))
         self.mediahub_page.set_series(self._mediahub_card_series(card))
         if self._espuino_is_device():  # Karte und Ordner in einer Ansicht
             state = self._espuino_state
@@ -1200,8 +1316,8 @@ class MediahubMixin:
 
     def _mediahub_on_card_clicked(self, card_id: str):
         self._mediahub_show_card(card_id)
-        if self.view_switch.currentIndex() != 0:
-            self.view_switch.setCurrentIndex(0)
+        if self.view_switch.currentIndex() != self.tab_sd:
+            self.view_switch.setCurrentIndex(self.tab_sd)
 
     def _mediahub_folders(self, archive) -> list:
         data = self._mediahub_data

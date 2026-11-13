@@ -92,6 +92,12 @@ def _url(host: str, path: str) -> str:
     return f"http://{normalize_host(host)}{path}"
 
 
+def download_url(host: str, sd_path: str) -> str:
+    """Adresse einer Datei auf der SD-Karte des ESPuino (wie der Download der
+    Weboberflaeche), z. B. zum Abspielen im Player"""
+    return _url(host, "/explorerdownload?path=" + urllib.parse.quote("/" + sd_path.strip("/")))
+
+
 def ws_url(host: str) -> str:
     return f"ws://{normalize_host(host)}/ws"
 

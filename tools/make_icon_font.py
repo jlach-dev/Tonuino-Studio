@@ -45,6 +45,7 @@ CODEPOINTS = [
     0xE5D8,  # arrow_upward
     0xE5DB,  # arrow_downward
     0xE668,  # check
+    0xE868,  # bug_report
     0xE86C,  # check_circle
     0xE872,  # delete
     0xE877,  # done_all

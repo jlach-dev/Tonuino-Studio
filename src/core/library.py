@@ -531,8 +531,9 @@ def is_system_folder(name: str) -> bool:
 
 
 def in_system_folder(path: str) -> bool:
-    """Liegt der Pfad in einem Papierkorb oder anderen Systemordner?"""
-    return any(part.casefold() in SYSTEM_FOLDERS for part in Path(path).parts)
+    """Liegt der Pfad in einem Papierkorb oder anderen Systemordner? Trennt an
+    / und \\, damit auch Windows-Pfade unter Linux/macOS (und umgekehrt) zaehlen."""
+    return any(part.casefold() in SYSTEM_FOLDERS for part in re.split(r"[\\/]", path))
 
 
 def find_album_folders(source: str, failed: Optional[List[str]] = None) -> List[Tuple[str, List[str]]]:

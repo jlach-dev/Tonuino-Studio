@@ -53,11 +53,11 @@ class LibraryMixin:
     def _show_welcome(self):
         """Willkommensseite als SD-Seite merken; nur anzeigen, wenn die SD-Ansicht aktiv ist"""
         self._sd_page = self.welcome_widget
-        if self.view_switch.currentIndex() == 0:
+        if self.view_switch.currentIndex() == self.tab_sd:
             self.stack.setCurrentWidget(self.welcome_widget)
 
     def _on_view_switched(self, index: int):
-        if index == 1:
+        if index == self.tab_library:
             self.stack.setCurrentWidget(self.library_view)
             if not self._library_scanned:
                 self._start_library_scan()

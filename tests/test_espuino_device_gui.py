@@ -1,6 +1,8 @@
 """ESPuino-Modus mit Karten direkt vom Geraet: Hauptfenster und Zuweisen
 gegen einen nachgebauten ESPuino (erfundene Daten)"""
 
+import os
+
 import pytest
 
 pytest.importorskip("PyQt6")
@@ -56,7 +58,11 @@ def test_window_shows_device_and_known_cards(setup):
     from gui.main_window import MainWindow
     window = MainWindow()
     try:
-        assert window.view_switch.tabText(0) == "ESPuino-Karten"
+        # Bibliothek vorn und beim Start offen, Karten dahinter
+        assert [window.view_switch.tabText(i) for i in range(2)] == ["Bibliothek", "ESPuino-Karten"]
+        assert window.view_switch.currentIndex() == window.tab_library
+        assert window.stack.currentWidget() is window.library_view
+        window.view_switch.setCurrentIndex(window.tab_sd)
         side, page = window.espuino_sidebar, window.mediahub_page
         assert window.mediahub_sidebar.isHidden() and not side.isHidden()
         assert side.btn_assign.isEnabled() and "31,0 GB frei" in side.device_label.text()
@@ -985,5 +991,31 @@ def test_card_page_shows_series(setup, tmp_path):
         table.set_value_filter(COL_SERIES, {"Die Fuchsbande"})
         assert [item.text(COL_SERIES) for item in rows if not item.isHidden()] == ["–"]
     finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_folder_files_play_from_the_card_reader_or_over_wlan(setup):
+    from gui.main_window import MainWindow
+    window = MainWindow()
+    try:
+        assert not window.btn_feedback.isHidden()  # Fehler melden oben rechts
+        window._espuino_show_folder("/Hörspiele/Neu")  # Ordner ohne Karte, SD im Kartenleser
+        file_list = window.mediahub_page.folder_page.file_list
+        assert file_list.item(0).text().endswith("01.mp3")
+        window._espuino_play_row(file_list, 0)
+        played = window.player_bar.current_path
+        assert os.path.samefile(played, setup["sd"] / "Hörspiele" / "Neu" / "01.mp3")
+        window.player_bar.stop_and_clear()
+        # ohne SD-Karte im PC: vom ESPuino ueber WLAN
+        host = setup["esp"].host
+        assert dev.download_url(host, "/Hörspiele/Neu/01.mp3") == \
+            f"http://{host}/explorerdownload?path=/H%C3%B6rspiele/Neu/01.mp3"
+        dev.save_settings(dev.SOURCE_DEVICE, host, "")
+        reachable = window._espuino_state is not None and window._espuino_state.reachable
+        source = window._espuino_play_source("/Hörspiele/Neu/01.mp3")
+        assert source == (dev.download_url(host, "/Hörspiele/Neu/01.mp3") if reachable else "")
+    finally:
+        window.player_bar.stop_and_clear()
         window.close()
         window.deleteLater()

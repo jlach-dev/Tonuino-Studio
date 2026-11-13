@@ -83,7 +83,8 @@ def test_espuino_mode_shows_mediahub_cards(app, hub):
     try:
         assert window.windowTitle() == ESPUINO_APP_NAME
         assert window.sidebar_title.text() == ESPUINO_APP_NAME
-        assert window.view_switch.tabText(0) == "Mediahub-Karten"
+        assert window.view_switch.tabText(window.tab_sd) == "Mediahub-Karten"
+        assert window.view_switch.tabText(0) == "Bibliothek"
         for widget in (window.btn_open_sd, window.folder_list, window.rfid_panel, window.btn_purge_card):
             assert widget.isHidden()
         for action in (window.action_system_files, window.action_wipe_card, window.action_tag_lookup,
@@ -92,6 +93,8 @@ def test_espuino_mode_shows_mediahub_cards(app, hub):
         assert window.action_series_cover_batch.isVisible()  # Serienstapel geht auch mit Karten
         assert window.library_view.transfer_label == "Auf den ESPuino übertragen"  # nicht ins TonUINO-Schema
         assert not window.library_view.transfer_enabled()  # Quelle Mediahub: kein Ziel
+        assert window.stack.currentWidget() is window.library_view  # Start in der Bibliothek
+        window.view_switch.setCurrentIndex(window.tab_sd)
         assert window.stack.currentWidget() is window.mediahub_page
         cards = window.mediahub_sidebar.card_list
         assert cards.count() == 2
@@ -103,9 +106,9 @@ def test_espuino_mode_shows_mediahub_cards(app, hub):
         assert "1 nicht in der Mediathek" in page.meta_label.text()
         assert page.file_list.item(2).text().endswith("(fehlt)")
 
-        window.view_switch.setCurrentIndex(1)
+        window.view_switch.setCurrentIndex(window.tab_library)
         assert window.stack.currentWidget() is window.library_view
-        window.view_switch.setCurrentIndex(0)
+        window.view_switch.setCurrentIndex(window.tab_sd)
         assert window.stack.currentWidget() is page
     finally:
         window.close()

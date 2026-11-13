@@ -164,6 +164,8 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
         self._check_dependencies()
         self._restore_window_state()
         self._init_library()
+        if self.view_switch.currentIndex() == self.tab_library and not self._library_scanned:
+            self._start_library_scan()  # ESPuino: Start in der Bibliothek
 
         # Vollbild per F11 (Esc beendet es), Maximieren per Doppelklick auf die Titelleiste
         QShortcut(QKeySequence("F11"), self, activated=self.toggle_full_screen)
@@ -599,11 +601,23 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
         self.view_switch.setExpanding(False)
         self.view_switch.addTab("SD-Karte")
         self.view_switch.addTab("Bibliothek")
-        self.view_switch.setTabToolTip(1, "Hörspiele und Musik auf PC und NAS – Alben per Drag & Drop auf die "
+        # Position der beiden Reiter; im ESPuino-Modus steht die Bibliothek vorn
+        self.tab_sd, self.tab_library = 0, 1
+        self.view_switch.setTabToolTip(self.tab_library, "Hörspiele und Musik auf PC und NAS – Alben per Drag & Drop auf die "
                                           "SD-Karte ziehen")
         self.view_switch.currentChanged.connect(self._on_view_switched)
         switch_row.addWidget(self.view_switch)
         switch_row.addStretch(1)
+        # Fehler melden / Feedback, in beiden Modi oben rechts sichtbar
+        self.btn_feedback = QPushButton()
+        self.btn_feedback.setObjectName("ghostButton")
+        self.btn_feedback.setIcon(icon_with_hover("", theme.OVERLAY2, theme.TEXT, size=22))  # bug_report
+        self.btn_feedback.setIconSize(QSize(22, 22))
+        self.btn_feedback.setFixedSize(36, 36)
+        self.btn_feedback.setToolTip("Fehler melden / Feedback …")
+        self.btn_feedback.setAccessibleName("Fehler melden / Feedback")
+        self.btn_feedback.clicked.connect(self._show_feedback)
+        switch_row.addWidget(self.btn_feedback, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(switch_row)
 
         self.welcome_widget = QWidget()
@@ -1299,8 +1313,8 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
     def _show_sd_page(self, widget: QWidget):
         """Willkommens- bzw. Ordnerseite anzeigen - und dabei zur SD-Ansicht wechseln"""
         self._sd_page = widget
-        if self.view_switch.currentIndex() != 0:
-            self.view_switch.setCurrentIndex(0)  # loest _on_view_switched aus
+        if self.view_switch.currentIndex() != self.tab_sd:
+            self.view_switch.setCurrentIndex(self.tab_sd)  # loest _on_view_switched aus
         else:
             self.stack.setCurrentWidget(widget)
 
@@ -2305,6 +2319,8 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
     def _player_track_info(self, filepath: str) -> TrackInfo:
         """Anzeigedaten fuer den Player: Titel, Interpret, Album und eingebettetes
         Cover aus den ID3-Tags des Tracks"""
+        if not os.path.isfile(filepath):  # vom ESPuino gestreamt: nur der Dateiname
+            return TrackInfo()
         metadata = self.metadata_manager.read_metadata(filepath)
         cover = None
         cover_bytes = self.metadata_manager.get_cover_bytes(filepath)
@@ -2317,6 +2333,9 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
     def _update_player_navigation(self):
         """Zurueck/Weiter im Player nur aktivieren, wenn es relativ zum geladenen
         Track in dieser Richtung noch einen Track im Ordner gibt (kein Wrap-around)"""
+        if self._is_espuino():
+            self._espuino_update_player_navigation()
+            return
         tracks = self.current_folder.all_tracks if self.current_folder else []
         current_path = self.player_bar.current_path
         index = next((i for i, t in enumerate(tracks) if t.filepath == current_path), None)
@@ -2328,6 +2347,9 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
     def _play_selected_track(self):
         """Play im Player ohne geladenen Track: spielt den in der Liste
         ausgewaehlten Track (im Mehrfachauswahl-Modus den ersten markierten)"""
+        if self._is_espuino():
+            self._espuino_play_selected()
+            return
         tracks = self._get_selected_tracks()
         if tracks:
             self.player_bar.load_track(tracks[0].filepath, tracks[0].display_name, autoplay=True)
@@ -2380,6 +2402,9 @@ class MainWindow(MediahubMixin, WindowFrameMixin, CardCoverMixin, LibraryMixin, 
     def _play_relative_track(self, delta: int):
         """Spielt den vorherigen/naechsten Track relativ zum aktuell im Player
         geladenen Track (kein Wrap-around am Anfang/Ende der Liste)"""
+        if self._is_espuino():
+            self._espuino_play_relative(delta)
+            return
         if not self.current_folder or not self.current_folder.all_tracks:
             return
 
