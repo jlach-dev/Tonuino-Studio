@@ -267,3 +267,31 @@ def test_slow_sd_check_is_remembered_fast_one_is_not(monkeypatch, tmp_path):
     assert calls.count("F:/") == 2
     assert not d.sd_available("")
     d.forget_sd_checks()
+
+
+def test_background_sd_check_never_blocks_a_click(monkeypatch):
+    """Haengt die Pruefung im Hintergrund, antwortet sd_available sofort"""
+    import threading
+    import time
+    from core import espuino_device as d
+    release = threading.Event()
+
+    def slow_isdir(path):
+        release.wait(5)
+        return False
+
+    d.forget_sd_checks()
+    monkeypatch.setattr(d.os.path, "isdir", slow_isdir)
+    monkeypatch.setattr(d, "SLOW_SD_CHECK_SECONDS", 0.0)
+    d.check_sd_in_background("E:/")
+    d.check_sd_in_background("E:/")  # zweite Pruefung startet nicht
+    started = time.monotonic()
+    assert d.sd_available("E:/") is False
+    assert time.monotonic() - started < 0.5
+    release.set()
+    for _ in range(100):
+        if "E:/" not in d._sd_checks_running:
+            break
+        time.sleep(0.02)
+    assert "E:/" in d._slow_sd_checks  # gemerkt fuer die naechsten Klicks
+    d.forget_sd_checks()

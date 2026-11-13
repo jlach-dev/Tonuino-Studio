@@ -17,7 +17,7 @@ der Mixin steht in der Klassenliste vorn, damit seine Ueberschreibungen gelten.
 import logging
 import os
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import QApplication, QCheckBox, QMenu, QMessageBox, QProgressDialog
 
@@ -56,6 +56,14 @@ class MediahubMixin:
     # ESPuino wuerde den Start aufhalten), sondern nach dem Anzeigen fragen, womit
     # verbunden werden soll (espuino_start_session). Tests verbinden sofort.
     espuino_ask_on_start = False
+
+    def _espuino_check_sd_soon(self):
+        """Nur im ESPuino-Modus mit ESPuino direkt und eingetragener SD-Karte"""
+        if not self._is_espuino():
+            return
+        source, _host, sd_root = dev.settings()
+        if source == dev.SOURCE_DEVICE and sd_root:
+            dev.check_sd_in_background(sd_root)
 
     def _is_espuino(self) -> bool:
         return getattr(self, "app_mode", MODE_TONUINO) == MODE_ESPUINO
@@ -109,6 +117,14 @@ class MediahubMixin:
         self.action_use_acr122u.setToolTip("USB-Leser ACR122U: Karten auflegen, ohne dass der ESPuino sie abspielt")
         self.action_use_acr122u.toggled.connect(self._espuino_set_acr122u)
         self.settings_menu.insertAction(self.action_system_files, self.action_use_acr122u)
+
+        # Ob die SD-Karte im Kartenleser steckt, im Hintergrund pruefen (ein leerer
+        # Kartenleser braucht dafuer Sekunden, siehe dev.sd_available)
+        self._espuino_sd_timer = QTimer(self)
+        self._espuino_sd_timer.setInterval(30_000)
+        self._espuino_sd_timer.timeout.connect(self._espuino_check_sd_soon)
+        self._espuino_sd_timer.start()
+        self._espuino_check_sd_soon()
 
         self.mediahub_sidebar = MediahubSidebar()
         self.mediahub_sidebar.setup_requested.connect(self._mediahub_setup)

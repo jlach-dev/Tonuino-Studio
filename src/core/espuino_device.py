@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -232,39 +233,74 @@ def card_files(sd_root: str, sd_path: str, play_mode: int) -> Tuple[List[str], b
 
 
 # Ein Kartenleser ohne (lesbare) Karte antwortet unter Windows erst nach 5 bis 10 s
-# mit einem Geraetefehler (etwa WinError 1117). Solche langsamen Antworten merkt
-# sich die App eine Weile, sonst haengt jeder Klick, der nachsieht, ob die
-# SD-Karte im PC steckt. Schnelle Antworten werden nie gemerkt: eine frisch
+# mit einem Geraetefehler (etwa WinError 1117). Damit kein Klick so lange haengt,
+# prueft das Hauptfenster gleich nach dem Start und dann alle 30 s im Hintergrund
+# (check_sd_in_background). Langsame Antworten werden gemerkt und von
+# sd_available ohne Warten geliefert; laeuft gerade eine Pruefung, wartet
+# sd_available nicht auf sie. Schnelle Antworten werden nie gemerkt: eine frisch
 # eingesteckte Karte zaehlt sofort.
 SLOW_SD_CHECK_SECONDS = 1.0
-SLOW_SD_CHECK_MEMORY = 60.0
+SLOW_SD_CHECK_MEMORY = 90.0
 _slow_sd_checks: Dict[str, Tuple[float, bool]] = {}
+_sd_checks_running: Set[str] = set()
+_sd_lock = threading.Lock()
+
+
+def _check_sd(sd_root: str) -> bool:
+    started = time.monotonic()
+    try:
+        present = os.path.isdir(sd_root)
+    except OSError:
+        present = False
+    slow = time.monotonic() - started >= SLOW_SD_CHECK_SECONDS
+    with _sd_lock:
+        if slow:
+            if sd_root not in _slow_sd_checks:
+                log.info("SD-Karte %s antwortet langsam (%s), Ergebnis wird gemerkt",
+                         sd_root, "vorhanden" if present else "nicht lesbar")
+            _slow_sd_checks[sd_root] = (time.monotonic(), present)
+        else:
+            _slow_sd_checks.pop(sd_root, None)
+    return present
 
 
 def sd_available(sd_root: str) -> bool:
     """Steckt die SD-Karte des ESPuino (Einstellung espuino/sd_root) im PC?"""
     if not sd_root:
         return False
-    known = _slow_sd_checks.get(sd_root)
+    with _sd_lock:
+        known = _slow_sd_checks.get(sd_root)
+        running = sd_root in _sd_checks_running
     if known is not None and time.monotonic() - known[0] < SLOW_SD_CHECK_MEMORY:
         return known[1]
-    started = time.monotonic()
-    try:
-        present = os.path.isdir(sd_root)
-    except OSError:
-        present = False
-    if time.monotonic() - started >= SLOW_SD_CHECK_SECONDS:
-        _slow_sd_checks[sd_root] = (time.monotonic(), present)
-        log.info("SD-Karte %s antwortet langsam (%s), Ergebnis wird %d s gemerkt",
-                 sd_root, "vorhanden" if present else "nicht lesbar", SLOW_SD_CHECK_MEMORY)
-    else:
-        _slow_sd_checks.pop(sd_root, None)
-    return present
+    if running:  # die Hintergrund-Pruefung haengt gerade: nicht auf sie warten
+        return known[1] if known is not None else False
+    return _check_sd(sd_root)
+
+
+def check_sd_in_background(sd_root: str) -> None:
+    """Prueft in einem eigenen Thread; hoechstens eine Pruefung je Pfad gleichzeitig"""
+    if not sd_root:
+        return
+    with _sd_lock:
+        if sd_root in _sd_checks_running:
+            return
+        _sd_checks_running.add(sd_root)
+
+    def run():
+        try:
+            _check_sd(sd_root)
+        finally:
+            with _sd_lock:
+                _sd_checks_running.discard(sd_root)
+
+    threading.Thread(target=run, name="sd-check", daemon=True).start()
 
 
 def forget_sd_checks() -> None:
-    """Beim Neu-Einlesen und nach dem Einrichten wieder wirklich nachsehen"""
-    _slow_sd_checks.clear()
+    """Nach dem Einrichten wieder wirklich nachsehen"""
+    with _sd_lock:
+        _slow_sd_checks.clear()
 
 
 @dataclass
@@ -642,6 +678,8 @@ def save_settings(source: str, host: str, sd_root: str, name: Optional[str] = No
     if source not in SOURCES:
         raise ValueError(f"Unbekannte Quelle: {source!r}")
     forget_sd_checks()  # neu eingerichtet: wieder wirklich nachsehen
+    if source == SOURCE_DEVICE:
+        check_sd_in_background(sd_root)
     from PyQt6.QtCore import QSettings
     s = QSettings()
     s.setValue(SETTINGS_SOURCE, source)
