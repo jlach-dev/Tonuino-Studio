@@ -8,6 +8,27 @@ Karten und Cover sind der Kern dieser App. Sie verwaltet alle Motive je Album in
 
 *Beispiel mit erfundenem Hörspiel und von Hand gezeichneten Bildern, die für KI-Ergebnisse stehen. Aus Urheberrechtsgründen zeigen wir hier keine echten Cover.*
 
+## Unterschiede zu Tonuino-Manager
+
+| Funktion | Tonuino-Manager | Tonuino-Studio |
+|---|:---:|:---:|
+| SD-Karten, Tracks, Player, Konvertierung nach MP3, Tags von Hand | ✅ | ✅ |
+| RFID-Karten per ACR122U oder TonUINO | ✅ | ✅ |
+| Album-Cover von Hand ändern | ✅ | ✅ |
+| Lautstärke angleichen | ✅ | ✅ |
+| **Kartencover mit Vorder- und Rückseite gestalten** | – | ✅ |
+| **KI-Motive per Google Gemini (eigener API-Key)** | – | ✅ |
+| **Serienprofile für einen einheitlichen Look** | – | ✅ |
+| **Cover-Suche und Stapelsuche im Internet** | – | ✅ |
+| **Cover-Archiv je Album** | – | ✅ |
+| **Druckbogen als A4-PDF** | – | ✅ |
+| Bibliothek für PC und NAS, Übertragen per Drag & Drop | – | ✅ |
+| Tags von MusicBrainz, Stücke erkennen per AcoustID | – | ✅ |
+| TonUINO-Systemdateien einrichten, SD-Karte leeren | – | ✅ |
+| ESPuino-Modus: Karten auslesen und zuweisen, Alben übertragen | – | ✅ |
+
+Stand: Tonuino-Manager 1.5.1, Tonuino-Studio 2.2.1.
+
 ## Karten und Cover
 
 1. **Cover finden:** Die App sucht bei Deezer, iTunes, MusicBrainz, mit eigenen Zugangsdaten auch bei Spotify, und auf den Seiten, die die KI-Recherche findet. Eigene Bilder gehen genauso.
